@@ -150,6 +150,11 @@ pub fn begin(header: &[u8], state: &mut [u8]) -> Result<(), Error> {
     Ok(())
 }
 
+/// Whether verification has not begun, so the header may still change.
+pub fn is_clear(state: &[u8]) -> bool {
+    state.first() == Some(&0)
+}
+
 /// Whether [`step`] already accepted this header's solution.
 pub fn is_verified(state: &[u8]) -> bool {
     state.len() == STATE_LEN && state[OFF_STAGE] == STAGE_VERIFIED

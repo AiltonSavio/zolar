@@ -1,6 +1,6 @@
 use std::{path::PathBuf, process::Command, sync::Once};
 
-use header_relay::{BUFFER_LEN, IX_BEGIN, IX_STEP, IX_WRITE, STATE_OFFSET};
+use header_relay::{BUFFER_LEN, IX_BEGIN, IX_RESET, IX_STEP, IX_WRITE, STATE_OFFSET};
 use litesvm::LiteSVM;
 use solana_sdk::{
     account::Account,
@@ -79,7 +79,10 @@ impl Harness {
             Instruction::new_with_bytes(
                 self.program,
                 data,
-                vec![AccountMeta::new(self.buffer, false)],
+                vec![
+                    AccountMeta::new(self.buffer, false),
+                    AccountMeta::new_readonly(self.payer.pubkey(), true),
+                ],
             )
         }));
         let msg = Message::new(&ixs, Some(&self.payer.pubkey()));
@@ -230,4 +233,103 @@ fn account_not_owned_by_the_program_is_rejected() {
     acct.owner = Pubkey::new_unique();
     h.svm.set_account(h.buffer, acct).unwrap();
     assert!(h.send(vec![IX_BEGIN]).is_err());
+}
+
+#[test]
+fn header_cannot_change_after_begin() {
+    let mut h = Harness::new();
+    let hdr = header();
+    h.send_all(&[write_ix(&hdr, 0, FIRST_WRITE)], None).unwrap();
+    h.send_all(
+        &[
+            write_ix(&hdr, FIRST_WRITE, hdr.len()),
+            vec![IX_BEGIN],
+            step_ix(256),
+        ],
+        Some(CU_CAP),
+    )
+    .unwrap();
+    let mut forged = vec![IX_WRITE, 0, 0];
+    forged.push(hdr[0] ^ 1);
+    assert_eq!(custom_any(&h.send(forged).unwrap_err()), Some(8));
+    h.step(256).unwrap();
+    assert_eq!(h.state_stage(), 2);
+    assert_eq!(
+        custom_any(&h.send(write_ix(&hdr, 0, 8)).unwrap_err()),
+        Some(8)
+    );
+}
+
+#[test]
+fn reset_allows_the_next_header() {
+    let mut h = Harness::new();
+    relay_header(&mut h, &header(), 256).unwrap();
+    h.send(vec![IX_RESET]).unwrap();
+    assert_eq!(h.state_stage(), 0);
+    let mut bad = header();
+    bad[700] ^= 0x10;
+    h.send_all(&[write_ix(&bad, 0, FIRST_WRITE)], None).unwrap();
+    let err = h
+        .send_all(
+            &[
+                write_ix(&bad, FIRST_WRITE, bad.len()),
+                vec![IX_BEGIN],
+                step_ix(256),
+            ],
+            Some(CU_CAP),
+        )
+        .and_then(|_| h.step(256))
+        .unwrap_err();
+    assert!(matches!(custom_any(&err), Some(4..=7)), "{err:?}");
+}
+
+#[test]
+fn only_the_claiming_authority_may_use_the_buffer() {
+    let mut h = Harness::new();
+    h.send_all(&[write_ix(&header(), 0, 8)], None).unwrap();
+    let thief = Keypair::new();
+    h.svm.airdrop(&thief.pubkey(), 1_000_000_000).unwrap();
+    h.svm.expire_blockhash();
+    let ix = Instruction::new_with_bytes(
+        h.program,
+        &[IX_RESET],
+        vec![
+            AccountMeta::new(h.buffer, false),
+            AccountMeta::new_readonly(thief.pubkey(), true),
+        ],
+    );
+    let tx = Transaction::new(
+        &[&thief],
+        Message::new(&[ix], Some(&thief.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    let err = h.svm.send_transaction(tx).unwrap_err().err;
+    assert_eq!(
+        err,
+        TransactionError::InstructionError(0, InstructionError::IncorrectAuthority)
+    );
+}
+
+#[test]
+fn authority_must_sign() {
+    let mut h = Harness::new();
+    h.svm.expire_blockhash();
+    let ix = Instruction::new_with_bytes(
+        h.program,
+        &[IX_RESET],
+        vec![
+            AccountMeta::new(h.buffer, false),
+            AccountMeta::new_readonly(Pubkey::new_unique(), false),
+        ],
+    );
+    let tx = Transaction::new(
+        &[&h.payer],
+        Message::new(&[ix], Some(&h.payer.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    let err = h.svm.send_transaction(tx).unwrap_err().err;
+    assert_eq!(
+        err,
+        TransactionError::InstructionError(0, InstructionError::MissingRequiredSignature)
+    );
 }
