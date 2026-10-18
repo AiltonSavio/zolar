@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(clippy::result_large_err)]
 
 use std::{path::PathBuf, process::Command, sync::Once};
 
@@ -24,13 +24,19 @@ use solana_transaction_error::TransactionError;
 
 pub const CU_CAP: u32 = 1_400_000;
 pub const SYSTEM_PROGRAM: Address = Address::new_from_array([0; 32]);
-const COMPUTE_BUDGET: Address = Address::from_str_const("ComputeBudget111111111111111111111111111111");
+const COMPUTE_BUDGET: Address =
+    Address::from_str_const("ComputeBudget111111111111111111111111111111");
 
 /// Real testnet header at height 4,483,600 (raw 1,487 bytes).
 pub const HEADER_4483600: &str = include_str!("../../zcash-header/fixtures/testnet-4483600.hex");
+/// Forged by `tools/forge-header` from the header above: valid Equihash solution, `nBits` 0x1d00ffff,
+/// SHA-256d hash above that target.
+pub const FORGED_HASH_ABOVE_TARGET: &str =
+    include_str!("../../zcash-header/fixtures/forged-testnet-hash-above-target.hex");
 /// Its child at height 4,483,601.
 pub const HEADER_4483601: &str = include_str!("../../zcash-header/fixtures/testnet-4483601.hex");
-const CHECKPOINT_JSON: &str = include_str!("../../zcash-header/fixtures/testnet-checkpoint-4483599.json");
+const CHECKPOINT_JSON: &str =
+    include_str!("../../zcash-header/fixtures/testnet-checkpoint-4483599.json");
 
 pub fn header(hex_str: &str) -> Vec<u8> {
     hex::decode(hex_str.trim()).unwrap()
@@ -50,11 +56,15 @@ fn program_so() -> PathBuf {
     root.join("target/deploy/header_relay.so")
 }
 
-/// The testnet Checkpoint at height 4,483,599 built from the exported fixture.
+/// The testnet Checkpoint at height 4,483,599 built from the exported fixture. The Tatum node these headers
+/// come from follows the pre-NU7 branch, so NU7 never activates (`u32::MAX`).
 pub fn testnet_checkpoint(finality_depth: u16, nonce: u64) -> Checkpoint {
     let json: serde_json::Value = serde_json::from_str(CHECKPOINT_JSON).unwrap();
     let blocks = json["blocks"].as_array().unwrap();
-    let times: Vec<u32> = blocks.iter().map(|b| b["time"].as_u64().unwrap() as u32).collect();
+    let times: Vec<u32> = blocks
+        .iter()
+        .map(|b| b["time"].as_u64().unwrap() as u32)
+        .collect();
     let bits: Vec<u32> = blocks
         .iter()
         .map(|b| u32::from_str_radix(b["bits"].as_str().unwrap(), 16).unwrap())
@@ -68,7 +78,7 @@ pub fn testnet_checkpoint(finality_depth: u16, nonce: u64) -> Checkpoint {
         version: 1,
         network: 1,
         finality_depth,
-        nu7_height: 4_465_026,
+        nu7_height: u32::MAX,
         height: json["tip_height"].as_u64().unwrap() as u32,
         nonce,
         hash,
@@ -96,10 +106,17 @@ pub fn set_compute_limit(units: u32) -> Instruction {
     Instruction::new_with_bytes(COMPUTE_BUDGET, &data, vec![])
 }
 
+impl Default for Harness {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Harness {
     pub fn new() -> Self {
         let mut svm = LiteSVM::new();
-        svm.add_program_from_file(HEADER_RELAY_ID, program_so()).unwrap();
+        svm.add_program_from_file(HEADER_RELAY_ID, program_so())
+            .unwrap();
         let payer = Keypair::new();
         svm.airdrop(&payer.pubkey(), 100_000_000_000).unwrap();
         Self { svm, payer }
@@ -135,7 +152,10 @@ impl Harness {
             Ok(_) => panic!("transaction unexpectedly succeeded"),
             Err(e) => match e.err {
                 TransactionError::InstructionError(_, InstructionError::Custom(code)) => code,
-                other => panic!("expected a custom error, got {other:?}\n{}", e.meta.pretty_logs()),
+                other => panic!(
+                    "expected a custom error, got {other:?}\n{}",
+                    e.meta.pretty_logs()
+                ),
             },
         }
     }
@@ -217,7 +237,12 @@ impl Harness {
         self.create_buffer_for(&self.payer.pubkey(), relay, nonce)
     }
 
-    pub fn create_buffer_for(&self, authority: &Address, relay: &Address, nonce: u8) -> Instruction {
+    pub fn create_buffer_for(
+        &self,
+        authority: &Address,
+        relay: &Address,
+        nonce: u8,
+    ) -> Instruction {
         CreateBufferBuilder::new()
             .authority(*authority)
             .relay(*relay)
@@ -269,8 +294,15 @@ impl Harness {
 
     /// Uploads a header and runs it through verification up to, but not including, acceptance.
     /// Two transactions; returns the buffer address.
-    pub fn upload_and_verify(&mut self, relay: &Address, nonce: u8, header: &[u8], cu: &mut Cu) -> Address {
-        self.try_upload_and_verify(relay, nonce, header, cu).expect("verification failed")
+    pub fn upload_and_verify(
+        &mut self,
+        relay: &Address,
+        nonce: u8,
+        header: &[u8],
+        cu: &mut Cu,
+    ) -> Address {
+        self.try_upload_and_verify(relay, nonce, header, cu)
+            .expect("verification failed")
     }
 
     /// Like [`Self::upload_and_verify`] but returns the custom error code of a failing step.
@@ -283,7 +315,10 @@ impl Harness {
     ) -> Result<Address, u32> {
         let buffer = Self::buffer_addr(relay, &self.payer.pubkey(), nonce);
         let split = 850;
-        let first = [self.create_buffer_ix(relay, nonce), self.write_ix(&buffer, 0, &header[..split])];
+        let first = [
+            self.create_buffer_ix(relay, nonce),
+            self.write_ix(&buffer, 0, &header[..split]),
+        ];
         cu.upload_first = self.ok(&first, &[]);
         let second = [
             set_compute_limit(CU_CAP),
@@ -294,7 +329,9 @@ impl Harness {
         match self.send(&second, &[]) {
             Ok(meta) => cu.upload_rest_and_first_leaves = meta.compute_units_consumed,
             Err(e) => match e.err {
-                TransactionError::InstructionError(_, InstructionError::Custom(code)) => return Err(code),
+                TransactionError::InstructionError(_, InstructionError::Custom(code)) => {
+                    return Err(code)
+                }
                 other => panic!("unexpected failure {other:?}"),
             },
         }

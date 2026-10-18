@@ -17,13 +17,12 @@
 //! | 8 | AcceptHeader | authority(s), buffer(w), relay(w), store(w) |
 //! | 9 | ResetBuffer | authority(s), buffer(w) |
 //! | 10 | CloseBuffer | authority(ws), buffer(w) |
-#![no_std]
+#![cfg_attr(target_os = "solana", no_std)]
 
 pub mod error;
 pub mod state;
 
-#[cfg(target_os = "solana")]
-mod processor;
+pub mod processor;
 
 #[cfg(all(target_os = "solana", not(feature = "no-entrypoint")))]
 mod entry {

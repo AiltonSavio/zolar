@@ -19,15 +19,41 @@ fn fail(e: RelayError) -> ProgramError {
     ProgramError::Custom(e as u32)
 }
 
-fn sha256(data: &[u8]) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    let vals: [&[u8]; 1] = [data];
-    // SAFETY: `vals` is a one-element slice-of-slices, the layout the syscall reads.
-    unsafe {
-        pinocchio::syscalls::sol_sha256(vals.as_ptr() as *const u8, 1, out.as_mut_ptr());
+/// Solana syscalls. The program only ever runs on Solana; the host versions exist so
+/// the processor type-checks and lints on a developer machine, and are never called.
+#[cfg(target_os = "solana")]
+mod sys {
+    use pinocchio::Address;
+
+    pub fn sha256(data: &[u8]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        let vals: [&[u8]; 1] = [data];
+        // SAFETY: `vals` is a one-element slice-of-slices, the layout the syscall reads.
+        unsafe {
+            pinocchio::syscalls::sol_sha256(vals.as_ptr() as *const u8, 1, out.as_mut_ptr());
+        }
+        out
     }
-    out
+
+    pub fn find_program_address(seeds: &[&[u8]], program_id: &Address) -> (Address, u8) {
+        Address::find_program_address(seeds, program_id)
+    }
 }
+
+#[cfg(not(target_os = "solana"))]
+mod sys {
+    use pinocchio::Address;
+
+    pub fn sha256(_: &[u8]) -> [u8; 32] {
+        unreachable!("the Header Relay runs only on Solana")
+    }
+
+    pub fn find_program_address(_: &[&[u8]], _: &Address) -> (Address, u8) {
+        unreachable!("the Header Relay runs only on Solana")
+    }
+}
+
+use sys::{find_program_address, sha256};
 
 fn u16_at(d: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([d[at], d[at + 1]])
@@ -126,7 +152,7 @@ fn create_pda<const N: usize>(
     seeds: &[&[u8]],
 ) -> ProgramResult {
     check_system(system)?;
-    let (pda, bump) = Address::find_program_address(seeds, program_id);
+    let (pda, bump) = find_program_address(seeds, program_id);
     if account.address() != &pda {
         return Err(fail(RelayError::WrongAccount));
     }
@@ -240,7 +266,11 @@ fn create_relay(program_id: &Address, accounts: &[AccountView], args: &[u8]) -> 
     s[S_DISC] = DISC_STORE;
     s[S_VERSION] = VERSION;
     put(&mut s, S_RELAY, relay.address().as_ref());
-    put(&mut s, S_CAPACITY, &(initial_capacity() as u16).to_le_bytes());
+    put(
+        &mut s,
+        S_CAPACITY,
+        &(initial_capacity() as u16).to_le_bytes(),
+    );
     Ok(())
 }
 
@@ -276,7 +306,7 @@ fn seal_relay(program_id: &Address, accounts: &[AccountView]) -> ProgramResult {
         return Err(fail(RelayError::RelayAlreadySealed));
     }
     let digest = sha256(&r[R_CHECKPOINT..R_CHECKPOINT + CHECKPOINT_LEN]);
-    let (pda, _) = Address::find_program_address(&[SEED_RELAY, &digest], program_id);
+    let (pda, _) = find_program_address(&[SEED_RELAY, &digest], program_id);
     if relay.address() != &pda {
         return Err(fail(RelayError::CheckpointDigestMismatch));
     }
@@ -492,8 +522,8 @@ fn accept_header(program_id: &Address, accounts: &[AccountView]) -> ProgramResul
         Network::Testnet
     };
     let hash = header::hash(sha256, header_bytes);
-    let target = pow::check_pow(network, header::bits(header_bytes), &hash)
-        .map_err(|e| fail(e.into()))?;
+    let target =
+        pow::check_pow(network, header::bits(header_bytes), &hash).map_err(|e| fail(e.into()))?;
     let work = pow::work(&target);
 
     let capacity = u16_at(&s, S_CAPACITY) as usize;

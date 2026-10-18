@@ -1,6 +1,5 @@
-
-use sha2::{Digest, Sha256};
 use relay_tests::*;
+use sha2::{Digest, Sha256};
 
 #[test]
 fn checkpoint_initialises_a_relay_at_the_checkpoint_block() {
@@ -17,8 +16,6 @@ fn checkpoint_initialises_a_relay_at_the_checkpoint_block() {
     assert_eq!(relay.checkpoint.finality_depth, 10);
     assert_eq!(relay.checkpoint.times[112], checkpoint.times[112]);
 }
-
-
 
 fn sha256d(data: &[u8]) -> [u8; 32] {
     Sha256::digest(Sha256::digest(data)).into()
@@ -51,7 +48,6 @@ fn a_real_testnet_header_is_accepted_through_the_generated_client() {
 use header_relay_client::accounts::HeaderBuffer;
 use solana_signer::Signer;
 
-
 const UNKNOWN_PARENT: u32 = 12;
 const DUPLICATE_HEADER: u32 = 13;
 const HEADER_FROZEN: u32 = 8;
@@ -71,7 +67,11 @@ fn a_header_chains_onto_an_accepted_parent() {
     let (store, data) = h.store(&relay_addr);
     assert_eq!(store.count, 2);
     let second = &data[40 + 102..40 + 204];
-    assert_eq!(u16::from_le_bytes([second[96], second[97]]), 0, "parent is slot 0");
+    assert_eq!(
+        u16::from_le_bytes([second[96], second[97]]),
+        0,
+        "parent is slot 0"
+    );
 }
 
 #[test]
@@ -141,8 +141,15 @@ fn closing_the_buffer_returns_its_rent() {
     h.ok(&[h.close_ix(&buffer)], &[]);
     let after = h.svm.get_balance(&authority).unwrap();
     assert!(h.svm.get_account(&buffer).is_none_or(|a| a.lamports == 0));
-    assert_eq!(after - mid, rent - 5_000, "rent comes back, minus the 5,000 lamport fee");
-    assert!(before - after < rent, "relaying a header costs only fees, not rent");
+    assert_eq!(
+        after - mid,
+        rent - 5_000,
+        "rent comes back, minus the 5,000 lamport fee"
+    );
+    assert!(
+        before - after < rent,
+        "relaying a header costs only fees, not rent"
+    );
 }
 
 #[test]
@@ -208,7 +215,9 @@ fn a_prefunded_address_cannot_block_creation() {
     h.ok(&[ix], &[]);
     h.ok(&[h.create_buffer_ix(&relay_addr, 0)], &[]);
     assert_eq!(
-        HeaderBuffer::from_bytes(&h.svm.get_account(&buffer).unwrap().data).unwrap().authority,
+        HeaderBuffer::from_bytes(&h.svm.get_account(&buffer).unwrap().data)
+            .unwrap()
+            .authority,
         h.payer.pubkey()
     );
 }
@@ -232,9 +241,15 @@ fn a_relay_must_be_sealed_with_the_checkpoint_its_address_commits_to() {
             .instruction();
         h.ok(&[ix], &[]);
     }
-    assert_eq!(h.custom_err(&[h.seal_ix(&checkpoint)], &[]), DIGEST_MISMATCH);
+    assert_eq!(
+        h.custom_err(&[h.seal_ix(&checkpoint)], &[]),
+        DIGEST_MISMATCH
+    );
     // And a pending relay accepts no buffers.
-    assert_eq!(h.custom_err(&[h.create_buffer_ix(&relay, 0)], &[]), RELAY_NOT_ACTIVE);
+    assert_eq!(
+        h.custom_err(&[h.create_buffer_ix(&relay, 0)], &[]),
+        RELAY_NOT_ACTIVE
+    );
 }
 
 #[test]
@@ -286,5 +301,33 @@ fn the_store_grows_before_it_wraps() {
         .instruction();
     h.ok(&[grow], &[]);
     assert_eq!(h.store(&relay).0.capacity, 200);
-    assert_eq!(h.svm.get_account(&store).unwrap().data.len(), 40 + 200 * 102);
+    assert_eq!(
+        h.svm.get_account(&store).unwrap().data.len(),
+        40 + 200 * 102
+    );
+}
+
+#[test]
+fn a_header_whose_hash_is_above_its_target_is_rejected() {
+    let mut h = Harness::new();
+    let relay_addr = h.init_relay(&testnet_checkpoint(10, 0));
+    let mut cu = Cu::default();
+    // Equihash accepts the forged solution; only the target check can reject it.
+    let buffer = h.upload_and_verify(&relay_addr, 0, &header(FORGED_HASH_ABOVE_TARGET), &mut cu);
+    let last = h.finish_ixs(&buffer, &relay_addr);
+    assert_eq!(h.custom_err(&last, &[]), 11);
+    assert_eq!(h.store(&relay_addr).0.count, 0);
+}
+
+#[test]
+fn a_target_easier_than_the_network_limit_is_rejected() {
+    // A mainnet Relay refuses the testnet header: its target (0x200165f8) is easier than mainnet's limit.
+    let mut h = Harness::new();
+    let mut checkpoint = testnet_checkpoint(10, 0);
+    checkpoint.network = 0;
+    let relay_addr = h.init_relay(&checkpoint);
+    let mut cu = Cu::default();
+    let buffer = h.upload_and_verify(&relay_addr, 0, &header(HEADER_4483600), &mut cu);
+    let last = h.finish_ixs(&buffer, &relay_addr);
+    assert_eq!(h.custom_err(&last, &[]), 10);
 }

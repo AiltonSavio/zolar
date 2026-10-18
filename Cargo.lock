@@ -1018,6 +1018,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "306286e8dcc39ab3dfceb74c792ce8baffdab90591321d3ffaae64829734c37f"
 dependencies = [
  "blake2b_simd",
+ "cc",
  "corez",
  "document-features",
 ]
@@ -1091,6 +1092,15 @@ name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
+
+[[package]]
+name = "forge-header"
+version = "0.1.0"
+dependencies = [
+ "equihash",
+ "hex",
+ "sha2 0.10.9",
+]
 
 [[package]]
 name = "futures-core"
