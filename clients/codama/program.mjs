@@ -362,6 +362,7 @@ const errors = [
   ['alreadyAccepted', 'Buffer already accepted its header'],
   ['storeNotGrowable', 'Store already wrapped or reached its maximum size'],
   ['relayAlreadySealed', 'Relay checkpoint is already sealed'],
+  ['storeFull', 'The Store slot to overwrite holds the current tip'],
 ].map(([name, message], i) => errorNode({ name, code: i + 1, message }));
 
 export const root = rootNode(

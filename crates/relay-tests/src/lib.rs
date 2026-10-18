@@ -203,6 +203,143 @@ impl Harness {
     }
 }
 
+/// Compute units of each transaction used to relay one header.
+#[derive(Debug, Default)]
+pub struct Cu {
+    pub upload_first: u64,
+    pub upload_rest_and_first_leaves: u64,
+    pub last_leaves_and_accept: u64,
+    pub close: u64,
+}
+
+impl Harness {
+    pub fn create_buffer_ix(&self, relay: &Address, nonce: u8) -> Instruction {
+        self.create_buffer_for(&self.payer.pubkey(), relay, nonce)
+    }
+
+    pub fn create_buffer_for(&self, authority: &Address, relay: &Address, nonce: u8) -> Instruction {
+        CreateBufferBuilder::new()
+            .authority(*authority)
+            .relay(*relay)
+            .buffer(Self::buffer_addr(relay, authority, nonce))
+            .system_program(SYSTEM_PROGRAM)
+            .nonce(nonce)
+            .instruction()
+    }
+
+    pub fn write_ix(&self, buffer: &Address, offset: usize, bytes: &[u8]) -> Instruction {
+        WriteBufferBuilder::new()
+            .authority(self.payer.pubkey())
+            .buffer(*buffer)
+            .offset(offset as u16)
+            .bytes(bytes.to_vec())
+            .instruction()
+    }
+
+    pub fn begin_ix(&self, buffer: &Address) -> Instruction {
+        BeginVerifyBuilder::new()
+            .authority(self.payer.pubkey())
+            .buffer(*buffer)
+            .instruction()
+    }
+
+    pub fn step_ix(&self, buffer: &Address, leaves: u16) -> Instruction {
+        StepVerifyBuilder::new()
+            .authority(self.payer.pubkey())
+            .buffer(*buffer)
+            .leaves(leaves)
+            .instruction()
+    }
+
+    pub fn accept_ix(&self, buffer: &Address, relay: &Address) -> Instruction {
+        AcceptHeaderBuilder::new()
+            .authority(self.payer.pubkey())
+            .buffer(*buffer)
+            .relay(*relay)
+            .store(Self::store_addr(relay))
+            .instruction()
+    }
+
+    pub fn close_ix(&self, buffer: &Address) -> Instruction {
+        CloseBufferBuilder::new()
+            .authority(self.payer.pubkey())
+            .buffer(*buffer)
+            .instruction()
+    }
+
+    /// Uploads a header and runs it through verification up to, but not including, acceptance.
+    /// Two transactions; returns the buffer address.
+    pub fn upload_and_verify(&mut self, relay: &Address, nonce: u8, header: &[u8], cu: &mut Cu) -> Address {
+        self.try_upload_and_verify(relay, nonce, header, cu).expect("verification failed")
+    }
+
+    /// Like [`Self::upload_and_verify`] but returns the custom error code of a failing step.
+    pub fn try_upload_and_verify(
+        &mut self,
+        relay: &Address,
+        nonce: u8,
+        header: &[u8],
+        cu: &mut Cu,
+    ) -> Result<Address, u32> {
+        let buffer = Self::buffer_addr(relay, &self.payer.pubkey(), nonce);
+        let split = 850;
+        let first = [self.create_buffer_ix(relay, nonce), self.write_ix(&buffer, 0, &header[..split])];
+        cu.upload_first = self.ok(&first, &[]);
+        let second = [
+            set_compute_limit(CU_CAP),
+            self.write_ix(&buffer, split, &header[split..]),
+            self.begin_ix(&buffer),
+            self.step_ix(&buffer, 256),
+        ];
+        match self.send(&second, &[]) {
+            Ok(meta) => cu.upload_rest_and_first_leaves = meta.compute_units_consumed,
+            Err(e) => match e.err {
+                TransactionError::InstructionError(_, InstructionError::Custom(code)) => return Err(code),
+                other => panic!("unexpected failure {other:?}"),
+            },
+        }
+        Ok(buffer)
+    }
+
+    /// The transaction that finishes verification and accepts the header.
+    pub fn finish_ixs(&self, buffer: &Address, relay: &Address) -> Vec<Instruction> {
+        vec![
+            set_compute_limit(CU_CAP),
+            self.step_ix(buffer, 256),
+            self.accept_ix(buffer, relay),
+        ]
+    }
+
+    /// Relays one header end to end and closes its buffer.
+    pub fn relay_header(&mut self, relay: &Address, nonce: u8, header: &[u8]) -> Cu {
+        let mut cu = Cu::default();
+        let buffer = self.upload_and_verify(relay, nonce, header, &mut cu);
+        let last = self.finish_ixs(&buffer, relay);
+        cu.last_leaves_and_accept = self.ok(&last, &[]);
+        cu.close = self.ok(&[self.close_ix(&buffer)], &[]);
+        cu
+    }
+
+    pub fn store(&self, relay: &Address) -> (Store, Vec<u8>) {
+        let data = self.svm.get_account(&Self::store_addr(relay)).unwrap().data;
+        (Store::from_bytes(&data).unwrap(), data)
+    }
+}
+
 pub fn serialize<T: BorshSerialize>(v: &T) -> Vec<u8> {
     borsh::to_vec(v).unwrap()
+}
+
+/// System program transfer, built by hand so the harness needs no system-interface crate.
+pub fn solana_system_transfer(from: &Address, to: &Address, lamports: u64) -> Instruction {
+    let mut data = 2u32.to_le_bytes().to_vec();
+    data.extend_from_slice(&lamports.to_le_bytes());
+    Instruction::new_with_bytes(
+        SYSTEM_PROGRAM,
+        &data,
+        vec![
+            solana_instruction::AccountMeta::new(*from, true),
+            solana_instruction::AccountMeta::new(*to, false),
+        ],
+    )
 }

@@ -76,6 +76,9 @@ pub enum HeaderRelayError {
     /// 22 - Relay checkpoint is already sealed
     #[error("Relay checkpoint is already sealed")]
     RelayAlreadySealed = 0x16,
+    /// 23 - The Store slot to overwrite holds the current tip
+    #[error("The Store slot to overwrite holds the current tip")]
+    StoreFull = 0x17,
 }
 
 impl From<HeaderRelayError> for solana_program_error::ProgramError {
