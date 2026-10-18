@@ -2,3 +2,5 @@
 
 pub mod blake2b;
 pub mod equihash;
+pub mod header;
+pub mod pow;

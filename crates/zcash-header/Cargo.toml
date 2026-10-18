@@ -3,6 +3,7 @@ name = "zcash-header"
 version = "0.1.0"
 edition = "2021"
 description = "no_std Zcash header checks shared by the Header Relay and off-chain tools"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 
