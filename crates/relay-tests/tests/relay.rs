@@ -27,6 +27,11 @@ fn a_real_testnet_header_is_accepted_through_the_generated_client() {
     let checkpoint = testnet_checkpoint(10, 0);
     let relay_addr = h.init_relay(&checkpoint);
     let raw = header(HEADER_4483600);
+    assert_eq!(
+        raw[4..36],
+        checkpoint.hash,
+        "the fixture header builds on the checkpoint block"
+    );
 
     let cu = h.relay_header(&relay_addr, 0, &raw);
     println!("CU {cu:?}");
