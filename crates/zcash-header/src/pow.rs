@@ -20,11 +20,11 @@ impl U256 {
         U256(limbs)
     }
 
-    fn is_zero(&self) -> bool {
+    pub(crate) fn is_zero(&self) -> bool {
         *self == Self::ZERO
     }
 
-    fn cmp_to(&self, other: &Self) -> core::cmp::Ordering {
+    pub(crate) fn cmp_to(&self, other: &Self) -> core::cmp::Ordering {
         for i in (0..4).rev() {
             match self.0[i].cmp(&other.0[i]) {
                 core::cmp::Ordering::Equal => {}
@@ -66,6 +66,80 @@ impl U256 {
             self.0[i] = d;
             borrow = b1 || b2;
         }
+    }
+
+    /// `self + other`, `None` on overflow past 256 bits.
+    pub(crate) fn checked_add(&self, other: &Self) -> Option<Self> {
+        let mut out = [0u64; 4];
+        let mut carry = false;
+        for i in 0..4 {
+            let (d, c1) = self.0[i].overflowing_add(other.0[i]);
+            let (d, c2) = d.overflowing_add(carry as u64);
+            out[i] = d;
+            carry = c1 || c2;
+        }
+        (!carry).then_some(U256(out))
+    }
+
+    /// `self * m`, `None` on overflow past 256 bits.
+    pub(crate) fn checked_mul_small(&self, m: u64) -> Option<Self> {
+        let mut out = [0u64; 4];
+        let mut carry = 0u128;
+        for i in 0..4 {
+            let v = self.0[i] as u128 * m as u128 + carry;
+            out[i] = v as u64;
+            carry = v >> 64;
+        }
+        (carry == 0).then_some(U256(out))
+    }
+
+    /// `(self / d, self % d)` for a small non-zero divisor, one 128-bit division per limb.
+    pub(crate) fn div_rem_small(&self, d: u64) -> (Self, u64) {
+        let mut out = [0u64; 4];
+        let mut rem = 0u128;
+        for i in (0..4).rev() {
+            let v = (rem << 64) | self.0[i] as u128;
+            out[i] = (v / d as u128) as u64;
+            rem = v % d as u128;
+        }
+        (U256(out), rem as u64)
+    }
+
+    fn bits_len(&self) -> usize {
+        for i in (0..4).rev() {
+            if self.0[i] != 0 {
+                return i * 64 + 64 - self.0[i].leading_zeros() as usize;
+            }
+        }
+        0
+    }
+
+    /// `nBits` encoding of this target, truncating like `arith_uint256::GetCompact`.
+    pub fn to_compact(&self) -> u32 {
+        let mut size = self.bits_len().div_ceil(8);
+        let mut mantissa = if size <= 3 {
+            (self.0[0] << (8 * (3 - size))) as u32
+        } else {
+            let shifted = self.shr_bytes(size - 3);
+            shifted.0[0] as u32
+        };
+        if mantissa & 0x0080_0000 != 0 {
+            mantissa >>= 8;
+            size += 1;
+        }
+        mantissa | ((size as u32) << 24)
+    }
+
+    fn shr_bytes(&self, bytes: usize) -> Self {
+        let mut src = [0u8; 32];
+        for (i, limb) in self.0.iter().enumerate() {
+            src[i * 8..i * 8 + 8].copy_from_slice(&limb.to_le_bytes());
+        }
+        let mut out = [0u8; 32];
+        for i in bytes..32 {
+            out[i - bytes] = src[i];
+        }
+        Self::from_le_bytes(&out)
     }
 
     fn bit(&self, i: usize) -> bool {
