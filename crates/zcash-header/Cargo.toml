@@ -1,0 +1,13 @@
+[package]
+name = "zcash-header"
+version = "0.1.0"
+edition = "2021"
+description = "no_std Zcash header checks shared by the Header Relay and off-chain tools"
+
+[dependencies]
+
+[dev-dependencies]
+equihash = "0.3.0"
+hex = "0.4"
+blake2b_simd = "1"
+sha2 = "0.10"

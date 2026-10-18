@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["crates/zcash-header", "programs/header-relay"]
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
