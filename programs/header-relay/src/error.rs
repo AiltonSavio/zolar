@@ -31,6 +31,9 @@ pub enum RelayError {
     TooOld = 23,
     /// The Store is below `MIN_CAPACITY`; call `GrowStore` first.
     StoreTooSmall = 24,
+    /// `nVersion` is below 4.
+    InvalidVersion = 25,
+    WorkOverflow = 26,
 }
 
 impl From<equihash::Error> for RelayError {
@@ -54,6 +57,7 @@ impl From<PowError> for RelayError {
             PowError::InvalidBits => Self::InvalidBits,
             PowError::AboveLimit => Self::TargetAboveLimit,
             PowError::HashAboveTarget => Self::HashAboveTarget,
+            PowError::WorkOverflow => Self::WorkOverflow,
         }
     }
 }

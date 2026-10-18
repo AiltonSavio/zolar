@@ -7,7 +7,11 @@
 //! above that target. Prints the forged header as hex. Equihash input covers `nBits`, so the real
 //! solution cannot be reused.
 //!
+//! Optionally sets the block version (arg 3) and, with arg 4 `below`, keeps searching until the hash
+//! is *below* the target instead (a valid-work header with a chosen version).
+//!
 //! Usage: forge-header fixtures/testnet-4483600.hex 1d00ffff > fixtures/forged-testnet-hash-above-target.hex
+//!        forge-header fixtures/testnet-4483600.hex 2007ffff 3 below > fixtures/forged-testnet-version-3.hex
 use sha2::{Digest, Sha256};
 
 fn target_above_hash(bits: u32, hash: &[u8; 32]) -> bool {
@@ -32,6 +36,10 @@ fn main() {
     let bits = u32::from_str_radix(&args.next().expect("compact bits in hex"), 16).unwrap();
     let mut header = hex::decode(std::fs::read_to_string(path).unwrap().trim()).unwrap();
     assert_eq!(header.len(), 1487);
+    if let Some(version) = args.next() {
+        header[..4].copy_from_slice(&version.parse::<i32>().unwrap().to_le_bytes());
+    }
+    let want_below = args.next().as_deref() == Some("below");
     header[104..108].copy_from_slice(&bits.to_le_bytes());
 
     let mut nonce = [0u8; 32];
@@ -54,7 +62,7 @@ fn main() {
             equihash::is_valid_solution(200, 9, &forged[..108], &forged[108..140], &forged[143..])
                 .expect("solver output must verify");
             let hash: [u8; 32] = Sha256::digest(Sha256::digest(&forged)).into();
-            if target_above_hash(bits, &hash) {
+            if target_above_hash(bits, &hash) != want_below {
                 println!("{}", hex::encode(forged));
                 return;
             }

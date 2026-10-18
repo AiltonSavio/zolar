@@ -128,6 +128,8 @@ pub enum PowError {
     AboveLimit,
     /// The header hash, read as a little-endian number, exceeds the target.
     HashAboveTarget,
+    /// The target is so small that its work does not fit in 128 bits.
+    WorkOverflow,
 }
 
 /// Checks `nBits` is a valid target within the network limit and that the header
@@ -145,8 +147,9 @@ pub fn check_pow(network: Network, bits: u32, hash: &[u8; 32]) -> Result<U256, P
 }
 
 /// Expected number of hashes behind a block with this target,
-/// `floor(2^256 / (target + 1))`, saturating at `u128::MAX`.
-pub fn work(target: &U256) -> u128 {
+/// `floor(2^256 / (target + 1))`. `None` when that does not fit in 128 bits (a target below
+/// `2^128`, far harder than any real block).
+pub fn work(target: &U256) -> Option<u128> {
     // (2^256 - 1 - target) / (target + 1) + 1, which avoids a 257-bit numerator.
     let mut numerator = U256([u64::MAX; 4]);
     numerator.sub_assign(target);
@@ -158,14 +161,13 @@ pub fn work(target: &U256) -> u128 {
         carry = c;
     }
     if carry {
-        return 1;
+        return Some(1);
     }
     let (q, _) = numerator.div_rem(&divisor);
     if q.0[2] != 0 || q.0[3] != 0 {
-        return u128::MAX;
+        return None;
     }
-    let low = q.0[0] as u128 | (q.0[1] as u128) << 64;
-    low.saturating_add(1)
+    (q.0[0] as u128 | (q.0[1] as u128) << 64).checked_add(1)
 }
 
 /// Checks a serialised header's proof-of-work target and returns its chain work.
@@ -175,5 +177,6 @@ pub fn header_work(
     header: &[u8; HEADER_LEN],
 ) -> Result<u128, PowError> {
     let hash = header::hash(sha256, header);
-    check_pow(network, header::bits(header), &hash).map(|t| work(&t))
+    let target = check_pow(network, header::bits(header), &hash)?;
+    work(&target).ok_or(PowError::WorkOverflow)
 }

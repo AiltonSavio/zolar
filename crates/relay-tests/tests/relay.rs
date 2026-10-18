@@ -383,3 +383,89 @@ fn a_target_easier_than_the_network_limit_is_rejected() {
     let last = h.finish_ixs(&buffer, &relay_addr);
     assert_eq!(h.custom_err(&last, &[]), 10);
 }
+
+#[test]
+fn reset_unfreezes_a_buffer_for_another_header() {
+    let mut h = Harness::new();
+    let relay_addr = h.init_relay(&testnet_checkpoint(10, 0));
+    let mut cu = Cu::default();
+    let buffer = h.upload_and_verify(&relay_addr, 0, &header(HEADER_4483600), &mut cu);
+    assert_eq!(
+        h.custom_err(&[h.write_ix(&buffer, 0, &[0u8; 4])], &[]),
+        HEADER_FROZEN
+    );
+    let reset = header_relay_client::instructions::ResetBufferBuilder::new()
+        .authority(h.payer.pubkey())
+        .buffer(buffer)
+        .instruction();
+    h.ok(&[reset], &[]);
+    h.ok(&[h.write_ix(&buffer, 0, &[0u8; 4])], &[]);
+}
+
+#[test]
+fn an_empty_buffer_does_not_verify_and_header_writes_stay_in_bounds() {
+    let mut h = Harness::new();
+    let relay_addr = h.init_relay(&testnet_checkpoint(10, 0));
+    let buffer = Harness::buffer_addr(&relay_addr, &h.payer.pubkey(), 0);
+    h.ok(&[h.create_buffer_ix(&relay_addr, 0)], &[]);
+    assert_eq!(
+        h.custom_err(&[h.step_ix(&buffer, 256)], &[]),
+        1,
+        "step on an empty buffer"
+    );
+    let err = h
+        .send(&[h.write_ix(&buffer, 1480, &[0u8; 8])], &[])
+        .unwrap_err()
+        .err;
+    assert_eq!(
+        err,
+        solana_transaction_error::TransactionError::InstructionError(
+            0,
+            solana_instruction::error::InstructionError::InvalidInstructionData
+        )
+    );
+}
+
+#[test]
+fn a_block_version_below_four_is_rejected() {
+    let mut h = Harness::new();
+    let relay_addr = h.init_relay(&testnet_checkpoint(10, 0));
+    let mut cu = Cu::default();
+    // Equihash and the target both accept this forged header; only the version is wrong.
+    let buffer = h.upload_and_verify(&relay_addr, 0, &header(FORGED_VERSION_3), &mut cu);
+    let last = h.finish_ixs(&buffer, &relay_addr);
+    assert_eq!(h.custom_err(&last, &[]), 25);
+}
+
+#[test]
+fn accounts_of_different_relays_cannot_be_mixed() {
+    let mut h = Harness::new();
+    let a = h.init_relay(&testnet_checkpoint(10, 0));
+    let b = h.init_relay(&testnet_checkpoint(10, 1));
+    let mut cu = Cu::default();
+    let buffer_a = h.upload_and_verify(&a, 0, &header(HEADER_4483600), &mut cu);
+    // Buffer of relay A, relay B, store of relay A.
+    let mut ix = h.accept_ix(&buffer_a, &b);
+    ix.accounts[3].pubkey = Harness::store_addr(&a);
+    let mut tx = vec![set_compute_limit(CU_CAP), h.step_ix(&buffer_a, 256)];
+    tx.push(ix);
+    assert_eq!(h.custom_err(&tx, &[]), 19);
+    // Using relay A's buffer with relay B and B's own store fails too.
+    let mut tx = vec![set_compute_limit(CU_CAP), h.step_ix(&buffer_a, 256)];
+    tx.push(h.accept_ix(&buffer_a, &b));
+    assert_eq!(h.custom_err(&tx, &[]), 19);
+    assert_eq!(h.store(&a).0.count, 0);
+    assert_eq!(h.store(&b).0.count, 0);
+}
+
+#[test]
+fn a_foreign_account_is_not_accepted_as_a_buffer() {
+    let mut h = Harness::new();
+    let relay_addr = h.init_relay(&testnet_checkpoint(10, 0));
+    // The relay account itself is program-owned but is not a buffer.
+    let ix = h.write_ix(&relay_addr, 0, &[1u8; 4]);
+    assert_eq!(h.custom_err(&[ix], &[]), 19);
+    // A system-owned account is not either.
+    let ix = h.write_ix(&h.payer.pubkey(), 0, &[1u8; 4]);
+    assert!(h.send(&[ix], &[]).is_err());
+}

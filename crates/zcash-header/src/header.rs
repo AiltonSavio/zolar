@@ -25,6 +25,13 @@ fn hash_at(header: &[u8; HEADER_LEN], at: usize) -> [u8; 32] {
     out
 }
 
+/// `nVersion` as a signed integer; consensus requires at least 4.
+pub fn version(header: &[u8; HEADER_LEN]) -> i32 {
+    word(header, 0) as i32
+}
+
+pub const MIN_VERSION: i32 = 4;
+
 pub fn prev_hash(header: &[u8; HEADER_LEN]) -> [u8; 32] {
     hash_at(header, PREV_HASH)
 }

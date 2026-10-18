@@ -156,6 +156,9 @@ fn every_recorded_testnet_header_verifies() {
     let mut count = 0;
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "hex") {
+            continue;
+        }
         let header = hex::decode(std::fs::read_to_string(&path).unwrap().trim()).unwrap();
         assert!(oracle_accepts(&header), "{path:?}");
         assert_eq!(verify(&header, 256).unwrap(), 2, "{path:?}");

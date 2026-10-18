@@ -30,7 +30,7 @@ fn work_matches_big_integer_reference() {
         (0x1c1d6f3a, 37_354_547_255),
     ] {
         let target = target_from_compact(bits).unwrap();
-        assert_eq!(work(&target), expected, "bits {bits:08x}");
+        assert_eq!(work(&target), Some(expected), "bits {bits:08x}");
     }
 }
 
@@ -76,4 +76,20 @@ fn target_easier_than_the_network_limit_is_rejected() {
         check_pow(Network::Testnet, 0, &hash),
         Err(PowError::InvalidBits)
     );
+}
+
+#[test]
+fn work_that_does_not_fit_128_bits_is_refused() {
+    // Target 1 would mean 2^255 hashes.
+    assert_eq!(work(&U256([1, 0, 0, 0])), None);
+    assert_eq!(
+        work(&target_from_compact(0x1d00ffff).unwrap()),
+        Some(4_295_032_833)
+    );
+}
+
+#[test]
+fn the_fixture_has_a_valid_version() {
+    assert_eq!(header::version(&fixture()), 4);
+    assert!(header::version(&fixture()) >= header::MIN_VERSION);
 }

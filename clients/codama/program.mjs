@@ -368,6 +368,8 @@ const errors = [
   ['relayAlreadySealed', 'Relay checkpoint is already sealed'],
   ['tooOld', 'Header is further below the tip than the reorganisation window'],
   ['storeTooSmall', 'The Store is below its minimum capacity; grow it first'],
+  ['invalidVersion', 'Block version is below 4'],
+  ['workOverflow', 'Chain work does not fit in 128 bits'],
 ].map(([name, message], i) => errorNode({ name, code: i + 1, message }));
 
 export const root = rootNode(

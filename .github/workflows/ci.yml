@@ -39,6 +39,8 @@ jobs:
         run: cargo build-sbf --manifest-path programs/header-relay/Cargo.toml
       - name: Tests (crate and LiteSVM)
         run: cargo test --workspace
+      - name: Tests (program unit tests)
+        run: cargo test --manifest-path programs/header-relay/Cargo.toml
 
   clients:
     runs-on: ubuntu-latest
@@ -57,4 +59,4 @@ jobs:
         run: |
           pnpm --dir clients/codama install --frozen-lockfile
           pnpm --dir clients/codama generate
-          git diff --exit-code clients
+          test -z "$(git status --porcelain --untracked-files=all -- clients)"

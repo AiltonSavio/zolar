@@ -82,6 +82,12 @@ pub enum HeaderRelayError {
     /// 24 - The Store is below its minimum capacity; grow it first
     #[error("The Store is below its minimum capacity; grow it first")]
     StoreTooSmall = 0x18,
+    /// 25 - Block version is below 4
+    #[error("Block version is below 4")]
+    InvalidVersion = 0x19,
+    /// 26 - Chain work does not fit in 128 bits
+    #[error("Chain work does not fit in 128 bits")]
+    WorkOverflow = 0x1A,
 }
 
 impl From<HeaderRelayError> for solana_program_error::ProgramError {

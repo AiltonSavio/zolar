@@ -33,6 +33,10 @@ pub const HEADER_4483600: &str = include_str!("../../zcash-header/fixtures/testn
 /// SHA-256d hash above that target.
 pub const FORGED_HASH_ABOVE_TARGET: &str =
     include_str!("../../zcash-header/fixtures/forged-testnet-hash-above-target.hex");
+/// Forged by `tools/forge-header`: valid Equihash solution, hash below its target (`nBits` 0x2007ffff),
+/// but `nVersion` 3, which Zcash consensus rejects.
+pub const FORGED_VERSION_3: &str =
+    include_str!("../../zcash-header/fixtures/forged-testnet-version-3.hex");
 /// Its child at height 4,483,601.
 pub const HEADER_4483601: &str = include_str!("../../zcash-header/fixtures/testnet-4483601.hex");
 const CHECKPOINT_JSON: &str =
@@ -134,6 +138,11 @@ impl Harness {
             &signers,
             Message::new(ixs, Some(&self.payer.pubkey())),
             self.svm.latest_blockhash(),
+        );
+        let size = 1 + 64 * tx.signatures.len() + tx.message.serialize().len();
+        assert!(
+            size <= 1232,
+            "transaction is {size} bytes, over the 1232 byte limit"
         );
         self.svm.send_transaction(tx)
     }

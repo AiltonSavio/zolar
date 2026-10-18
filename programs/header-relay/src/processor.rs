@@ -522,10 +522,13 @@ fn accept_header(program_id: &Address, accounts: &[AccountView]) -> ProgramResul
     } else {
         Network::Testnet
     };
+    if header::version(header_bytes) < header::MIN_VERSION {
+        return Err(fail(RelayError::InvalidVersion));
+    }
     let hash = header::hash(sha256, header_bytes);
     let target =
         pow::check_pow(network, header::bits(header_bytes), &hash).map_err(|e| fail(e.into()))?;
-    let work = pow::work(&target);
+    let work = pow::work(&target).ok_or(fail(RelayError::WorkOverflow))?;
 
     let capacity = u16_at(&s, S_CAPACITY) as usize;
     if capacity < MIN_CAPACITY {
@@ -579,7 +582,10 @@ fn accept_header(program_id: &Address, accounts: &[AccountView]) -> ProgramResul
     let seq = count
         .checked_add(1)
         .ok_or(ProgramError::ArithmeticOverflow)?;
-    let total = parent.work.saturating_add(work);
+    let total = parent
+        .work
+        .checked_add(work)
+        .ok_or(fail(RelayError::WorkOverflow))?;
     let at = STORE_HEADER_LEN + index * SLOT_LEN;
     let slot = &mut s[at..at + SLOT_LEN];
     put(slot, SL_HASH, &hash);
