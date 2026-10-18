@@ -6,9 +6,11 @@
  * @see https://github.com/codama-idl/codama
  */
 
-import { fixEncoderSize, getBytesEncoder, getProgramDerivedAddress, getUtf8Encoder, type Address, type HasAddress, type ProgramDerivedAddress, type ReadonlyUint8Array } from '@solana/kit';
+import { fixEncoderSize, getAddressEncoder, getBytesEncoder, getProgramDerivedAddress, getUtf8Encoder, type Address, type HasAddress, type ProgramDerivedAddress, type ReadonlyUint8Array } from '@solana/kit';
 
 export type RelaySeeds = {
+/** The signer that creates the Relay; separates deployers so nobody can squat another deployer's address. */
+creator: Address | HasAddress;
 /** SHA-256 of the serialised Checkpoint. */
 checkpointDigest: ReadonlyUint8Array;
 };
@@ -16,5 +18,5 @@ checkpointDigest: ReadonlyUint8Array;
 export async function findRelayPda(seeds: RelaySeeds, config: { programAddress?: Address | HasAddress | undefined } = {}): Promise<ProgramDerivedAddress> {
   const { programAddress: programAddressInput = '6F4o7Fphgz5MS4BZrqbE4NyaLUKiAprDNdYTxif4sg9D' as Address<'6F4o7Fphgz5MS4BZrqbE4NyaLUKiAprDNdYTxif4sg9D'> } = config;
   const programAddress = typeof programAddressInput === 'string' ? programAddressInput : programAddressInput.address;
-  return await getProgramDerivedAddress({ programAddress, seeds: [getUtf8Encoder().encode("relay"), fixEncoderSize(getBytesEncoder(), 32).encode(seeds.checkpointDigest)]});
+  return await getProgramDerivedAddress({ programAddress, seeds: [getUtf8Encoder().encode("relay"), getAddressEncoder().encode(seeds.creator), fixEncoderSize(getBytesEncoder(), 32).encode(seeds.checkpointDigest)]});
 }

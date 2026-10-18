@@ -61,7 +61,7 @@ const args = { ...input,  };
 
 // Resolve default values.
 if (!accounts.relay.value) {
-accounts.relay.value = await findRelayPda({ checkpointDigest: getNonNullResolvedInstructionInput("checkpointDigest", args.checkpointDigest) }, { programAddress });
+accounts.relay.value = await findRelayPda({ creator: getAddressFromResolvedInstructionAccount("payer", accounts.payer.value), checkpointDigest: getNonNullResolvedInstructionInput("checkpointDigest", args.checkpointDigest) }, { programAddress });
 }
 if (!accounts.store.value) {
 accounts.store.value = await findStorePda({ relay: getAddressFromResolvedInstructionAccount("relay", accounts.relay.value) }, { programAddress });

@@ -95,3 +95,79 @@ pub const BUFFER_LEN: usize = B_VERIFIER + zcash_header::equihash::STATE_LEN;
 pub const fn initial_capacity() -> usize {
     (INITIAL_STORE_LEN - STORE_HEADER_LEN) / SLOT_LEN
 }
+
+/// Headers further than this below the tip are refused. A genuine competing branch that
+/// forks deeper is beyond what the relay can follow; with `MAX_FINALITY_DEPTH` half of
+/// this, any fork deeper than Finality Depth is still seen while it is shallow enough to
+/// be stored. It also stops replays of old, genuine headers from refilling the Store.
+pub const REORG_WINDOW: u32 = 60;
+/// Largest Finality Depth a Checkpoint may fix.
+pub const MAX_FINALITY_DEPTH: u16 = (REORG_WINDOW / 2) as u16;
+/// Headers are accepted only once the Store holds the 113 blocks of difficulty context
+/// plus `REORG_WINDOW` and some margin. A new Store holds 100, so `GrowStore` comes first.
+pub const MIN_CAPACITY: usize = 200;
+
+/// Whether a header at `height` is too far below the tip to keep.
+pub fn is_too_old(tip_height: u32, height: u32) -> bool {
+    tip_height.saturating_sub(height) > REORG_WINDOW
+}
+
+/// Picks the slot a new header is written to: the first never-used slot (sequence 0),
+/// otherwise the oldest slot that is not `protected` (the tip and the new header's parent).
+pub fn choose_slot(
+    capacity: usize,
+    seq_of: impl Fn(usize) -> u32,
+    protected: &[usize],
+) -> Option<usize> {
+    let mut oldest: Option<(u32, usize)> = None;
+    for i in 0..capacity {
+        let seq = seq_of(i);
+        if seq == 0 {
+            return Some(i);
+        }
+        if protected.contains(&i) {
+            continue;
+        }
+        if oldest.is_none_or(|(s, _)| seq < s) {
+            oldest = Some((seq, i));
+        }
+    }
+    oldest.map(|(_, i)| i)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn headers_beyond_the_reorg_window_are_too_old() {
+        assert!(!is_too_old(1_000, 1_000 - REORG_WINDOW));
+        assert!(is_too_old(1_000, 1_000 - REORG_WINDOW - 1));
+        assert!(
+            !is_too_old(5, 1_000),
+            "a header above the tip is never too old"
+        );
+    }
+
+    #[test]
+    fn uses_free_slots_before_evicting() {
+        let seqs = [3, 4, 0, 0];
+        assert_eq!(choose_slot(4, |i| seqs[i], &[]), Some(2));
+    }
+
+    #[test]
+    fn evicts_the_oldest_unprotected_slot() {
+        let seqs = [7, 5, 9, 6];
+        assert_eq!(choose_slot(4, |i| seqs[i], &[]), Some(1));
+        assert_eq!(choose_slot(4, |i| seqs[i], &[1]), Some(3));
+        assert_eq!(choose_slot(4, |i| seqs[i], &[1, 3]), Some(0));
+    }
+
+    #[test]
+    fn never_evicts_the_tip_or_the_parent_so_insertion_cannot_deadlock() {
+        // The tip sits in the oldest slot (as after a heavier branch): the next oldest goes.
+        let seqs = [1, 2, 3];
+        assert_eq!(choose_slot(3, |i| seqs[i], &[0, 1]), Some(2));
+        assert_eq!(choose_slot(2, |i| seqs[i], &[0, 1]), None);
+    }
+}

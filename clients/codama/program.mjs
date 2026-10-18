@@ -150,6 +150,7 @@ const pdas = [
     name: 'relay',
     seeds: [
       constantPdaSeedNodeFromString('utf8', 'relay'),
+      variablePdaSeedNode('creator', publicKeyTypeNode(), 'The signer that creates the Relay; separates deployers so nobody can squat another deployer\'s address.'),
       variablePdaSeedNode('checkpointDigest', bytes(32), 'SHA-256 of the serialised Checkpoint.'),
     ],
   }),
@@ -187,13 +188,16 @@ const systemProgram = instructionAccountNode({
 });
 
 const relayPda = (arg) =>
-  pdaValueNode('relay', [pdaSeedValueNode('checkpointDigest', argumentValueNode(arg))]);
+  pdaValueNode('relay', [
+    pdaSeedValueNode('creator', accountValueNode('payer')),
+    pdaSeedValueNode('checkpointDigest', argumentValueNode(arg)),
+  ]);
 
 const instructions = [
   instructionNode({
     name: 'createRelay',
     docs: [
-      'Creates the Relay and Store accounts for a Checkpoint whose digest is given. The Relay stays pending until the checkpoint bytes are written and sealed.',
+      'Creates a Relay and Store owned by the signer for a Checkpoint whose digest is given. The Relay stays pending until the checkpoint bytes are written and sealed.',
     ],
     discriminators: [fieldDiscriminatorNode('discriminator')],
     accounts: [
@@ -239,7 +243,7 @@ const instructions = [
   }),
   instructionNode({
     name: 'growStore',
-    docs: ['Adds room for 100 more header slots. Allowed only before the Store has wrapped.'],
+    docs: ['Adds room for 100 more header slots (up to 400). Headers are accepted only once the Store holds 200.'],
     discriminators: [fieldDiscriminatorNode('discriminator')],
     accounts: [
       instructionAccountNode({ name: 'payer', isSigner: true, isWritable: true }),
@@ -362,7 +366,8 @@ const errors = [
   ['alreadyAccepted', 'Buffer already accepted its header'],
   ['storeNotGrowable', 'Store already wrapped or reached its maximum size'],
   ['relayAlreadySealed', 'Relay checkpoint is already sealed'],
-  ['storeFull', 'The Store slot to overwrite holds the current tip'],
+  ['tooOld', 'Header is further below the tip than the reorganisation window'],
+  ['storeTooSmall', 'The Store is below its minimum capacity; grow it first'],
 ].map(([name, message], i) => errorNode({ name, code: i + 1, message }));
 
 export const root = rootNode(

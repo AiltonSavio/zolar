@@ -6,7 +6,7 @@
 //!
 //! | tag | instruction | accounts |
 //! |---|---|---|
-//! | 0 | CreateRelay `digest[32]` | payer(ws), relay(w), store(w), system |
+//! | 0 | CreateRelay `digest[32]` | payer(ws), relay(w), store(w), system; relay PDA `["relay", payer, digest]` |
 //! | 1 | WriteCheckpoint `offset u16, bytes` | creator(s), relay(w) |
 //! | 2 | SealRelay | relay(w) |
 //! | 3 | GrowStore | payer(ws), store(w), system |
@@ -26,7 +26,7 @@ pub mod processor;
 
 #[cfg(all(target_os = "solana", not(feature = "no-entrypoint")))]
 mod entry {
-    pinocchio::program_entrypoint!(crate::processor::process_instruction, 4);
+    pinocchio::program_entrypoint!(crate::processor::process_instruction, 8);
     pinocchio::no_allocator!();
     pinocchio::nostd_panic_handler!();
 }

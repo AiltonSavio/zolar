@@ -241,13 +241,13 @@ fn create_relay(program_id: &Address, accounts: &[AccountView], args: &[u8]) -> 
         .try_into()
         .map_err(|_| ProgramError::InvalidInstructionData)?;
     require_signer(payer)?;
-    create_pda::<3>(
+    create_pda::<4>(
         program_id,
         payer,
         relay,
         system,
         RELAY_LEN,
-        &[SEED_RELAY, digest],
+        &[SEED_RELAY, payer.address().as_ref(), digest],
     )?;
     create_pda::<3>(
         program_id,
@@ -306,7 +306,8 @@ fn seal_relay(program_id: &Address, accounts: &[AccountView]) -> ProgramResult {
         return Err(fail(RelayError::RelayAlreadySealed));
     }
     let digest = sha256(&r[R_CHECKPOINT..R_CHECKPOINT + CHECKPOINT_LEN]);
-    let (pda, _) = find_program_address(&[SEED_RELAY, &digest], program_id);
+    let creator = array32(&r, R_CREATOR);
+    let (pda, _) = find_program_address(&[SEED_RELAY, &creator, &digest], program_id);
     if relay.address() != &pda {
         return Err(fail(RelayError::CheckpointDigestMismatch));
     }
@@ -316,6 +317,7 @@ fn seal_relay(program_id: &Address, accounts: &[AccountView]) -> ProgramResult {
     if cp[CP_VERSION] != VERSION
         || (network != NETWORK_MAINNET && network != NETWORK_TESTNET)
         || finality == 0
+        || finality > MAX_FINALITY_DEPTH
         || cp[CP_HASH..CP_HASH + 32].iter().all(|b| *b == 0)
     {
         return Err(fail(RelayError::InvalidCheckpoint));
@@ -339,9 +341,8 @@ fn grow_store(program_id: &Address, accounts: &[AccountView]) -> ProgramResult {
     let new_len = {
         let mut s = store.try_borrow_mut()?;
         let capacity = u16_at(&s, S_CAPACITY) as usize;
-        let count = u32_at(&s, S_COUNT) as usize;
         let new_capacity = capacity + GROW_BYTES / SLOT_LEN;
-        if count > capacity || new_capacity > MAX_CAPACITY {
+        if new_capacity > MAX_CAPACITY {
             return Err(fail(RelayError::StoreNotGrowable));
         }
         put(&mut s, S_CAPACITY, &(new_capacity as u16).to_le_bytes());
@@ -527,8 +528,10 @@ fn accept_header(program_id: &Address, accounts: &[AccountView]) -> ProgramResul
     let work = pow::work(&target);
 
     let capacity = u16_at(&s, S_CAPACITY) as usize;
+    if capacity < MIN_CAPACITY {
+        return Err(fail(RelayError::StoreTooSmall));
+    }
     let count = u32_at(&s, S_COUNT);
-    let stored = (count as usize).min(capacity);
     let prev = header::prev_hash(header_bytes);
     let checkpoint_hash = array32(&r, R_CHECKPOINT + CP_HASH);
     if hash == checkpoint_hash {
@@ -540,9 +543,12 @@ fn accept_header(program_id: &Address, accounts: &[AccountView]) -> ProgramResul
         height: u32_at(&r, R_CHECKPOINT + CP_HEIGHT),
         work: 0,
     });
-    for i in 0..stored {
+    for i in 0..capacity {
         let at = STORE_HEADER_LEN + i * SLOT_LEN;
         let slot = &s[at..at + SLOT_LEN];
+        if u32_at(slot, SL_SEQ) == 0 {
+            continue;
+        }
         if slot[SL_HASH..SL_HASH + 32] == hash {
             return Err(fail(RelayError::DuplicateHeader));
         }
@@ -559,12 +565,20 @@ fn accept_header(program_id: &Address, accounts: &[AccountView]) -> ProgramResul
     }
     let parent = parent.ok_or(fail(RelayError::UnknownParent))?;
 
-    let index = count as usize % capacity;
-    if u16_at(&r, R_TIP_SLOT) as usize == index && count as usize >= capacity {
-        return Err(fail(RelayError::StoreFull));
-    }
-    let seq = count + 1;
     let height = parent.height + 1;
+    if is_too_old(u32_at(&r, R_TIP_HEIGHT), height) {
+        return Err(fail(RelayError::TooOld));
+    }
+    let protected = [u16_at(&r, R_TIP_SLOT) as usize, parent.slot as usize];
+    let index = choose_slot(
+        capacity,
+        |i| u32_at(&s, STORE_HEADER_LEN + i * SLOT_LEN + SL_SEQ),
+        &protected,
+    )
+    .ok_or(fail(RelayError::TooOld))?;
+    let seq = count
+        .checked_add(1)
+        .ok_or(ProgramError::ArithmeticOverflow)?;
     let total = parent.work.saturating_add(work);
     let at = STORE_HEADER_LEN + index * SLOT_LEN;
     let slot = &mut s[at..at + SLOT_LEN];

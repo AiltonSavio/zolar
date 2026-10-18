@@ -160,8 +160,8 @@ impl Harness {
         }
     }
 
-    pub fn relay_addr(checkpoint: &Checkpoint) -> Address {
-        Relay::find_pda(digest_of(checkpoint)).0
+    pub fn relay_addr(creator: &Address, checkpoint: &Checkpoint) -> Address {
+        Relay::find_pda(creator, digest_of(checkpoint)).0
     }
 
     pub fn store_addr(relay: &Address) -> Address {
@@ -173,7 +173,7 @@ impl Harness {
     }
 
     pub fn create_relay_ix(&self, checkpoint: &Checkpoint) -> Instruction {
-        let relay = Self::relay_addr(checkpoint);
+        let relay = Self::relay_addr(&self.payer.pubkey(), checkpoint);
         CreateRelayBuilder::new()
             .payer(self.payer.pubkey())
             .relay(relay)
@@ -185,7 +185,7 @@ impl Harness {
 
     pub fn write_checkpoint_ixs(&self, checkpoint: &Checkpoint) -> Vec<Instruction> {
         let bytes = borsh::to_vec(checkpoint).unwrap();
-        let relay = Self::relay_addr(checkpoint);
+        let relay = Self::relay_addr(&self.payer.pubkey(), checkpoint);
         bytes
             .chunks(480)
             .enumerate()
@@ -202,12 +202,28 @@ impl Harness {
 
     pub fn seal_ix(&self, checkpoint: &Checkpoint) -> Instruction {
         SealRelayBuilder::new()
-            .relay(Self::relay_addr(checkpoint))
+            .relay(Self::relay_addr(&self.payer.pubkey(), checkpoint))
             .instruction()
     }
 
-    /// Creates, fills and seals a Relay; returns its address.
+    /// Creates, fills and seals a Relay and grows its Store to the minimum headers need.
     pub fn init_relay(&mut self, checkpoint: &Checkpoint) -> Address {
+        let relay = self.init_relay_ungrown(checkpoint);
+        self.grow_ix_ok(&relay);
+        relay
+    }
+
+    pub fn grow_ix_ok(&mut self, relay: &Address) {
+        let grow = GrowStoreBuilder::new()
+            .payer(self.payer.pubkey())
+            .store(Self::store_addr(relay))
+            .system_program(SYSTEM_PROGRAM)
+            .instruction();
+        self.ok(&[grow], &[]);
+    }
+
+    /// Creates, fills and seals a Relay; returns its address.
+    pub fn init_relay_ungrown(&mut self, checkpoint: &Checkpoint) -> Address {
         let create = self.create_relay_ix(checkpoint);
         self.ok(&[create], &[]);
         for ix in self.write_checkpoint_ixs(checkpoint) {
@@ -215,7 +231,7 @@ impl Harness {
         }
         let seal = self.seal_ix(checkpoint);
         self.ok(&[seal], &[]);
-        Self::relay_addr(checkpoint)
+        Self::relay_addr(&self.payer.pubkey(), checkpoint)
     }
 
     pub fn relay(&self, relay: &Address) -> Relay {

@@ -38,22 +38,32 @@ impl Relay {
     /// Values are positional and appear in the following order:
     ///
     ///   0. `Relay::PREFIX`
-    ///   1. checkpoint_digest (`[u8; 32]`)
+    ///   1. creator (`Address`)
+    ///   2. checkpoint_digest (`[u8; 32]`)
     pub const PREFIX: &'static [u8] = "relay".as_bytes();
 
     pub fn create_pda(
+        creator: Address,
         checkpoint_digest: [u8; 32],
         bump: u8,
     ) -> Result<solana_address::Address, solana_address::error::AddressError> {
         solana_address::Address::create_program_address(
-            &["relay".as_bytes(), &checkpoint_digest, &[bump]],
+            &[
+                "relay".as_bytes(),
+                creator.as_ref(),
+                &checkpoint_digest,
+                &[bump],
+            ],
             &crate::HEADER_RELAY_ID,
         )
     }
 
-    pub fn find_pda(checkpoint_digest: [u8; 32]) -> (solana_address::Address, u8) {
+    pub fn find_pda(
+        creator: &Address,
+        checkpoint_digest: [u8; 32],
+    ) -> (solana_address::Address, u8) {
         solana_address::Address::find_program_address(
-            &["relay".as_bytes(), &checkpoint_digest],
+            &["relay".as_bytes(), creator.as_ref(), &checkpoint_digest],
             &crate::HEADER_RELAY_ID,
         )
     }

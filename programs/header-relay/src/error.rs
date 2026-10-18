@@ -27,8 +27,10 @@ pub enum RelayError {
     AlreadyAccepted = 20,
     StoreNotGrowable = 21,
     RelayAlreadySealed = 22,
-    /// The next slot to overwrite holds the current tip.
-    StoreFull = 23,
+    /// The header is more than `REORG_WINDOW` blocks below the tip.
+    TooOld = 23,
+    /// The Store is below `MIN_CAPACITY`; call `GrowStore` first.
+    StoreTooSmall = 24,
 }
 
 impl From<equihash::Error> for RelayError {

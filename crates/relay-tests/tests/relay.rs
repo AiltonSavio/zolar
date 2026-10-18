@@ -202,7 +202,7 @@ fn nobody_can_create_a_buffer_in_another_relayers_name() {
 fn a_prefunded_address_cannot_block_creation() {
     let mut h = Harness::new();
     let checkpoint = testnet_checkpoint(10, 0);
-    let relay = Harness::relay_addr(&checkpoint);
+    let relay = Harness::relay_addr(&h.payer.pubkey(), &checkpoint);
     let store = Harness::store_addr(&relay);
     for target in [relay, store] {
         let ix = solana_system_transfer(&h.payer.pubkey(), &target, 1_000_000);
@@ -230,7 +230,7 @@ fn a_relay_must_be_sealed_with_the_checkpoint_its_address_commits_to() {
     h.ok(&[create], &[]);
     // Write a different checkpoint (finality depth 11) under the address of the first.
     let other = testnet_checkpoint(11, 0);
-    let relay = Harness::relay_addr(&checkpoint);
+    let relay = Harness::relay_addr(&h.payer.pubkey(), &checkpoint);
     let bytes = borsh::to_vec(&other).unwrap();
     for (i, chunk) in bytes.chunks(480).enumerate() {
         let ix = header_relay_client::instructions::WriteCheckpointBuilder::new()
@@ -256,7 +256,7 @@ fn a_relay_must_be_sealed_with_the_checkpoint_its_address_commits_to() {
 fn only_the_creator_writes_the_checkpoint_and_only_before_sealing() {
     let mut h = Harness::new();
     let checkpoint = testnet_checkpoint(10, 0);
-    let relay = Harness::relay_addr(&checkpoint);
+    let relay = Harness::relay_addr(&h.payer.pubkey(), &checkpoint);
     let create = h.create_relay_ix(&checkpoint);
     h.ok(&[create], &[]);
     let other = solana_keypair::Keypair::new();
@@ -289,22 +289,74 @@ fn relays_with_different_nonces_are_independent() {
 }
 
 #[test]
-fn the_store_grows_before_it_wraps() {
+fn the_store_grows_in_steps_to_a_maximum() {
     let mut h = Harness::new();
-    let relay = h.init_relay(&testnet_checkpoint(10, 0));
+    let relay = h.init_relay_ungrown(&testnet_checkpoint(10, 0));
     let store = Harness::store_addr(&relay);
     assert_eq!(h.store(&relay).0.capacity, 100);
+    for capacity in [200, 300, 400] {
+        h.grow_ix_ok(&relay);
+        assert_eq!(h.store(&relay).0.capacity, capacity);
+        assert_eq!(
+            h.svm.get_account(&store).unwrap().data.len(),
+            40 + capacity as usize * 102
+        );
+    }
     let grow = header_relay_client::instructions::GrowStoreBuilder::new()
         .payer(h.payer.pubkey())
         .store(store)
         .system_program(SYSTEM_PROGRAM)
         .instruction();
-    h.ok(&[grow], &[]);
-    assert_eq!(h.store(&relay).0.capacity, 200);
-    assert_eq!(
-        h.svm.get_account(&store).unwrap().data.len(),
-        40 + 200 * 102
-    );
+    assert_eq!(h.custom_err(&[grow], &[]), 21);
+}
+
+#[test]
+fn headers_wait_for_a_store_big_enough_for_the_difficulty_context() {
+    let mut h = Harness::new();
+    let relay_addr = h.init_relay_ungrown(&testnet_checkpoint(10, 0));
+    let mut cu = Cu::default();
+    let buffer = h.upload_and_verify(&relay_addr, 0, &header(HEADER_4483600), &mut cu);
+    let last = h.finish_ixs(&buffer, &relay_addr);
+    assert_eq!(h.custom_err(&last, &[]), 24);
+    h.grow_ix_ok(&relay_addr);
+    h.ok(&last, &[]);
+    assert_eq!(h.relay(&relay_addr).tip_height, 4_483_600);
+}
+
+#[test]
+fn a_finality_depth_the_store_cannot_follow_is_refused() {
+    let mut h = Harness::new();
+    let checkpoint = testnet_checkpoint(31, 0);
+    let create = h.create_relay_ix(&checkpoint);
+    h.ok(&[create], &[]);
+    for ix in h.write_checkpoint_ixs(&checkpoint) {
+        h.ok(&[ix], &[]);
+    }
+    assert_eq!(h.custom_err(&[h.seal_ix(&checkpoint)], &[]), 18);
+}
+
+#[test]
+fn nobody_can_squat_another_deployers_relay_address() {
+    let mut h = Harness::new();
+    let checkpoint = testnet_checkpoint(10, 0);
+    let squatter = solana_keypair::Keypair::new();
+    h.svm.airdrop(&squatter.pubkey(), 10_000_000_000).unwrap();
+    // The squatter creates a relay for the very same Checkpoint first and never finishes it.
+    let digest = digest_of(&checkpoint);
+    let squat_relay = Harness::relay_addr(&squatter.pubkey(), &checkpoint);
+    let squat = header_relay_client::instructions::CreateRelayBuilder::new()
+        .payer(squatter.pubkey())
+        .relay(squat_relay)
+        .store(Harness::store_addr(&squat_relay))
+        .system_program(SYSTEM_PROGRAM)
+        .checkpoint_digest(digest)
+        .instruction();
+    h.ok(&[squat], &[&squatter]);
+    // The deployer's relay lives at a different address and initialises normally.
+    let mine = h.init_relay(&checkpoint);
+    assert_ne!(mine, squat_relay);
+    assert_eq!(h.relay(&mine).state, 1);
+    assert_eq!(h.relay(&squat_relay).state, 0);
 }
 
 #[test]
