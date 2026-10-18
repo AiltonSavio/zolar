@@ -34,19 +34,18 @@ impl U256 {
         core::cmp::Ordering::Equal
     }
 
-    fn shl_bytes(self, bytes: usize) -> Option<Self> {
-        let mut out = [0u8; 32];
-        let mut src = [0u8; 32];
-        for (i, limb) in self.0.iter().enumerate() {
-            src[i * 8..i * 8 + 8].copy_from_slice(&limb.to_le_bytes());
-        }
-        for (i, b) in src.iter().enumerate() {
-            if *b == 0 {
-                continue;
+    /// `value << 8 * bytes`, `None` when bits would fall off the top.
+    fn from_shifted(value: u32, bytes: usize) -> Option<Self> {
+        let shift = 8 * bytes;
+        let (limb, offset) = (shift / 64, shift % 64);
+        let wide = (value as u128) << offset;
+        let mut out = [0u64; 4];
+        for (i, part) in [wide as u64, (wide >> 64) as u64].into_iter().enumerate() {
+            if part != 0 {
+                *out.get_mut(limb + i)? = part;
             }
-            *out.get_mut(i + bytes)? = *b;
         }
-        Some(Self::from_le_bytes(&out))
+        Some(U256(out))
     }
 
     fn shl1(&mut self) {
@@ -68,26 +67,13 @@ impl U256 {
         }
     }
 
-    /// `self + other`, `None` on overflow past 256 bits.
-    pub(crate) fn checked_add(&self, other: &Self) -> Option<Self> {
-        let mut out = [0u64; 4];
-        let mut carry = false;
-        for i in 0..4 {
-            let (d, c1) = self.0[i].overflowing_add(other.0[i]);
-            let (d, c2) = d.overflowing_add(carry as u64);
-            out[i] = d;
-            carry = c1 || c2;
-        }
-        (!carry).then_some(U256(out))
-    }
-
     /// `self * m`, `None` on overflow past 256 bits.
     pub(crate) fn checked_mul_small(&self, m: u64) -> Option<Self> {
         let mut out = [0u64; 4];
         let mut carry = 0u128;
-        for i in 0..4 {
-            let v = self.0[i] as u128 * m as u128 + carry;
-            out[i] = v as u64;
+        for (o, limb) in out.iter_mut().zip(self.0) {
+            let v = limb as u128 * m as u128 + carry;
+            *o = v as u64;
             carry = v >> 64;
         }
         (carry == 0).then_some(U256(out))
@@ -136,9 +122,7 @@ impl U256 {
             src[i * 8..i * 8 + 8].copy_from_slice(&limb.to_le_bytes());
         }
         let mut out = [0u8; 32];
-        for i in bytes..32 {
-            out[i - bytes] = src[i];
-        }
+        out[..32 - bytes].copy_from_slice(&src[bytes..]);
         Self::from_le_bytes(&out)
     }
 
@@ -189,7 +173,7 @@ pub fn target_from_compact(bits: u32) -> Option<U256> {
     let target = if size <= 3 {
         U256([(mantissa >> (8 * (3 - size))) as u64, 0, 0, 0])
     } else {
-        U256([mantissa as u64, 0, 0, 0]).shl_bytes(size - 3)?
+        U256::from_shifted(mantissa, size - 3)?
     };
     (!target.is_zero()).then_some(target)
 }

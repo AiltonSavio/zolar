@@ -9,6 +9,7 @@ use zcash_header::{
 };
 
 const NU7_FIXTURE: &str = include_str!("../fixtures/testnet-nu7-4464901-4465300.txt");
+const MIN_DIFFICULTY_FIXTURE: &str = include_str!("../fixtures/testnet-nu7-4495261-4495660.txt");
 const NU7_HEIGHT: u32 = 4_465_026;
 
 const RULES: Rules = Rules {
@@ -23,7 +24,11 @@ struct Block {
 }
 
 fn blocks() -> Vec<Block> {
-    NU7_FIXTURE
+    parse(NU7_FIXTURE)
+}
+
+fn parse(fixture: &str) -> Vec<Block> {
+    fixture
         .lines()
         .map(|line| {
             let (height, hex_str) = line.split_once(' ').unwrap();
@@ -59,6 +64,35 @@ fn every_fixture_header_has_exactly_the_target_the_rule_computes() {
         checked += 1;
     }
     assert_eq!(checked, 287);
+}
+
+/// Block 4,495,487 is the one minimum-difficulty block in 40,000 NU7 testnet blocks (it came 451 s
+/// after its parent). The fixture keeps it plus the 170 blocks that follow, whose averaging window
+/// still contains its 2^251 target.
+#[test]
+fn a_real_minimum_difficulty_block_and_the_blocks_that_average_it_in() {
+    let blocks = parse(MIN_DIFFICULTY_FIXTURE);
+    let at = blocks.iter().position(|b| b.height == 4_495_487).unwrap();
+    assert_eq!(blocks[at].bits, 0x2007ffff);
+    assert_eq!(blocks[at].time - blocks[at - 1].time, 451);
+    for i in CONTEXT_LEN..blocks.len() {
+        let b = &blocks[i];
+        let (times, bits) = context(&blocks, i);
+        assert_eq!(
+            expected_bits(&RULES, b.height, b.time, &times, &bits),
+            Ok(b.bits),
+            "height {}",
+            b.height
+        );
+        assert_eq!(check_time(&RULES, b.height, b.time, &times), Ok(()));
+    }
+    // One second less and the same block would have to carry the adjusted target.
+    let (times, bits) = context(&blocks, at);
+    let b = &blocks[at];
+    assert_ne!(
+        expected_bits(&RULES, b.height, b.time - 1, &times, &bits),
+        Ok(0x2007ffff)
+    );
 }
 
 #[test]
@@ -107,11 +141,20 @@ fn time_must_exceed_the_median_of_the_previous_eleven_and_stay_within_ninety_min
     last_eleven.sort();
     let mtp = last_eleven[5];
     let h = blocks[i].height;
-    assert_eq!(check_time(&RULES, h, mtp, &times), Err(TimeError::NotAfterMedian));
-    assert_eq!(check_time(&RULES, h, mtp - 1, &times), Err(TimeError::NotAfterMedian));
+    assert_eq!(
+        check_time(&RULES, h, mtp, &times),
+        Err(TimeError::NotAfterMedian)
+    );
+    assert_eq!(
+        check_time(&RULES, h, mtp - 1, &times),
+        Err(TimeError::NotAfterMedian)
+    );
     assert_eq!(check_time(&RULES, h, mtp + 1, &times), Ok(()));
     assert_eq!(check_time(&RULES, h, mtp + 5400, &times), Ok(()));
-    assert_eq!(check_time(&RULES, h, mtp + 5401, &times), Err(TimeError::TooFarAhead));
+    assert_eq!(
+        check_time(&RULES, h, mtp + 5401, &times),
+        Err(TimeError::TooFarAhead)
+    );
 }
 
 /// `scripts/gen-difficulty-vectors.py` runs an independent big-integer model over synthetic

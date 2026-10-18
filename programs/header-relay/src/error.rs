@@ -1,4 +1,8 @@
-use zcash_header::{equihash, pow::PowError};
+use zcash_header::{
+    difficulty::{DifficultyError, TimeError},
+    equihash,
+    pow::PowError,
+};
 
 /// Custom program error codes. 1 to 7 are the Equihash verifier's, in its own order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +38,14 @@ pub enum RelayError {
     /// `nVersion` is below 4.
     InvalidVersion = 25,
     WorkOverflow = 26,
+    /// `nBits` is not the target the difficulty adjustment gives for this block.
+    BadDifficulty = 27,
+    /// `nTime` is not after the median-time-past of the previous eleven blocks.
+    TimeNotAfterMedian = 28,
+    /// `nTime` is more than 90 minutes after the median-time-past.
+    TimeTooFarAhead = 29,
+    /// The parent's chain is no longer in the Store far enough back to compute the difficulty.
+    ContextUnavailable = 30,
 }
 
 impl From<equihash::Error> for RelayError {
@@ -58,6 +70,25 @@ impl From<PowError> for RelayError {
             PowError::AboveLimit => Self::TargetAboveLimit,
             PowError::HashAboveTarget => Self::HashAboveTarget,
             PowError::WorkOverflow => Self::WorkOverflow,
+        }
+    }
+}
+
+impl From<TimeError> for RelayError {
+    fn from(e: TimeError) -> Self {
+        match e {
+            TimeError::NotAfterMedian => Self::TimeNotAfterMedian,
+            TimeError::TooFarAhead => Self::TimeTooFarAhead,
+            TimeError::ContextTooShort => Self::ContextUnavailable,
+        }
+    }
+}
+
+impl From<DifficultyError> for RelayError {
+    fn from(e: DifficultyError) -> Self {
+        match e {
+            DifficultyError::ContextTooShort => Self::ContextUnavailable,
+            DifficultyError::InvalidContextBits => Self::InvalidCheckpoint,
         }
     }
 }

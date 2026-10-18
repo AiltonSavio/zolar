@@ -91,6 +91,77 @@ pub fn testnet_checkpoint(finality_depth: u16, nonce: u64) -> Checkpoint {
     }
 }
 
+/// 400 consecutive headers of the live NU7 testnet chain, 4,464,901 to 4,465,300 (activation at 4,465,026).
+pub const NU7_ACTIVATION_FIXTURE: &str =
+    include_str!("../../zcash-header/fixtures/testnet-nu7-4464901-4465300.txt");
+/// 400 consecutive headers from 4,495,261; block 4,495,487 is a real minimum-difficulty block.
+pub const MIN_DIFFICULTY_FIXTURE: &str =
+    include_str!("../../zcash-header/fixtures/testnet-nu7-4495261-4495660.txt");
+pub const NU7_HEIGHT: u32 = 4_465_026;
+
+/// Forged by `tools/forge-header` from real block 4,465,100 (parent 4,465,099): valid Equihash, hash
+/// below an easy `nBits` 0x2007ffff, and a chosen `nTime`.
+pub const FORGED_LOW_DIFFICULTY: &str =
+    include_str!("../../zcash-header/fixtures/forged-nu7-low-difficulty.hex");
+pub const FORGED_MIN_DIFFICULTY_450: &str =
+    include_str!("../../zcash-header/fixtures/forged-nu7-min-difficulty-450.hex");
+pub const FORGED_MIN_DIFFICULTY_451: &str =
+    include_str!("../../zcash-header/fixtures/forged-nu7-min-difficulty-451.hex");
+pub const FORGED_TIME_AT_MEDIAN: &str =
+    include_str!("../../zcash-header/fixtures/forged-nu7-time-at-median.hex");
+pub const FORGED_TIME_TOO_FAR: &str =
+    include_str!("../../zcash-header/fixtures/forged-nu7-time-too-far.hex");
+
+/// `(height, raw header)` for every line of an exported fixture.
+pub fn fixture_rows(text: &str) -> Vec<(u32, Vec<u8>)> {
+    text.lines()
+        .map(|line| {
+            let (height, raw) = line.split_once(' ').unwrap();
+            (height.parse().unwrap(), hex::decode(raw).unwrap())
+        })
+        .collect()
+}
+
+pub fn sha256d(data: &[u8]) -> [u8; 32] {
+    Sha256::digest(Sha256::digest(data)).into()
+}
+
+/// A testnet Checkpoint whose block is the last of `rows[..end]`, with the 113 blocks before it
+/// as difficulty context, all read from the exported headers.
+pub fn checkpoint_before(
+    rows: &[(u32, Vec<u8>)],
+    end: usize,
+    nu7_height: u32,
+    finality_depth: u16,
+    nonce: u64,
+) -> Checkpoint {
+    let context = &rows[end - 113..end];
+    let raw = |r: &(u32, Vec<u8>)| -> [u8; zcash_header::header::HEADER_LEN] {
+        r.1.clone().try_into().unwrap()
+    };
+    Checkpoint {
+        version: 1,
+        network: 1,
+        finality_depth,
+        nu7_height,
+        height: context[112].0,
+        nonce,
+        hash: sha256d(&context[112].1),
+        times: context
+            .iter()
+            .map(|r| zcash_header::header::time(&raw(r)))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap(),
+        bits: context
+            .iter()
+            .map(|r| zcash_header::header::bits(&raw(r)))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap(),
+    }
+}
+
 pub fn digest_of(checkpoint: &Checkpoint) -> [u8; 32] {
     Sha256::digest(borsh::to_vec(checkpoint).unwrap()).into()
 }

@@ -1,5 +1,4 @@
 use relay_tests::*;
-use sha2::{Digest, Sha256};
 
 #[test]
 fn checkpoint_initialises_a_relay_at_the_checkpoint_block() {
@@ -15,10 +14,6 @@ fn checkpoint_initialises_a_relay_at_the_checkpoint_block() {
     assert_eq!(relay.tip_hash, checkpoint.hash);
     assert_eq!(relay.checkpoint.finality_depth, 10);
     assert_eq!(relay.checkpoint.times[112], checkpoint.times[112]);
-}
-
-fn sha256d(data: &[u8]) -> [u8; 32] {
-    Sha256::digest(Sha256::digest(data)).into()
 }
 
 #[test]

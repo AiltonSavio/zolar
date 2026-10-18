@@ -101,21 +101,31 @@ pub fn expected_bits(
         return Ok(limit.to_compact());
     }
 
-    // floor(sum / window) without a 256-bit overflow: a sum of 102 testnet limits needs 258 bits.
+    // floor(sum / window). A sum of 102 testnet limits needs 258 bits, so add into five limbs.
     let w = window as u64;
-    let mut quotients = U256::ZERO;
-    let mut remainders = 0u64;
+    let mut sum = [0u64; 5];
     for b in &bits[..window] {
         let target = target_from_compact(*b).ok_or(DifficultyError::InvalidContextBits)?;
-        let (q, r) = target.div_rem_small(w);
-        quotients = quotients
-            .checked_add(&q)
-            .ok_or(DifficultyError::InvalidContextBits)?;
-        remainders += r;
+        let mut carry = false;
+        for (i, limb) in sum.iter_mut().enumerate() {
+            let add = target.0.get(i).copied().unwrap_or(0);
+            let (v, c1) = limb.overflowing_add(add);
+            let (v, c2) = v.overflowing_add(carry as u64);
+            *limb = v;
+            carry = c1 || c2;
+        }
     }
-    let mean = quotients
-        .checked_add(&U256([remainders / w, 0, 0, 0]))
-        .ok_or(DifficultyError::InvalidContextBits)?;
+    let mut mean = [0u64; 5];
+    let mut rem = 0u128;
+    for i in (0..5).rev() {
+        let v = (rem << 64) | sum[i] as u128;
+        mean[i] = (v / w as u128) as u64;
+        rem = v % w as u128;
+    }
+    if mean[4] != 0 {
+        return Err(DifficultyError::InvalidContextBits);
+    }
+    let mean = U256([mean[0], mean[1], mean[2], mean[3]]);
 
     let span = w * rules.spacing(height);
     let actual = median(times) as i64 - median(&times[window..]) as i64;

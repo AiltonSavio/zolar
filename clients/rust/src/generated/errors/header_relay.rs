@@ -88,6 +88,18 @@ pub enum HeaderRelayError {
     /// 26 - Chain work does not fit in 128 bits
     #[error("Chain work does not fit in 128 bits")]
     WorkOverflow = 0x1A,
+    /// 27 - nBits is not the target the difficulty adjustment requires
+    #[error("nBits is not the target the difficulty adjustment requires")]
+    BadDifficulty = 0x1B,
+    /// 28 - nTime is not after the median of the previous eleven blocks
+    #[error("nTime is not after the median of the previous eleven blocks")]
+    TimeNotAfterMedian = 0x1C,
+    /// 29 - nTime is more than 90 minutes after the median of the previous eleven blocks
+    #[error("nTime is more than 90 minutes after the median of the previous eleven blocks")]
+    TimeTooFarAhead = 0x1D,
+    /// 30 - The parent chain is no longer stored far enough back to compute the difficulty
+    #[error("The parent chain is no longer stored far enough back to compute the difficulty")]
+    ContextUnavailable = 0x1E,
 }
 
 impl From<HeaderRelayError> for solana_program_error::ProgramError {

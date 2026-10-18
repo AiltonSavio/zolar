@@ -6,6 +6,7 @@ use pinocchio::{
     AccountView, Address, ProgramResult,
 };
 use zcash_header::{
+    difficulty::{self, Rules, CONTEXT_LEN},
     equihash::{self, HEADER_LEN},
     header,
     pow::{self, Network},
@@ -319,6 +320,7 @@ fn seal_relay(program_id: &Address, accounts: &[AccountView]) -> ProgramResult {
         || finality == 0
         || finality > MAX_FINALITY_DEPTH
         || cp[CP_HASH..CP_HASH + 32].iter().all(|b| *b == 0)
+        || (0..CONTEXT_LEN).any(|i| pow::target_from_compact(u32_at(cp, CP_BITS + i * 4)).is_none())
     {
         return Err(fail(RelayError::InvalidCheckpoint));
     }
@@ -475,6 +477,55 @@ fn close_buffer(program_id: &Address, accounts: &[AccountView]) -> ProgramResult
     buffer.close()
 }
 
+/// Times and `nBits` of the blocks before a candidate, newest first: `[0]` is its parent.
+struct Context {
+    times: [u32; CONTEXT_LEN],
+    bits: [u32; CONTEXT_LEN],
+}
+
+/// Reads the `len` blocks that end at `parent` by following parent pointers through the Store and,
+/// past the first header, through the Checkpoint's 113 blocks. A pointer is valid only while its
+/// slot still holds the block it was made for; an evicted ancestor is `ContextUnavailable`.
+#[inline(never)]
+fn load_context(
+    r: &[u8],
+    s: &[u8],
+    capacity: usize,
+    parent: &Parent,
+    len: usize,
+) -> Result<Context, ProgramError> {
+    let mut ctx = Context {
+        times: [0; CONTEXT_LEN],
+        bits: [0; CONTEXT_LEN],
+    };
+    let (mut slot, mut seq) = (parent.slot, parent.seq);
+    for i in 0..len {
+        if slot == CHECKPOINT_SLOT {
+            let from_checkpoint = i;
+            for j in i..len {
+                let back = (CONTEXT_LEN - 1) - (j - from_checkpoint);
+                ctx.times[j] = u32_at(r, R_CHECKPOINT + CP_TIMES + back * 4);
+                ctx.bits[j] = u32_at(r, R_CHECKPOINT + CP_BITS + back * 4);
+            }
+            return Ok(ctx);
+        }
+        let index = slot as usize;
+        if index >= capacity {
+            return Err(fail(RelayError::ContextUnavailable));
+        }
+        let at = STORE_HEADER_LEN + index * SLOT_LEN;
+        let entry = &s[at..at + SLOT_LEN];
+        if seq == 0 || u32_at(entry, SL_SEQ) != seq {
+            return Err(fail(RelayError::ContextUnavailable));
+        }
+        ctx.times[i] = u32_at(entry, SL_TIME);
+        ctx.bits[i] = u32_at(entry, SL_BITS);
+        slot = u16_at(entry, SL_PARENT_SLOT);
+        seq = u32_at(entry, SL_PARENT_SEQ);
+    }
+    Ok(ctx)
+}
+
 /// Where a candidate's parent sits.
 struct Parent {
     slot: u16,
@@ -572,6 +623,25 @@ fn accept_header(program_id: &Address, accounts: &[AccountView]) -> ProgramResul
     if is_too_old(u32_at(&r, R_TIP_HEIGHT), height) {
         return Err(fail(RelayError::TooOld));
     }
+    let rules = Rules {
+        network,
+        nu7_height: u32_at(&r, R_CHECKPOINT + CP_NU7_HEIGHT),
+    };
+    let time = header::time(header_bytes);
+    let ctx = load_context(
+        &r,
+        &s,
+        capacity,
+        &parent,
+        rules.window(height) + difficulty::MEDIAN_SPAN,
+    )?;
+    difficulty::check_time(&rules, height, time, &ctx.times).map_err(|e| fail(e.into()))?;
+    let expected = difficulty::expected_bits(&rules, height, time, &ctx.times, &ctx.bits)
+        .map_err(|e| fail(e.into()))?;
+    if header::bits(header_bytes) != expected {
+        return Err(fail(RelayError::BadDifficulty));
+    }
+
     let protected = [u16_at(&r, R_TIP_SLOT) as usize, parent.slot as usize];
     let index = choose_slot(
         capacity,

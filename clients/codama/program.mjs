@@ -370,6 +370,10 @@ const errors = [
   ['storeTooSmall', 'The Store is below its minimum capacity; grow it first'],
   ['invalidVersion', 'Block version is below 4'],
   ['workOverflow', 'Chain work does not fit in 128 bits'],
+  ['badDifficulty', 'nBits is not the target the difficulty adjustment requires'],
+  ['timeNotAfterMedian', 'nTime is not after the median of the previous eleven blocks'],
+  ['timeTooFarAhead', 'nTime is more than 90 minutes after the median of the previous eleven blocks'],
+  ['contextUnavailable', 'The parent chain is no longer stored far enough back to compute the difficulty'],
 ].map(([name, message], i) => errorNode({ name, code: i + 1, message }));
 
 export const root = rootNode(
