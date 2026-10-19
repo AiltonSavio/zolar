@@ -1,5 +1,6 @@
 """Run: python3 -I scripts/test_check_txid_absent.py"""
 import base64
+import json
 import importlib.util
 import os
 import unittest
@@ -44,9 +45,39 @@ class Search(unittest.TestCase):
         for data in (b"\0\0abc", DISPLAY, bytes(32)):
             self.assertEqual(c.b58decode(c.b58encode(data)), data)
 
+    def test_hex_digits_as_instruction_data(self):
+        data = c.b58encode(TXID.encode())
+        self.assertTrue(search(parsed={"instructions": [{"data": data}]}))
+
+    def test_a_json_array_of_byte_values(self):
+        self.assertTrue(search(js={"x": list(DISPLAY)}))
+        self.assertTrue(search(js={"x": json.dumps(list(DISPLAY[::-1]))}))
+
+    def test_a_hex_fragment_in_a_log(self):
+        self.assertTrue(search(js={"logMessages": ["Program log: " + DISPLAY[4:12].hex()]}))
+
+    def test_program_data_log_with_the_id_inside(self):
+        blob = base64.b64encode(b"prefix" + DISPLAY[::-1] + b"suffix").decode()
+        self.assertTrue(search(js={"logMessages": ["Program data: " + blob]}))
+
     def test_unrelated_data_is_not_a_hit(self):
         other = bytes.fromhex("11" * 32)
         self.assertEqual(search(FILLER + other, js={"m": other.hex()}), [])
+
+
+class Fetch(unittest.TestCase):
+    def test_missing_logs_are_an_error_not_a_clean_result(self):
+        raw = {"transaction": [base64.b64encode(FILLER).decode(), "base64"]}
+
+        def fake(url, method, params):
+            return raw if params[1]["encoding"] == "base64" else {"meta": None}
+
+        original, c.rpc = c.rpc, fake
+        try:
+            with self.assertRaises(RuntimeError):
+                c.fetch("http://x", "sig")
+        finally:
+            c.rpc = original
 
 
 if __name__ == "__main__":

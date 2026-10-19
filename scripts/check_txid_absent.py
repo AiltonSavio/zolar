@@ -20,6 +20,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -27,6 +28,8 @@ import urllib.request
 ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 DEFAULT_URL = "https://api.devnet.solana.com"
 PIECE = 8
+NUMBER_RUN = re.compile(r"(?:\b\d{1,3}\b\s*,\s*){7,}\b\d{1,3}\b")
+TOKEN = re.compile(r"[A-Za-z0-9+/=_-]{8,}")
 
 
 def b58encode(data: bytes) -> str:
@@ -70,6 +73,11 @@ class Needles:
             for i in range(0, 32 - PIECE + 1)
         }
         self.texts = {}
+        self.fragment_hex = {
+            f"{name} hex piece [{i}:{i + PIECE}]": order[i : i + PIECE].hex()
+            for name, order in self.orders.items()
+            for i in range(0, 32 - PIECE + 1)
+        }
         for name, order in self.orders.items():
             self.texts[f"{name} hex"] = order.hex()
             self.texts[f"{name} base58"] = b58encode(order)
@@ -92,6 +100,12 @@ class Needles:
             haystack = lower if name.endswith("hex") else text
             if (needle.lower() if name.endswith("hex") else needle) in haystack:
                 hits.append(f"text ({name})")
+        for name, needle in self.fragment_hex.items():
+            if needle in lower:
+                hits.append(f"text ({name})")
+        for run in NUMBER_RUN.finditer(text):
+            data = bytes(int(n) for n in re.findall(r"\d+", run.group()) if int(n) < 256)
+            hits += [f"{h} as a list of decimal numbers" for h in self.in_bytes(data)]
         return hits
 
 
@@ -111,11 +125,17 @@ def search_json(needles: Needles, value):
     """Hits in a JSON value: its text as is, and every string decoded as base58 and as base64."""
     hits = needles.in_text(json.dumps(value))
     for s in strings(value):
-        for decode in (b58decode, b64decode):
-            if len(s) >= 8:
-                data = decode(s)
+        hits += needles.in_text(s)
+        # The whole string, and every word of it (a log line is "Program data: <base64>").
+        for candidate in [s] + TOKEN.findall(s):
+            if len(candidate) < 8:
+                continue
+            for decode in (b58decode, b64decode):
+                data = decode(candidate)
                 if data:
                     hits += [f"{h} in decoded string" for h in needles.in_bytes(data)]
+                    # Text hidden in bytes, e.g. the hex digits of the ID as instruction data.
+                    hits += [f"{h} in decoded string" for h in needles.in_text(data.decode("latin-1"))]
     return sorted(set(hits))
 
 
@@ -162,6 +182,9 @@ def fetch(url, signature):
         raise RuntimeError(f"{signature}: the RPC node does not have this transaction")
     as_json = rpc(url, "getTransaction", [signature, {**cfg, "encoding": "json"}])
     parsed = rpc(url, "getTransaction", [signature, {**cfg, "encoding": "jsonParsed"}])
+    for name, form in (("json", as_json), ("jsonParsed", parsed)):
+        if not form or form.get("meta") is None:
+            raise RuntimeError(f"{signature}: the RPC node gave no {name} form with logs; cannot call it clean")
     return base64.b64decode(raw["transaction"][0]), as_json, parsed
 
 
@@ -200,7 +223,9 @@ def main(argv=None):
                 print(f"clean  {signature}  ({size})")
         print(
             f"{len(signatures)} transactions searched for {args.txid}: "
-            + ("THE TRANSACTION ID APPEARS ON SOLANA" if found else "the transaction ID appears nowhere")
+            + ("THE TRANSACTION ID APPEARS ON SOLANA"
+            if found
+            else "no form of the transaction ID found in them")
         )
         return 1 if found else 0
     except (ValueError, RuntimeError) as e:

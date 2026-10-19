@@ -3,3 +3,4 @@ Cargo.lock.bak
 AGENTS.md
 CLAUDE.md
 node_modules/
+__pycache__/

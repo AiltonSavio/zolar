@@ -52,6 +52,16 @@ impl Prover {
             self.depth
         );
         std::fs::create_dir_all(work)?;
+        // A run that was killed leaves its directory; a witness must not outlive it.
+        for entry in std::fs::read_dir(work)?.flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("claim-proof-")
+            {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
         let dir = work.join(format!("claim-proof-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
@@ -173,6 +183,17 @@ mod tests {
             0,
             "nothing of the witness is left in the work directory"
         );
+    }
+
+    #[test]
+    fn the_witness_of_a_killed_earlier_run_is_removed() {
+        let (dir, prover) = setup(PUBLIC);
+        let work = dir.path().join("work");
+        let stale = work.join("claim-proof-99999");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("input.json"), "secret").unwrap();
+        prover.prove(&inputs_of(PUBLIC), &work).unwrap();
+        assert!(!stale.exists());
     }
 
     #[test]

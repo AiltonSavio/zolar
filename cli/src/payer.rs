@@ -426,11 +426,7 @@ fn locate_payment(
             {
                 let height = first + candidate as u32;
                 let (size, rebuilt) = cached.take().expect("just set");
-                println!(
-                    "the payment is transaction {tx_index} of {} in a final block; the block is leaf {}",
-                    txids.len(),
-                    leaf_of(height)
-                );
+                println!("the payment is in a final block; building the proof");
                 return Ok(Located {
                     height,
                     leaf: leaf_of(height),

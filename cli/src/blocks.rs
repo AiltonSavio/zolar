@@ -152,7 +152,12 @@ pub fn fetch_block_txids(
     ensure!(!addresses.is_empty(), "no Zcash {network:?} peers found");
     // A random order spreads the load, and many peers refuse blocks or are gone.
     addresses.shuffle(&mut rand::thread_rng());
+    let started = std::time::Instant::now();
     for addr in addresses.iter().take(40) {
+        // Each peer read is bounded, but 40 slow peers add up: give up on this block for now.
+        if started.elapsed() > std::time::Duration::from_secs(90) {
+            break;
+        }
         let Ok(mut peer) = Peer::connect(*addr, network) else {
             continue;
         };
@@ -306,7 +311,7 @@ mod tests {
                 vec![[9; 32]]
             })
         })
-        .unwrap()
+        .found
         .unwrap();
         assert_eq!((found.candidate, found.tx_index), (1, 3));
         assert_eq!(asked, vec![1, 2], "stops at the block that holds it");
