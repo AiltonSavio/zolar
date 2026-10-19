@@ -129,6 +129,9 @@ pub fn circuit_input(w: &Witness) -> Result<CircuitInput, ClaimError> {
     debug_assert_eq!(fold_tx_path(&txid, w.index, &path), block_root);
 
     let leaf = block_leaf(w.height, &block_root)?;
+    if w.tree.leaf >= w.tree.size || w.tree.size > w.tree.tree.len() {
+        return Err(ClaimError::LeafMismatch);
+    }
     let tree_path = w.tree.tree.path(w.tree.leaf, w.tree.size);
     let root = w.tree.tree.root(w.tree.size);
     if FinalBlockTree::fold(&leaf, w.tree.leaf, &tree_path) != root {

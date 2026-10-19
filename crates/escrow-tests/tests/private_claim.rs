@@ -3,12 +3,14 @@
 
 use escrow_tests::*;
 use header_relay_interface::R_ROOTS;
+use solana_signer::Signer;
 
 // Error codes of clients/codama/escrow.mjs.
 const BAD_TOKEN_ACCOUNT: u32 = 5;
+const BOND_NOT_DEPOSITED: u32 = 14;
 const UNKNOWN_ROOT: u32 = 11;
 const CLAIM_MODE_NOT_ALLOWED: u32 = 15;
-const INVALID_PROOF: u32 = 16;
+const INVALID_PROOF: u32 = 22;
 
 const FINALITY_DEPTH: u16 = 3;
 
@@ -61,7 +63,7 @@ fn a_real_proof_pays_the_payer_and_closes_the_escrow() {
 #[test]
 fn a_private_only_escrow_refuses_a_reveal_claim() {
     let (mut w, deal, _) = funded(1);
-    let reveal = w.claim_ix(&deal, 4_000_004, None);
+    let reveal = w.claim_ix_raw(&deal, 4_000_004, [1; 32], vec![], deal.index);
     assert_eq!(w.claim_err(reveal), CLAIM_MODE_NOT_ALLOWED);
 }
 
@@ -177,5 +179,40 @@ fn a_second_claim_with_the_same_proof_fails() {
     let ix = w.private_claim_ix(&deal, &fx.proof, fx.root());
     w.claim(ix.clone());
     assert!(w.try_send(ix).is_err());
+    assert_eq!(token_balance(&w.h, &w.payer_token), Some(deal.amount));
+}
+
+fn with_bond(bond: u64) -> (World, Deal, PrivateFixture) {
+    let fx = PrivateFixture::load();
+    let mut w = World::new(FINALITY_DEPTH);
+    let tip = w.tip();
+    let deal = w.deal_with_salt(fx.txids.clone(), fx.index, fx.salt, tip + 15);
+    w.create_with_bond(&deal, bond);
+    w.fund_payer(bond);
+    w.forge_latest_root(fx.root());
+    (w, deal, fx)
+}
+
+#[test]
+fn a_private_claim_needs_the_bond_and_returns_it_to_the_payer() {
+    let (mut w, deal, fx) = with_bond(200_000);
+    let ix = w.private_claim_ix(&deal, &fx.proof, fx.root());
+    assert_eq!(w.claim_err(ix.clone()), BOND_NOT_DEPOSITED);
+    w.deposit_bond(&deal);
+    w.claim(ix);
+    assert_eq!(
+        token_balance(&w.h, &w.payer_token),
+        Some(deal.amount + 200_000)
+    );
+}
+
+#[test]
+fn a_private_claim_still_settles_after_a_refund_was_requested() {
+    let (mut w, deal, fx) = with_bond(0);
+    w.advance_time(86_400);
+    let request = w.request_refund_ix(&deal);
+    w.claim(request);
+    let ix = w.private_claim_ix(&deal, &fx.proof, fx.root());
+    w.claim(ix);
     assert_eq!(token_balance(&w.h, &w.payer_token), Some(deal.amount));
 }

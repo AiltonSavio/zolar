@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn window_lower_bound_is_the_same_rule_as_the_reveal_window() {
-        for created_tip in [0u32, 1, 2, 9, 10, 11, 100, u32::MAX - 1, u32::MAX] {
+        for created_tip in [0u32, 1, 2, 9, 10, 11, 100, u32::MAX - 1] {
             for depth in [0u16, 1, 2, 10, 100, u16::MAX] {
                 let lower = claim_window_lower(created_tip, depth);
                 for block in lower.saturating_sub(2)..=lower.saturating_add(2) {

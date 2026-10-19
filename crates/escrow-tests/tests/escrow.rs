@@ -343,7 +343,7 @@ fn create_checks_expiry_amount_bond_mode_commitment_and_the_vault() {
     let deal = w.deal(txids(2), 0, 8, tip + 5);
     let ix = w.create_ix_with(&deal, 0, 0, 0);
     assert_eq!(w.create_err(ix), ZERO_AMOUNT);
-    let ix = w.create_ix_with(&deal, 10, 0, 1);
+    let ix = w.create_ix_with(&deal, 10, 0, 2);
     assert_eq!(w.create_err(ix), CLAIM_MODE_NOT_ALLOWED);
     let mut over = deal.clone();
     over.commitment = [0xff; 32];

@@ -106,3 +106,26 @@ fn a_path_longer_than_the_circuit_is_refused() {
     };
     assert!(circuit_input(&witness).is_err());
 }
+
+#[test]
+fn a_leaf_outside_the_chosen_tree_is_an_error_not_a_panic() {
+    let (txids, index, salt) = fixture();
+    let tree = synthetic_tree(&tx_merkle_root(&txids));
+    for (size, leaf) in [(3usize, 3usize), (7, 3), (0, 0)] {
+        let witness = Witness {
+            txids: &txids,
+            index,
+            salt,
+            height: 4_000_004,
+            tx_depth: 2,
+            tree: ClaimTree {
+                tree: &tree,
+                size,
+                leaf,
+            },
+            lower: 4_000_000,
+            expiry: 4_000_017,
+        };
+        assert!(circuit_input(&witness).is_err(), "size {size} leaf {leaf}");
+    }
+}
