@@ -34,7 +34,7 @@ jobs:
       - name: Clippy
         run: |
           cargo clippy --workspace --all-targets -- -D warnings
-          cargo clippy --manifest-path programs/header-relay/Cargo.toml -- -D warnings
+          cargo clippy --manifest-path programs/header-relay/Cargo.toml --all-targets -- -D warnings
       - name: SBF build
         run: cargo build-sbf --manifest-path programs/header-relay/Cargo.toml
       - name: Tests (crate and LiteSVM)

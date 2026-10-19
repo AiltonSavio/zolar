@@ -72,6 +72,14 @@ pub const MAX_FINALITY_DEPTH: u16 = (REORG_WINDOW / 2) as u16;
 /// Store holds 100, so `GrowStore` runs three times first.
 pub const MIN_CAPACITY: usize = MAX_CAPACITY;
 
+// Worst case, a header that is not the tip: the tip chain, a fork's context blocks, headroom.
+const _: () = assert!(
+    MIN_CAPACITY
+        >= protected_tip_depth(MAX_FINALITY_DEPTH) + zcash_header::difficulty::CONTEXT_LEN + 80
+);
+// A header that becomes the tip protects its own chain only.
+const _: () = assert!(MIN_CAPACITY > protected_tip_depth(MAX_FINALITY_DEPTH) + 100);
+
 /// Whether a header at `height` is too far below the tip to keep.
 pub fn is_too_old(tip_height: u32, height: u32) -> bool {
     tip_height.saturating_sub(height) > REORG_WINDOW
@@ -203,13 +211,8 @@ mod tests {
     }
 
     #[test]
-    fn the_store_minimum_holds_the_protected_chains_and_room_to_evict() {
+    fn the_protected_tip_chain_spans_204_blocks_at_the_finality_cap() {
         assert_eq!(protected_tip_depth(30), 204);
-        // Worst case, a header that is not the tip: the tip chain, a fork's 113 context blocks, headroom.
-        assert!(MIN_CAPACITY >= protected_tip_depth(MAX_FINALITY_DEPTH) + CONTEXT_LEN + 80);
-        // A header that becomes the tip protects its own chain only.
-        assert!(MIN_CAPACITY > protected_tip_depth(MAX_FINALITY_DEPTH) + 100);
-        assert!(MIN_CAPACITY <= MAX_CAPACITY);
     }
 
     #[test]
