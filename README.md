@@ -16,6 +16,7 @@ The relay follows the chain with the most cumulative work (the first one seen wi
 - `crates/relay-tests`: LiteSVM tests that drive the program through the generated Rust client.
 - `tools/forge-header`: builds the one forged fixture (valid Equihash, hash above target).
 - `crates/zolar-pczt`: standalone crate (own workspace, pinned to the librustzcash revision zcash-devtool uses). Computes the transaction ID of an unsigned Ironwood PCZT and decrypts a payee's output from its viewing key; `cd crates/zolar-pczt && cargo test`.
+- `dashboard/`: read-only web page (Vite, React) for both Header Relays, open Escrows and Claims as they land; see `dashboard/README.md`.
 
 ```sh
 cargo fmt --all --check

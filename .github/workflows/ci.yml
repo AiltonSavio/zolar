@@ -108,6 +108,23 @@ jobs:
           pnpm --dir clients/codama generate
           test -z "$(git status --porcelain --untracked-files=all -- clients)"
 
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install, lint (no warnings allowed), test, build
+        run: |
+          pnpm --dir dashboard install --frozen-lockfile
+          pnpm --dir dashboard lint
+          pnpm --dir dashboard test
+          pnpm --dir dashboard build
+
   circuits:
     runs-on: ubuntu-latest
     env:

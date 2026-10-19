@@ -1,0 +1,35 @@
+{
+  "name": "zolar-dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "lint": "eslint --max-warnings 0 .",
+    "test": "vitest run",
+    "demo:escrow": "esbuild scripts/demo-escrow.ts --bundle --alias:@solana/kit=./node_modules/@solana/kit --alias:@solana/program-client-core=./node_modules/@solana/program-client-core --alias:@relay-client=../clients/js/src/generated --alias:@escrow-client=../clients/escrow-js/src/generated --platform=node --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\" --format=esm --outfile=dist-scripts/demo-escrow.mjs --log-level=warning && node dist-scripts/demo-escrow.mjs"
+  },
+  "dependencies": {
+    "@solana/kit": "8.5.0",
+    "@solana/program-client-core": "8.5.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.1",
+    "@testing-library/react": "16.3.0",
+    "@types/node": "22.19.0",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@vitejs/plugin-react": "5.1.0",
+    "esbuild": "0.25.12",
+    "eslint": "9.39.1",
+    "eslint-plugin-react-hooks": "7.0.1",
+    "globals": "16.5.0",
+    "jsdom": "27.0.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.46.3",
+    "vite": "7.2.0",
+    "vitest": "4.0.8"
+  }
+}
