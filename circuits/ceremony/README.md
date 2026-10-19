@@ -70,6 +70,19 @@ the Escrow's constants are not generated from it.
 | Everybody but one | Collude | At least one honest contributor who deleted their randomness is enough. |
 | The circuit | Be under-constrained | Not covered by any ceremony: see ticket 10's review. |
 
+Known limits, stated plainly (they came out of a hostile review and are not fixed in code):
+
+- **Beacon source.** The block hash is recomputed from the header Blockchair serves; the tool checks neither
+  Equihash nor ancestry, so verify the hash against a second explorer yourself. A miner can withhold a block to
+  bias the hash, at the price of the block reward; this only matters if every contributor was dishonest.
+- **Beacon timing is evidence, not proof.** `announce-beacon` and `close` fix the order inside the transcript,
+  but the real timestamp is the public post and the git history of those two commits.
+- **Names and per-round file hashes are not signed.** snarkjs binds a contribution hash to the key material, not
+  to a person. Identity rests on each contributor's own public post; only the final zkey is downloaded and
+  verified (`rounds[].sha256` of earlier rounds is bookkeeping).
+- **A hostile submission** can cost the coordinator time (a valid contribution relabelled as a beacon makes
+  `zkey verify` hash 2^n times before failing). Downloads are size and time bounded; verification is not sandboxed.
+
 Contributor instructions: [CONTRIBUTE.md](CONTRIBUTE.md). Coordinator runbook: [COORDINATOR.md](COORDINATOR.md).
 
 ## Files
