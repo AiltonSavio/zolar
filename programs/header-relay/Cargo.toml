@@ -12,6 +12,7 @@ crate-type = ["cdylib", "lib"]
 [dependencies]
 pinocchio = { version = "=0.10.2", default-features = false, features = ["copy", "cpi"] }
 zcash-header = { path = "../../crates/zcash-header" }
+header-relay-interface = { path = "../../crates/header-relay-interface" }
 
 [features]
 no-entrypoint = []

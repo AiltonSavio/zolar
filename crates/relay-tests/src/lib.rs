@@ -24,6 +24,8 @@ use solana_signer::Signer;
 use solana_transaction::Transaction;
 use solana_transaction_error::TransactionError;
 
+pub mod synthetic;
+
 pub const CU_CAP: u32 = 1_400_000;
 pub const SYSTEM_PROGRAM: Address = Address::new_from_array([0; 32]);
 const COMPUTE_BUDGET: Address =
@@ -126,6 +128,11 @@ pub fn fixture_rows(text: &str) -> Vec<(u32, Vec<u8>)> {
 
 pub fn sha256d(data: &[u8]) -> [u8; 32] {
     Sha256::digest(Sha256::digest(data)).into()
+}
+
+/// SHA-256d of arbitrary bytes; the hash of a header when given its serialisation.
+pub fn header_bytes_hash(data: &[u8]) -> [u8; 32] {
+    sha256d(data)
 }
 
 /// A testnet Checkpoint whose block is the last of `rows[..end]`, with the 113 blocks before it
@@ -288,10 +295,12 @@ impl Harness {
             .instruction()
     }
 
-    /// Creates, fills and seals a Relay and grows its Store to the minimum headers need.
+    /// Creates, fills and seals a Relay and grows its Store to the 400 slots headers need.
     pub fn init_relay(&mut self, checkpoint: &Checkpoint) -> Address {
         let relay = self.init_relay_ungrown(checkpoint);
-        self.grow_ix_ok(&relay);
+        for _ in 0..3 {
+            self.grow_ix_ok(&relay);
+        }
         relay
     }
 
@@ -314,6 +323,11 @@ impl Harness {
         let seal = self.seal_ix(checkpoint);
         self.ok(&[seal], &[]);
         Self::relay_addr(&self.payer.pubkey(), checkpoint)
+    }
+
+    /// The raw Relay account, for the read interface other programs use.
+    pub fn relay_data(&self, relay: &Address) -> Vec<u8> {
+        self.svm.get_account(relay).unwrap().data
     }
 
     pub fn relay(&self, relay: &Address) -> Relay {

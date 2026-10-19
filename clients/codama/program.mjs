@@ -53,6 +53,8 @@ const discriminatorField = (value) =>
   });
 
 const CONTEXT_LEN = 113;
+const TREE_DEPTH = 20;
+const ROOT_HISTORY = 128;
 
 const checkpoint = definedTypeNode({
   name: 'checkpoint',
@@ -100,7 +102,7 @@ const relayAccount = accountNode({
     discriminatorField(1),
     field('version', u8),
     field('state', u8, ['0 pending (checkpoint being written), 1 active.']),
-    field('halted', u8),
+    field('halted', u8, ['0 running; otherwise the Halt reason: 1 the heaviest chain reorganised past a final block, 2 the Final Block Tree is full.']),
     field('creator', publicKeyTypeNode()),
     field('tipHeight', u32, ['Height of the heaviest known header.']),
     field('tipSlot', u16),
@@ -108,7 +110,14 @@ const relayAccount = accountNode({
     field('tipWork', u128, ['Cumulative work of the tip since the checkpoint block.']),
     field('tipHash', bytes(32)),
     field('checkpoint', definedTypeLinkNode('checkpoint')),
-    field('reserved', bytes(128), ['Zeroed space for fields added by later tickets.']),
+    field('finalizedHeight', u32, ['Height of the newest block in the Final Block Tree (the checkpoint height before the first leaf).']),
+    field('finalizedHash', bytes(32)),
+    field('leafCount', u32, ['Leaves in the Final Block Tree: finalizedHeight - checkpoint height.']),
+    field('haltHeight', u32, ['Tip height when the relay Halted.']),
+    field('haltHash', bytes(32), ['Hash of the header whose acceptance caused the Halt.']),
+    field('reserved', bytes(52), ['Zeroed space for later fields.']),
+    field('filledSubtrees', arrayTypeNode(bytes(32), fixedCountNode(TREE_DEPTH)), ['Final Block Tree frontier: the left sibling waiting at each level.']),
+    field('roots', arrayTypeNode(bytes(32), fixedCountNode(ROOT_HISTORY)), ['Ring of tree roots (32-byte big-endian field elements): the root after n appends is at roots[n % 128]; roots[0] starts as the empty-tree root.']),
   ]),
 });
 
@@ -243,7 +252,7 @@ const instructions = [
   }),
   instructionNode({
     name: 'growStore',
-    docs: ['Adds room for 100 more header slots (up to 400). Headers are accepted only once the Store holds 200.'],
+    docs: ['Adds room for 100 more header slots (up to 400). Headers are accepted only once the Store holds all 400.'],
     discriminators: [fieldDiscriminatorNode('discriminator')],
     accounts: [
       instructionAccountNode({ name: 'payer', isSigner: true, isWritable: true }),
@@ -310,7 +319,7 @@ const instructions = [
   instructionNode({
     name: 'acceptHeader',
     docs: [
-      'After the Equihash solution verified: checks the hash against the target and that the parent is known, then stores the header.',
+      'After the Equihash solution verified: checks proof of work, difficulty, median time and the parent, stores the header, follows the heaviest chain and appends newly final blocks (at most 40 per header; a header that would append more is refused) to the Final Block Tree. A reorganisation past a final block does not fail: it succeeds and Halts the relay. Re-submitting a stored header whose parent was evicted and re-added repairs its parent pointer.',
     ],
     discriminators: [fieldDiscriminatorNode('discriminator')],
     accounts: [
@@ -373,7 +382,11 @@ const errors = [
   ['badDifficulty', 'nBits is not the target the difficulty adjustment requires'],
   ['timeNotAfterMedian', 'nTime is not after the median of the previous eleven blocks'],
   ['timeTooFarAhead', 'nTime is more than 90 minutes after the median of the previous eleven blocks'],
-  ['contextUnavailable', 'The parent chain is no longer stored far enough back to compute the difficulty'],
+  ['contextUnavailable', 'The parent chain is no longer stored far enough back to compute the difficulty or to walk to the finalised block'],
+  ['notAdmitted', 'The header is not a new tip and is easier than every block it could replace in a full Store'],
+  ['tooManyAppends', 'The new tip would finalise more than 40 blocks at once'],
+  ['storeFull', 'Every slot of the Store is protected'],
+  ['poseidonFailed', 'The Poseidon syscall rejected its input'],
 ].map(([name, message], i) => errorNode({ name, code: i + 1, message }));
 
 export const root = rootNode(

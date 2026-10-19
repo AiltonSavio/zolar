@@ -46,6 +46,14 @@ pub enum RelayError {
     TimeTooFarAhead = 29,
     /// The parent's chain is no longer in the Store far enough back to compute the difficulty.
     ContextUnavailable = 30,
+    /// The header is not a new tip and is easier than every block it could replace in a full Store.
+    NotAdmitted = 31,
+    /// The new tip would finalise more blocks than one instruction appends.
+    TooManyAppends = 32,
+    /// Every slot of the Store is protected.
+    StoreFull = 33,
+    /// The `sol_poseidon` syscall rejected its input.
+    PoseidonFailed = 34,
 }
 
 impl From<equihash::Error> for RelayError {

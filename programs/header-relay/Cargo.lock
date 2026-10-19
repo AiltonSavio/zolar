@@ -6,9 +6,14 @@ version = 4
 name = "header-relay"
 version = "0.1.0"
 dependencies = [
+ "header-relay-interface",
  "pinocchio",
  "zcash-header",
 ]
+
+[[package]]
+name = "header-relay-interface"
+version = "0.1.0"
 
 [[package]]
 name = "pinocchio"
