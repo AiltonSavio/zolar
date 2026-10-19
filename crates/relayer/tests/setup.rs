@@ -4,8 +4,9 @@ use std::{cell::RefCell, rc::Rc};
 
 use common::Lite;
 use header_relay_client::accounts::{Relay, Store};
-use litesvm::LiteSVM;
-use relay_tests::{checkpoint_before, digest_of, fixture_rows, NU7_ACTIVATION_FIXTURE, NU7_HEIGHT};
+use relay_tests::{
+    checkpoint_before, digest_of, fixture_rows, Harness, NU7_ACTIVATION_FIXTURE, NU7_HEIGHT,
+};
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 use zolar_relayer::{
@@ -57,15 +58,8 @@ fn a_relay_created_by_the_relayer_accepts_real_headers() {
         .collect();
     let checkpoint = checkpoint_from(&headers, all[end - 1].0, 10, 5).unwrap();
 
-    let mut svm = LiteSVM::new();
-    svm.add_program_from_file(
-        header_relay_client::HEADER_RELAY_ID,
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../programs/header-relay/target/deploy/header_relay.so"
-        ),
-    )
-    .unwrap();
+    let svm = Harness::new().svm;
+    let mut svm = svm;
     let payer = Keypair::new();
     svm.airdrop(&payer.pubkey(), 20_000_000_000).unwrap();
     let svm = Rc::new(RefCell::new(svm));
