@@ -38,4 +38,5 @@ ureq = { version = "3", features = ["json"] }
 relay-tests = { path = "../relay-tests" }
 litesvm = "0.11"
 solana-transaction-error = "3"
+solana-address = "2"
 solana-instruction = "3"

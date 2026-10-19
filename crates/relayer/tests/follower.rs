@@ -305,3 +305,70 @@ fn a_halt_caused_by_a_header_stops_the_batch() {
     assert_eq!(follower.step().unwrap(), Step::Halted);
     assert_eq!(state.borrow().submitted, vec![first]);
 }
+
+#[test]
+fn headers_the_relay_already_holds_are_not_resubmitted() {
+    let chain = chain_from(CHECKPOINT, &[1, 2, 3]);
+    let (state, relay, source) = setup(vec![chain.clone()]);
+    let (_, sink) = collect();
+    let mut follower = Follower::new(relay, source, sink);
+    follower.step().unwrap();
+    let submitted = state.borrow().submitted.len();
+
+    // A peer that lags behind answers with the whole chain again.
+    struct Replay(Vec<RawHeader>);
+    impl HeaderSource for Replay {
+        fn headers_after(&mut self, _: &[Hash]) -> Result<Batch, String> {
+            Ok(Batch {
+                peer: "lagging".into(),
+                headers: self.0.clone(),
+            })
+        }
+        fn penalize(&mut self, _: &str) {}
+    }
+    let mut follower = Follower::new(FakeRelay(state.clone()), Replay(chain), |_| {});
+    follower.step().unwrap();
+    // Unlinked from the checkpoint's point of view is fine; what matters is no new submissions.
+    assert_eq!(state.borrow().submitted.len(), submitted);
+}
+
+#[test]
+fn the_locator_reaches_back_to_the_oldest_block_the_relay_holds() {
+    let chain = chain_from(CHECKPOINT, &(1..=150).collect::<Vec<u8>>());
+    let (state, relay, _) = setup(vec![]);
+    // The relay holds 150 blocks already.
+    {
+        let mut s = state.borrow_mut();
+        for (i, h) in chain.iter().enumerate() {
+            let hash = sha256d(h);
+            s.held.insert(0, (hash, 101 + i as u32));
+        }
+        let top = s.held[0];
+        s.tip = Some(Tip {
+            height: top.1,
+            hash: top.0,
+            halted: 0,
+        });
+    }
+    struct Spy(Rc<RefCell<Vec<Vec<Hash>>>>);
+    impl HeaderSource for Spy {
+        fn headers_after(&mut self, locator: &[Hash]) -> Result<Batch, String> {
+            self.0.borrow_mut().push(locator.to_vec());
+            Ok(Batch {
+                peer: "p".into(),
+                headers: vec![],
+            })
+        }
+        fn penalize(&mut self, _: &str) {}
+    }
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let mut follower = Follower::new(relay, Spy(seen.clone()), |_| {});
+
+    follower.step().unwrap();
+
+    let locator = seen.borrow()[0].clone();
+    assert!(locator.len() <= 64, "{} hashes", locator.len());
+    assert_eq!(locator[0], sha256d(&chain[149]), "starts at the tip");
+    assert_eq!(locator[1], sha256d(&chain[148]), "dense near the tip");
+    assert!(locator.contains(&CHECKPOINT), "reaches the oldest block");
+}

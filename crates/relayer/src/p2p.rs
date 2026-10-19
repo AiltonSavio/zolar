@@ -20,6 +20,7 @@ pub const SEEDERS: [&str; 3] = [
     "seeder.testnet.zec.rocks",
     "dnsseed.testnet.z.cash",
 ];
+const MAX_HANDSHAKE_MESSAGES: usize = 50;
 const MAX_PAYLOAD: usize = 4 * 1024 * 1024;
 const USER_AGENT: &[u8] = b"/zolar-relayer:0.1/";
 
@@ -178,7 +179,12 @@ impl<S: Read + Write> Peer<S> {
         let nonce = rand::thread_rng().gen();
         stream.write_all(&encode_message("version", &version_payload(now, nonce)))?;
         let (mut got_verack, mut version) = (false, None);
+        let mut messages = 0;
         while !(got_verack && version.is_some()) {
+            messages += 1;
+            if messages > MAX_HANDSHAKE_MESSAGES {
+                return protocol("peer never finished the handshake");
+            }
             let (command, payload) = read_message(&mut stream)?;
             match command.as_str() {
                 "version" if payload.len() >= 4 => {
@@ -223,7 +229,7 @@ impl<S: Read + Write> Peer<S> {
 impl Peer<TcpStream> {
     pub fn connect(addr: std::net::SocketAddr) -> Result<Self, P2pError> {
         let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10))?;
-        stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+        stream.set_read_timeout(Some(Duration::from_secs(15)))?;
         stream.set_write_timeout(Some(Duration::from_secs(30)))?;
         Self::handshake(stream)
     }

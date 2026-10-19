@@ -168,3 +168,22 @@ fn a_forged_header_is_rejected_by_the_relay_and_its_buffer_is_closed() {
         }
     )));
 }
+
+#[test]
+fn running_out_of_sol_is_retried_and_does_not_blame_the_peer() {
+    let w = world(150);
+    // Enough for fees, not for the buffer's rent.
+    let poor = Keypair::new();
+    w.svm
+        .borrow_mut()
+        .airdrop(&poor.pubkey(), 1_000_000)
+        .unwrap();
+    let lite = Lite {
+        svm: w.svm.clone(),
+        sends: 0,
+        fail_sends: vec![],
+    };
+    let mut follower = Follower::new(RelayClient::new(lite, poor, w.relay), source(&w, 2), |_| {});
+
+    assert!(matches!(follower.step(), Err(ChainError::Transient(_))));
+}

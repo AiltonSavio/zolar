@@ -204,10 +204,9 @@ impl<C: Cluster> RelayChain for RelayClient<C> {
             .nonce(self.nonce)
             .instruction();
         let mut signatures = Vec::new();
-        match self.send_checked(&[create, write(0, &header[..SPLIT])])? {
-            Ok(signature) => signatures.push(signature),
-            Err(code) => return self.refused(code),
-        }
+        // Creating the buffer can fail for reasons that say nothing about the header (rent, a Halt):
+        // those are retried, never counted against the peer.
+        signatures.push(self.send(&[create, write(0, &header[..SPLIT])])?);
 
         let begin = BeginVerifyBuilder::new()
             .authority(authority)

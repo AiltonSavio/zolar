@@ -60,6 +60,9 @@ impl HttpRpc {
             .send_json(body)
             .map_err(|e| format!("{method}: {e}"))?;
         let status = response.status();
+        if status.as_u16() == 429 {
+            return Ok(Err(json!({"code": 429})));
+        }
         let value: Value = response
             .body_mut()
             .read_json()
@@ -162,10 +165,10 @@ impl Cluster for HttpRpc {
         let started = Instant::now();
         while started.elapsed() < CONFIRM_TIMEOUT {
             sleep(POLL);
-            let statuses = self
-                .call("getSignatureStatuses", json!([[signature]]))
-                .map_err(TxError::Other)?
-                .map_err(|e| TxError::Other(format!("getSignatureStatuses: {e}")))?;
+            // A failed status request is not a failed transaction: ask again until the deadline.
+            let Ok(Ok(statuses)) = self.call("getSignatureStatuses", json!([[signature]])) else {
+                continue;
+            };
             let status = &statuses["value"][0];
             if status.is_null() {
                 continue;

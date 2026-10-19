@@ -21,11 +21,14 @@ const REST_AFTER_FAILURE: Duration = Duration::from_secs(300);
 const BAN: Duration = Duration::from_secs(3600);
 const STRIKES_FOR_BAN: u32 = 2;
 const REFRESH_SEEDS: Duration = Duration::from_secs(900);
+/// Peers can stay connected yet stop following the chain; replace each one regularly.
+const ROTATE_AFTER: Duration = Duration::from_secs(900);
 
 struct Live {
     addr: SocketAddr,
     peer: Peer<TcpStream>,
     strikes: u32,
+    since: Instant,
 }
 
 pub struct PeerPool {
@@ -88,6 +91,7 @@ impl PeerPool {
                     addr,
                     peer,
                     strikes: 0,
+                    since: Instant::now(),
                 }),
                 Err(_) => self.rest(addr, REST_AFTER_FAILURE),
             }
@@ -97,6 +101,7 @@ impl PeerPool {
 
 impl HeaderSource for PeerPool {
     fn headers_after(&mut self, locator: &[Hash]) -> Result<Batch, String> {
+        self.live.retain(|l| l.since.elapsed() < ROTATE_AFTER);
         if self.live.len() < TARGET_PEERS {
             self.fill();
         }

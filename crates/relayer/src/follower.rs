@@ -7,8 +7,10 @@ use crate::p2p::{sha256d, RawHeader};
 
 pub type Hash = [u8; 32];
 
-/// How many hashes a locator carries.
-const LOCATOR_LEN: usize = 64;
+/// The Store holds at most 400 headers.
+const MAX_KNOWN: usize = 512;
+/// Newest hashes a locator carries one by one before it starts skipping.
+const DENSE_LOCATOR: usize = 24;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tip {
@@ -151,18 +153,29 @@ impl<C: RelayChain, S: HeaderSource, E: FnMut(Event)> Follower<C, S, E> {
         }
         let at = self.known.partition_point(|(_, h)| *h >= height);
         self.known.insert(at, (hash, height));
-        self.known.truncate(LOCATOR_LEN * 2);
+        self.known.truncate(MAX_KNOWN);
     }
 
+    /// Newest first: the tip, then every block for a while, then ever larger steps, so a fork point
+    /// anywhere in the relay's window is covered by about forty hashes.
     fn locator(&self, tip: &Tip) -> Vec<Hash> {
         let mut out = vec![tip.hash];
-        out.extend(
-            self.known
-                .iter()
-                .map(|(h, _)| *h)
-                .filter(|h| *h != tip.hash),
-        );
-        out.truncate(LOCATOR_LEN);
+        let (mut step, mut index) = (1, 0);
+        while index < self.known.len() {
+            let hash = self.known[index].0;
+            if hash != tip.hash {
+                out.push(hash);
+            }
+            if index >= DENSE_LOCATOR {
+                step *= 2;
+            }
+            index += step;
+        }
+        if let Some((oldest, _)) = self.known.last() {
+            if !out.contains(oldest) {
+                out.push(*oldest);
+            }
+        }
         out
     }
 
@@ -202,6 +215,7 @@ impl<C: RelayChain, S: HeaderSource, E: FnMut(Event)> Follower<C, S, E> {
 
         let mut parent = first_parent;
         let mut accepted = 0;
+        let mut submitted = 0;
         for header in &batch.headers {
             if header[4..36] != parent {
                 self.source.penalize(&batch.peer);
@@ -213,6 +227,11 @@ impl<C: RelayChain, S: HeaderSource, E: FnMut(Event)> Follower<C, S, E> {
             height += 1;
             let hash = sha256d(header);
             parent = hash;
+            if self.height_of(&hash).is_some() {
+                // The relay already holds it; submitting would cost fees to learn that.
+                continue;
+            }
+            submitted += 1;
             let mut events = Vec::new();
             let outcome = self.chain.submit(header, &mut |s| events.push(s))?;
             for stage in events {
@@ -256,6 +275,9 @@ impl<C: RelayChain, S: HeaderSource, E: FnMut(Event)> Follower<C, S, E> {
                     return Ok(Step::Rejected);
                 }
             }
+        }
+        if submitted == 0 {
+            return Ok(Step::Idle);
         }
         Ok(Step::Progress { accepted })
     }
