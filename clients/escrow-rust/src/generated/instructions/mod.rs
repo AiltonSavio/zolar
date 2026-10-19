@@ -6,7 +6,13 @@
 //!
 
 pub(crate) mod r#create_escrow;
+pub(crate) mod r#deposit_bond;
+pub(crate) mod r#refund;
+pub(crate) mod r#request_refund;
 pub(crate) mod r#reveal_claim;
 
 pub use self::r#create_escrow::*;
+pub use self::r#deposit_bond::*;
+pub use self::r#refund::*;
+pub use self::r#request_refund::*;
 pub use self::r#reveal_claim::*;

@@ -7,4 +7,7 @@
  */
 
 export * from './createEscrow';
+export * from './depositBond';
+export * from './refund';
+export * from './requestRefund';
 export * from './revealClaim';

@@ -3,7 +3,10 @@
 use std::{os::unix::fs::OpenOptionsExt, path::PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use escrow_client::{accounts::Escrow, instructions::CreateEscrowBuilder};
+use escrow_client::{
+    accounts::Escrow,
+    instructions::{CreateEscrowBuilder, RefundBuilder, RequestRefundBuilder},
+};
 use solana_address::Address;
 use solana_signer::Signer;
 use zolar_pczt::{Network, inspect};
@@ -13,8 +16,8 @@ use crate::{
     explorer::Explorer,
     internal_txid, random_salt,
     solana::{
-        associated_token_account, create_ata_idempotent, load_keypair, parse_token_account,
-        read_account, read_relay, send,
+        RefundStep, associated_token_account, create_ata_idempotent, load_keypair,
+        parse_token_account, read_account, read_escrow, read_relay, refund_step, send,
     },
 };
 
@@ -39,6 +42,8 @@ pub struct CreateEscrow {
     pub amount: u64,
     /// Where the salt is written for the Payer (mode 0600).
     pub salt_out: PathBuf,
+    /// Tokens of the mint the Payer must lock before a Claim can settle (0: none).
+    pub bond: u64,
 }
 
 pub struct Created {
@@ -143,7 +148,7 @@ pub fn create_escrow(a: &CreateEscrow) -> Result<Created> {
         .commitment(commitment)
         .payout(a.payout)
         .amount(a.amount)
-        .bond_required(0)
+        .bond_required(a.bond)
         .expiry_height(report.expiry_height)
         .claim_mode(0)
         .instruction();
@@ -151,6 +156,7 @@ pub fn create_escrow(a: &CreateEscrow) -> Result<Created> {
     println!("Escrow created      : {escrow}");
     println!("signature           : {signature}");
     println!("commitment          : {}", hex::encode(commitment));
+    println!("Bond required       : {}", a.bond);
     println!(
         "salt written to {} (give it to the Payer privately)",
         a.salt_out.display()
@@ -161,4 +167,97 @@ pub fn create_escrow(a: &CreateEscrow) -> Result<Created> {
         txid: report.txid,
         expiry_height: report.expiry_height,
     })
+}
+
+pub struct RefundArgs {
+    pub rpc_url: String,
+    pub keypair: PathBuf,
+    pub escrow: Address,
+    /// Keep going through the claim window instead of stopping when a step must wait.
+    pub wait: bool,
+}
+
+/// Where a refund stands after [`refund`] returned.
+pub struct Refunded {
+    pub request_signature: Option<String>,
+    pub refund_signature: Option<String>,
+}
+
+fn unix_now() -> Result<i64> {
+    Ok(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs() as i64)
+}
+
+/// Takes an unclaimed Escrow back in the two steps the program requires: RequestRefund once the
+/// relay tip is above the expiry height plus Finality Depth (or 24 hours after creation), then Refund
+/// after the claim window. The whole vault, Bond included, returns to the Payee.
+pub fn refund(a: &RefundArgs) -> Result<Refunded> {
+    let mut rpc = HttpRpc::new(&a.rpc_url);
+    let payee = load_keypair(&a.keypair)?;
+    let mut done = Refunded {
+        request_signature: None,
+        refund_signature: None,
+    };
+    loop {
+        let escrow = read_escrow(&read_account(&mut rpc, &a.escrow)?)?;
+        ensure!(
+            escrow.payee == payee.pubkey(),
+            "{} was created by {}, not by this keypair",
+            a.escrow,
+            escrow.payee
+        );
+        let relay = read_relay(&mut rpc, &escrow.relay)?;
+        let view = relay.view()?;
+        let step = refund_step(
+            &escrow,
+            view.tip_height(),
+            view.finality_depth(),
+            view.is_halted(),
+            unix_now()?,
+        );
+        println!("refund step: {step:?}");
+        match step {
+            RefundStep::Request => {
+                let ix = RequestRefundBuilder::new()
+                    .escrow(a.escrow)
+                    .relay(escrow.relay)
+                    .instruction();
+                let signature = send(&mut rpc, &[ix], &payee)?;
+                println!(
+                    "refund requested    : {signature} (a Payer may still claim for {} s)",
+                    crate::solana::CLAIM_WINDOW_SECS
+                );
+                done.request_signature = Some(signature);
+            }
+            RefundStep::Refund => {
+                let destination = associated_token_account(&escrow.payee, &escrow.mint);
+                let held = parse_token_account(&read_account(&mut rpc, &escrow.vault)?)?.amount;
+                let ix = RefundBuilder::new()
+                    .escrow(a.escrow)
+                    .relay(escrow.relay)
+                    .vault(escrow.vault)
+                    .payee_token(destination)
+                    .payee(escrow.payee)
+                    .instruction();
+                let signature = send(&mut rpc, &[ix], &payee)?;
+                println!("refunded            : {signature}");
+                println!(
+                    "returned to {destination}: {held} tokens ({} locked, {} Bond)",
+                    escrow.amount, escrow.bond_deposited
+                );
+                done.refund_signature = Some(signature);
+                return Ok(done);
+            }
+            RefundStep::WaitForTip { .. }
+            | RefundStep::Halted { .. }
+            | RefundStep::WaitForWindow { .. } => {
+                ensure!(
+                    a.wait,
+                    "not yet; run again later, or pass --wait to keep going"
+                );
+                std::thread::sleep(std::time::Duration::from_secs(10));
+            }
+        }
+    }
 }

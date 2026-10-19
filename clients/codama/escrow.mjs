@@ -53,7 +53,7 @@ const escrowAccount = accountNode({
       defaultValueStrategy: 'omitted',
     }),
     field('version', u8),
-    field('state', u8, ['0 open. A Claim or refund closes the account.']),
+    field('state', u8, ['0 open; 1 refund requested (a Claim still settles until the Refund closes the account).']),
     field('bump', u8),
     field('payee', publicKeyTypeNode(), ['Created the Escrow; gets the rent back and, with refunds, the tokens.']),
     field('payout', publicKeyTypeNode(), ['The Payer wallet that receives the tokens.']),
@@ -62,13 +62,14 @@ const escrowAccount = accountNode({
     field('relay', publicKeyTypeNode(), ['The Header Relay this Escrow trusts.']),
     field('commitment', bytes(32), ['Payment Commitment: Poseidon(txid_hi, txid_lo, salt).']),
     field('amount', u64),
-    field('bondRequired', u64, ['Used by the Bond (ticket 09).']),
-    field('bondDeposited', u64),
+    field('bondRequired', u64, ['Tokens of the mint the Payer must lock before a Claim can settle.']),
+    field('bondDeposited', u64, ['Equals bondRequired once the Payer deposited; the Bond sits in the vault.']),
     field('createdAt', i64, ['Solana unix time of creation.']),
     field('createdTip', u32, ['Relay tip height at creation; a Claim must prove a block above it.']),
     field('expiryHeight', u32, ['Zcash height by which the payment must be mined.']),
     field('claimMode', u8, ['0 a Reveal Claim may settle; 1 only a Private Claim may (ticket 10).']),
-    field('reserved', bytes(63)),
+    field('refundRequestedAt', i64, ['Solana unix time of RequestRefund; 0 while state is 0.']),
+    field('reserved', bytes(55)),
   ]),
 });
 
@@ -160,6 +161,49 @@ const instructions = [
       instructionArgumentNode({ name: 'txPath', type: arrayTypeNode(bytes(32), prefixedCountNode(u8)) }),
     ],
   }),
+  instructionNode({
+    name: 'depositBond',
+    docs: [
+      'The Payer wallet (`payout`) locks exactly `bondRequired` tokens of the mint in the vault, once. The Bond returns to the Payer on a Claim and goes to the Payee on a refund.',
+    ],
+    discriminators: [fieldDiscriminatorNode('discriminator')],
+    accounts: [
+      instructionAccountNode({ name: 'payer', isSigner: true, isWritable: false }),
+      instructionAccountNode({ name: 'escrow', isWritable: true, isSigner: false }),
+      instructionAccountNode({ name: 'payerToken', isWritable: true, isSigner: false }),
+      instructionAccountNode({ name: 'vault', isWritable: true, isSigner: false }),
+      program('tokenProgram', TOKEN_PROGRAM),
+    ],
+    arguments: [disc(2)],
+  }),
+  instructionNode({
+    name: 'refund',
+    docs: [
+      'Second step of a refund: pays the whole vault (tokens and Bond) to the Payee and closes the Escrow, once the claim window since RequestRefund has passed and the refund conditions still hold (a Halt after the request sends the Payee back to the 24 hour backstop). Anyone may submit it.',
+    ],
+    discriminators: [fieldDiscriminatorNode('discriminator')],
+    accounts: [
+      instructionAccountNode({ name: 'escrow', isWritable: true, isSigner: false }),
+      instructionAccountNode({ name: 'relay', isWritable: false, isSigner: false }),
+      instructionAccountNode({ name: 'vault', isWritable: true, isSigner: false }),
+      instructionAccountNode({ name: 'payeeToken', isWritable: true, isSigner: false }),
+      instructionAccountNode({ name: 'payee', isWritable: true, isSigner: false }),
+      program('tokenProgram', TOKEN_PROGRAM),
+    ],
+    arguments: [disc(3)],
+  }),
+  instructionNode({
+    name: 'requestRefund',
+    docs: [
+      'First step of a refund, open to anyone: starts the claim window. Allowed once the trusted relay (not Halted) has a tip above expiryHeight + Finality Depth, or 24 hours after creation whatever the relay says. A Claim still settles during and after the window until the Refund closes the Escrow.',
+    ],
+    discriminators: [fieldDiscriminatorNode('discriminator')],
+    accounts: [
+      instructionAccountNode({ name: 'escrow', isWritable: true, isSigner: false }),
+      instructionAccountNode({ name: 'relay', isWritable: false, isSigner: false }),
+    ],
+    arguments: [disc(5)],
+  }),
 ];
 
 const errors = [
@@ -176,8 +220,14 @@ const errors = [
   ['unknownRoot', 'The Final Block Tree path does not lead to a recent root that already holds the block'],
   ['relayNotReadable', 'The relay account is not a sealed Header Relay'],
   ['poseidonFailed', 'The Poseidon syscall rejected its input'],
-  ['bondNotSupported', 'A Bond is not supported yet'],
+  ['bondNotDeposited', 'The Bond the Escrow requires is not deposited'],
   ['claimModeNotAllowed', 'The claim mode is not supported, or the Escrow does not allow a Reveal Claim'],
+  ['noBondRequired', 'The Escrow requires no Bond'],
+  ['bondAlreadyDeposited', 'The Bond is already deposited'],
+  ['refundNotYet', 'Neither the relay tip nor the 24 hour backstop allows a refund yet'],
+  ['refundNotRequested', 'No refund was requested'],
+  ['claimWindowOpen', 'The claim window since the refund request has not passed'],
+  ['notPayer', 'The Bond must be signed and paid by the Payer wallet'],
 ].map(([name, message], i) => errorNode({ name, code: i + 1, message }));
 
 export const root = rootNode(

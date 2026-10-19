@@ -80,8 +80,14 @@ fn error_name_any(code: u32) -> String {
         11 => "UnknownRoot",
         12 => "RelayNotReadable",
         13 => "PoseidonFailed",
-        14 => "BondNotSupported",
+        14 => "BondNotDeposited",
         15 => "ClaimModeNotAllowed",
+        16 => "NoBondRequired",
+        17 => "BondAlreadyDeposited",
+        18 => "RefundNotYet",
+        19 => "RefundNotRequested",
+        20 => "ClaimWindowOpen",
+        21 => "NotPayer",
         _ => "",
     };
     format!(
@@ -154,6 +160,64 @@ pub fn mint_freeze_authority(data: &[u8]) -> Result<Option<Address>> {
     }
 }
 
+/// Seconds after creation when a refund no longer depends on the relay (programs/escrow state.rs).
+pub const BACKSTOP_SECS: i64 = 24 * 60 * 60;
+/// Seconds a Payer has to claim between a refund request and the Refund (programs/escrow state.rs).
+pub const CLAIM_WINDOW_SECS: i64 = 15 * 60;
+
+/// What a Payee can do next with an Escrow it wants back.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RefundStep {
+    /// Start the claim window.
+    Request,
+    /// The relay tip must pass `needed` (expiry height plus Finality Depth), or 24 hours pass.
+    WaitForTip {
+        tip: u32,
+        needed: u32,
+    },
+    /// The relay is Halted: only the 24 hour backstop, in `secs` seconds, can refund.
+    Halted {
+        secs: i64,
+    },
+    /// A Payer may still claim for `secs` seconds.
+    WaitForWindow {
+        secs: i64,
+    },
+    Refund,
+}
+
+/// Mirrors the Escrow's rules: a refund needs the backstop or a running relay whose tip is above
+/// the expiry height plus Finality Depth, at the request and again at the Refund.
+pub fn refund_step(
+    escrow: &Escrow,
+    tip: u32,
+    finality_depth: u16,
+    halted: bool,
+    now: i64,
+) -> RefundStep {
+    let backstop_at = escrow.created_at.saturating_add(BACKSTOP_SECS);
+    let needed = escrow.expiry_height.saturating_add(finality_depth as u32) + 1;
+    let allowed = if now >= backstop_at {
+        None
+    } else if halted {
+        Some(RefundStep::Halted {
+            secs: backstop_at - now,
+        })
+    } else if tip < needed {
+        Some(RefundStep::WaitForTip { tip, needed })
+    } else {
+        None
+    };
+    if escrow.state == 0 {
+        return allowed.unwrap_or(RefundStep::Request);
+    }
+    let opens = escrow.refund_requested_at.saturating_add(CLAIM_WINDOW_SECS);
+    if now < opens {
+        return RefundStep::WaitForWindow { secs: opens - now };
+    }
+    allowed.unwrap_or(RefundStep::Refund)
+}
+
 pub fn read_escrow(data: &[u8]) -> Result<Escrow> {
     Escrow::from_bytes(data).context("decoding the Escrow account")
 }
@@ -176,6 +240,65 @@ mod tests {
         let ix = create_ata_idempotent(&owner, &owner, &mint);
         assert_eq!(ix.accounts[1].pubkey, expected);
         assert_eq!(ix.data, vec![1]);
+    }
+
+    fn escrow_at(state: u8) -> Escrow {
+        let mut d = vec![0u8; 300];
+        d[0] = 1;
+        d[1] = 1;
+        let mut e = read_escrow(&d).unwrap();
+        e.state = state;
+        e.created_at = 1_000;
+        e.expiry_height = 100;
+        e.refund_requested_at = if state == 1 { 50_000 } else { 0 };
+        e
+    }
+
+    #[test]
+    fn a_refund_waits_for_the_tip_then_the_window_and_the_backstop_ignores_a_halt() {
+        let e = escrow_at(0);
+        // Finality Depth 10: the tip must reach 111.
+        assert_eq!(
+            refund_step(&e, 110, 10, false, 2_000),
+            RefundStep::WaitForTip {
+                tip: 110,
+                needed: 111
+            }
+        );
+        assert_eq!(refund_step(&e, 111, 10, false, 2_000), RefundStep::Request);
+        assert_eq!(
+            refund_step(&e, 500, 10, true, 2_000),
+            RefundStep::Halted { secs: 85_400 }
+        );
+        assert_eq!(
+            refund_step(&e, 0, 10, true, 1_000 + BACKSTOP_SECS),
+            RefundStep::Request
+        );
+
+        let e = escrow_at(1);
+        assert_eq!(
+            refund_step(&e, 111, 10, false, 50_000 + CLAIM_WINDOW_SECS - 1),
+            RefundStep::WaitForWindow { secs: 1 }
+        );
+        assert_eq!(
+            refund_step(&e, 111, 10, false, 50_000 + CLAIM_WINDOW_SECS),
+            RefundStep::Refund
+        );
+        // A Halt after the request holds the Refund back until the backstop.
+        assert!(matches!(
+            refund_step(&e, 111, 10, true, 50_000 + CLAIM_WINDOW_SECS),
+            RefundStep::Halted { .. }
+        ));
+        assert_eq!(
+            refund_step(
+                &e,
+                0,
+                10,
+                true,
+                1_000 + BACKSTOP_SECS + CLAIM_WINDOW_SECS + 50_000
+            ),
+            RefundStep::Refund
+        );
     }
 
     #[test]

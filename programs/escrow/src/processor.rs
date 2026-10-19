@@ -92,6 +92,9 @@ fn sha256d_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
 fn u32_at(d: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([d[at], d[at + 1], d[at + 2], d[at + 3]])
 }
+fn i64_at(d: &[u8], at: usize) -> i64 {
+    u64_at(d, at) as i64
+}
 fn u64_at(d: &[u8], at: usize) -> u64 {
     let mut b = [0u8; 8];
     b.copy_from_slice(&d[at..at + 8]);
@@ -117,6 +120,9 @@ pub fn process_instruction(
     match tag {
         0 => create_escrow(program_id, accounts, args),
         1 => reveal_claim(program_id, accounts, args),
+        2 => deposit_bond(program_id, accounts, args),
+        3 => refund(program_id, accounts, args),
+        5 => request_refund(program_id, accounts, args),
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }
@@ -341,9 +347,6 @@ fn create_escrow(program_id: &Address, accounts: &[AccountView], args: &[u8]) ->
     if amount == 0 {
         return Err(fail(EscrowError::ZeroAmount));
     }
-    if bond_required != 0 {
-        return Err(fail(EscrowError::BondNotSupported));
-    }
     if claim_mode != MODE_REVEAL_ALLOWED {
         return Err(fail(EscrowError::ClaimModeNotAllowed));
     }
@@ -441,16 +444,19 @@ fn reveal_claim(program_id: &Address, accounts: &[AccountView], args: &[u8]) -> 
     if !escrow.owned_by(program_id) || !escrow.is_writable() {
         return Err(fail(EscrowError::WrongAccount));
     }
-    let (commitment, bump, created_tip, expiry_height, stored_payee, stored_payout, mint) = {
+    let (commitment, created_tip, expiry_height, stored_payout, mint) = {
         let e = escrow.try_borrow()?;
         if e.len() != ESCROW_LEN || e[E_DISC] != DISC_ESCROW || e[E_VERSION] != VERSION {
             return Err(fail(EscrowError::WrongAccount));
         }
-        if e[E_STATE] != STATE_OPEN {
+        if e[E_STATE] != STATE_OPEN && e[E_STATE] != STATE_REFUND_REQUESTED {
             return Err(fail(EscrowError::NotOpen));
         }
         if e[E_CLAIM_MODE] != MODE_REVEAL_ALLOWED {
             return Err(fail(EscrowError::ClaimModeNotAllowed));
+        }
+        if u64_at(&e, E_BOND_DEPOSITED) < u64_at(&e, E_BOND_REQUIRED) {
+            return Err(fail(EscrowError::BondNotDeposited));
         }
         if array32(&e, E_RELAY) != *relay.address().as_ref()
             || array32(&e, E_VAULT) != *vault.address().as_ref()
@@ -460,10 +466,8 @@ fn reveal_claim(program_id: &Address, accounts: &[AccountView], args: &[u8]) -> 
         }
         (
             array32(&e, E_COMMITMENT),
-            e[E_BUMP],
             u32_at(&e, E_CREATED_TIP),
             u32_at(&e, E_EXPIRY_HEIGHT),
-            array32(&e, E_PAYEE),
             array32(&e, E_PAYOUT),
             array32(&e, E_MINT),
         )
@@ -533,6 +537,21 @@ fn reveal_claim(program_id: &Address, accounts: &[AccountView], args: &[u8]) -> 
     if paid.mint != mint || paid.owner != stored_payout {
         return Err(fail(EscrowError::BadTokenAccount));
     }
+    settle(escrow, vault, payout_token, payee)
+}
+
+/// Pays the whole vault (tokens and Bond) to `destination`, closes the vault and the Escrow, and
+/// returns all their rent to the Payee.
+fn settle(
+    escrow: &AccountView,
+    vault: &AccountView,
+    destination: &AccountView,
+    payee: &AccountView,
+) -> ProgramResult {
+    let (bump, stored_payee, commitment) = {
+        let e = escrow.try_borrow()?;
+        (e[E_BUMP], array32(&e, E_PAYEE), array32(&e, E_COMMITMENT))
+    };
     let held = read_token_amount(vault)?;
     let bump_seed = [bump];
     let seeds = [
@@ -542,13 +561,148 @@ fn reveal_claim(program_id: &Address, accounts: &[AccountView], args: &[u8]) -> 
         Seed::from(&bump_seed),
     ];
     let signer = [Signer::from(&seeds)];
-    token_transfer(vault, payout_token, escrow, held, &signer)?;
+    token_transfer(vault, destination, escrow, held, &signer)?;
     token_close(vault, payee, escrow, &signer)?;
 
     escrow.try_borrow_mut()?[E_DISC] = 0;
     payee.set_lamports(payee.lamports() + escrow.lamports());
     escrow.set_lamports(0);
     escrow.close()
+}
+
+/// An Escrow account of this program, writable, in the layout this version knows.
+fn check_escrow(program_id: &Address, escrow: &AccountView) -> ProgramResult {
+    if !escrow.owned_by(program_id) || !escrow.is_writable() {
+        return Err(fail(EscrowError::WrongAccount));
+    }
+    let e = escrow.try_borrow()?;
+    if e.len() != ESCROW_LEN || e[E_DISC] != DISC_ESCROW || e[E_VERSION] != VERSION {
+        return Err(fail(EscrowError::WrongAccount));
+    }
+    Ok(())
+}
+
+fn deposit_bond(program_id: &Address, accounts: &[AccountView], args: &[u8]) -> ProgramResult {
+    let [payer, escrow, payer_token, vault, token_program] = accounts else {
+        return Err(ProgramError::NotEnoughAccountKeys);
+    };
+    if !args.is_empty() {
+        return Err(ProgramError::InvalidInstructionData);
+    }
+    require_signer(payer)?;
+    check_program(token_program, &TOKEN)?;
+    check_escrow(program_id, escrow)?;
+    let (bond, mint) = {
+        let e = escrow.try_borrow()?;
+        // Once a refund is requested a new Bond would only feed the Refund that may follow.
+        if e[E_STATE] != STATE_OPEN {
+            return Err(fail(EscrowError::NotOpen));
+        }
+        let bond = u64_at(&e, E_BOND_REQUIRED);
+        if bond == 0 {
+            return Err(fail(EscrowError::NoBondRequired));
+        }
+        if u64_at(&e, E_BOND_DEPOSITED) != 0 {
+            return Err(fail(EscrowError::BondAlreadyDeposited));
+        }
+        // The Bond comes back to the payout wallet, so only that wallet may lock it.
+        if array32(&e, E_PAYOUT) != *payer.address().as_ref() {
+            return Err(fail(EscrowError::NotPayer));
+        }
+        if array32(&e, E_VAULT) != *vault.address().as_ref() {
+            return Err(fail(EscrowError::WrongAccount));
+        }
+        (bond, array32(&e, E_MINT))
+    };
+    let source = read_token(payer_token, false)?;
+    if source.mint != mint || source.owner != *payer.address().as_ref() {
+        return Err(fail(EscrowError::BadTokenAccount));
+    }
+    token_transfer(payer_token, vault, payer, bond, &[])?;
+    put(
+        &mut escrow.try_borrow_mut()?,
+        E_BOND_DEPOSITED,
+        &bond.to_le_bytes(),
+    );
+    Ok(())
+}
+
+/// A refund is allowed 24 hours after creation whatever the relay says, or while the Escrow's
+/// relay is running with a tip above the expiry height plus Finality Depth. Both steps check it, so
+/// a Halt after the request sends the Payee back to the backstop.
+fn require_refundable(escrow: &AccountView, relay: &AccountView, now: i64) -> ProgramResult {
+    let (created_at, expiry_height) = {
+        let e = escrow.try_borrow()?;
+        if array32(&e, E_RELAY) != *relay.address().as_ref() {
+            return Err(fail(EscrowError::WrongAccount));
+        }
+        (i64_at(&e, E_CREATED_AT), u32_at(&e, E_EXPIRY_HEIGHT))
+    };
+    if now >= created_at.saturating_add(BACKSTOP_SECS) {
+        return Ok(());
+    }
+    let data = relay.try_borrow()?;
+    let view = relay_view(relay, &data)?;
+    if view.tip_height() <= expiry_height.saturating_add(view.finality_depth() as u32) {
+        return Err(fail(EscrowError::RefundNotYet));
+    }
+    Ok(())
+}
+
+/// First step of a refund, once [`require_refundable`] holds. Starts the claim window; a Claim still
+/// settles until the Refund closes the Escrow.
+fn request_refund(program_id: &Address, accounts: &[AccountView], args: &[u8]) -> ProgramResult {
+    let [escrow, relay] = accounts else {
+        return Err(ProgramError::NotEnoughAccountKeys);
+    };
+    if !args.is_empty() {
+        return Err(ProgramError::InvalidInstructionData);
+    }
+    check_escrow(program_id, escrow)?;
+    if escrow.try_borrow()?[E_STATE] != STATE_OPEN {
+        return Err(fail(EscrowError::NotOpen));
+    }
+    let now = Clock::get()?.unix_timestamp;
+    require_refundable(escrow, relay, now)?;
+    let mut e = escrow.try_borrow_mut()?;
+    e[E_STATE] = STATE_REFUND_REQUESTED;
+    put(&mut e, E_REFUND_REQUESTED_AT, &now.to_le_bytes());
+    Ok(())
+}
+
+/// Second step: after the claim window the whole vault, Bond included, goes to the Payee.
+fn refund(program_id: &Address, accounts: &[AccountView], args: &[u8]) -> ProgramResult {
+    let [escrow, relay, vault, payee_token, payee, token_program] = accounts else {
+        return Err(ProgramError::NotEnoughAccountKeys);
+    };
+    if !args.is_empty() {
+        return Err(ProgramError::InvalidInstructionData);
+    }
+    check_program(token_program, &TOKEN)?;
+    check_escrow(program_id, escrow)?;
+    let now = Clock::get()?.unix_timestamp;
+    let mint = {
+        let e = escrow.try_borrow()?;
+        if e[E_STATE] != STATE_REFUND_REQUESTED {
+            return Err(fail(EscrowError::RefundNotRequested));
+        }
+        let opens = i64_at(&e, E_REFUND_REQUESTED_AT).saturating_add(CLAIM_WINDOW_SECS);
+        if now < opens {
+            return Err(fail(EscrowError::ClaimWindowOpen));
+        }
+        if array32(&e, E_VAULT) != *vault.address().as_ref()
+            || array32(&e, E_PAYEE) != *payee.address().as_ref()
+        {
+            return Err(fail(EscrowError::WrongAccount));
+        }
+        array32(&e, E_MINT)
+    };
+    require_refundable(escrow, relay, now)?;
+    let back = read_token(payee_token, false)?;
+    if back.mint != mint || back.owner != *payee.address().as_ref() {
+        return Err(fail(EscrowError::BadTokenAccount));
+    }
+    settle(escrow, vault, payee_token, payee)
 }
 
 fn read_token_amount(vault: &AccountView) -> Result<u64, ProgramError> {
