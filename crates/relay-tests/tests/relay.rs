@@ -319,6 +319,10 @@ fn headers_wait_for_a_store_big_enough_for_the_difficulty_context() {
     let last = h.finish_ixs(&buffer, &relay_addr);
     assert_eq!(h.custom_err(&last, &[]), 24);
     h.grow_ix_ok(&relay_addr);
+    assert_eq!(h.custom_err(&last, &[]), 24, "200 slots are still too few");
+    h.grow_ix_ok(&relay_addr);
+    assert_eq!(h.custom_err(&last, &[]), 24, "300 slots are still too few");
+    h.grow_ix_ok(&relay_addr);
     h.ok(&last, &[]);
     assert_eq!(h.relay(&relay_addr).tip_height, 4_483_600);
 }

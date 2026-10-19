@@ -6,7 +6,7 @@
  * @see https://github.com/codama-idl/codama
  */
 
-import { assertAccountExists, assertAccountsExist, combineCodec, decodeAccount, fetchEncodedAccount, fetchEncodedAccounts, fixDecoderSize, fixEncoderSize, getAddressDecoder, getAddressEncoder, getBytesDecoder, getBytesEncoder, getStructDecoder, getStructEncoder, getU128Decoder, getU128Encoder, getU16Decoder, getU16Encoder, getU32Decoder, getU32Encoder, getU8Decoder, getU8Encoder, transformEncoder, type Account, type Address, type EncodedAccount, type FetchAccountConfig, type FetchAccountsConfig, type FixedSizeCodec, type FixedSizeDecoder, type FixedSizeEncoder, type HasAddress, type MaybeAccount, type MaybeEncodedAccount, type ReadonlyUint8Array } from '@solana/kit';
+import { assertAccountExists, assertAccountsExist, combineCodec, decodeAccount, fetchEncodedAccount, fetchEncodedAccounts, fixDecoderSize, fixEncoderSize, getAddressDecoder, getAddressEncoder, getArrayDecoder, getArrayEncoder, getBytesDecoder, getBytesEncoder, getStructDecoder, getStructEncoder, getU128Decoder, getU128Encoder, getU16Decoder, getU16Encoder, getU32Decoder, getU32Encoder, getU8Decoder, getU8Encoder, transformEncoder, type Account, type Address, type EncodedAccount, type FetchAccountConfig, type FetchAccountsConfig, type FixedSizeCodec, type FixedSizeDecoder, type FixedSizeEncoder, type HasAddress, type MaybeAccount, type MaybeEncodedAccount, type ReadonlyUint8Array } from '@solana/kit';
 import { findRelayPda, type RelaySeeds } from '../pdas';
 import { getCheckpointDecoder, getCheckpointEncoder, type Checkpoint, type CheckpointArgs } from '../types';
 
@@ -16,32 +16,60 @@ export function getRelayDiscriminatorBytes(): ReadonlyUint8Array { return getU8E
 
 export type Relay = { discriminator: number; version: number; 
 /** 0 pending (checkpoint being written), 1 active. */
-state: number; halted: number; creator: Address; 
+state: number; 
+/** 0 running; otherwise the Halt reason: 1 the heaviest chain reorganised past a final block, 2 the Final Block Tree is full. */
+halted: number; creator: Address; 
 /** Height of the heaviest known header. */
 tipHeight: number; tipSlot: number; tipSeq: number; 
 /** Cumulative work of the tip since the checkpoint block. */
 tipWork: bigint; tipHash: ReadonlyUint8Array; checkpoint: Checkpoint; 
-/** Zeroed space for fields added by later tickets. */
-reserved: ReadonlyUint8Array;  };
+/** Height of the newest block in the Final Block Tree (the checkpoint height before the first leaf). */
+finalizedHeight: number; finalizedHash: ReadonlyUint8Array; 
+/** Leaves in the Final Block Tree: finalizedHeight - checkpoint height. */
+leafCount: number; 
+/** Tip height when the relay Halted. */
+haltHeight: number; 
+/** Hash of the header whose acceptance caused the Halt. */
+haltHash: ReadonlyUint8Array; 
+/** Zeroed space for later fields. */
+reserved: ReadonlyUint8Array; 
+/** Final Block Tree frontier: the left sibling waiting at each level. */
+filledSubtrees: Array<ReadonlyUint8Array>; 
+/** Ring of tree roots (32-byte big-endian field elements): the root after n appends is at roots[n % 128]; roots[0] starts as the empty-tree root. */
+roots: Array<ReadonlyUint8Array>;  };
 
 export type RelayArgs = { version: number; 
 /** 0 pending (checkpoint being written), 1 active. */
-state: number; halted: number; creator: Address | HasAddress; 
+state: number; 
+/** 0 running; otherwise the Halt reason: 1 the heaviest chain reorganised past a final block, 2 the Final Block Tree is full. */
+halted: number; creator: Address | HasAddress; 
 /** Height of the heaviest known header. */
 tipHeight: number; tipSlot: number; tipSeq: number; 
 /** Cumulative work of the tip since the checkpoint block. */
 tipWork: number | bigint; tipHash: ReadonlyUint8Array; checkpoint: CheckpointArgs; 
-/** Zeroed space for fields added by later tickets. */
-reserved: ReadonlyUint8Array;  };
+/** Height of the newest block in the Final Block Tree (the checkpoint height before the first leaf). */
+finalizedHeight: number; finalizedHash: ReadonlyUint8Array; 
+/** Leaves in the Final Block Tree: finalizedHeight - checkpoint height. */
+leafCount: number; 
+/** Tip height when the relay Halted. */
+haltHeight: number; 
+/** Hash of the header whose acceptance caused the Halt. */
+haltHash: ReadonlyUint8Array; 
+/** Zeroed space for later fields. */
+reserved: ReadonlyUint8Array; 
+/** Final Block Tree frontier: the left sibling waiting at each level. */
+filledSubtrees: Array<ReadonlyUint8Array>; 
+/** Ring of tree roots (32-byte big-endian field elements): the root after n appends is at roots[n % 128]; roots[0] starts as the empty-tree root. */
+roots: Array<ReadonlyUint8Array>;  };
 
 /** Gets the encoder for {@link RelayArgs} account data. */
 export function getRelayEncoder(): FixedSizeEncoder<RelayArgs> {
-    return transformEncoder(getStructEncoder([['discriminator', getU8Encoder()], ['version', getU8Encoder()], ['state', getU8Encoder()], ['halted', getU8Encoder()], ['creator', getAddressEncoder()], ['tipHeight', getU32Encoder()], ['tipSlot', getU16Encoder()], ['tipSeq', getU32Encoder()], ['tipWork', getU128Encoder()], ['tipHash', fixEncoderSize(getBytesEncoder(), 32)], ['checkpoint', getCheckpointEncoder()], ['reserved', fixEncoderSize(getBytesEncoder(), 128)]]), (value) => ({ ...value, discriminator: RELAY_DISCRIMINATOR }));
+    return transformEncoder(getStructEncoder([['discriminator', getU8Encoder()], ['version', getU8Encoder()], ['state', getU8Encoder()], ['halted', getU8Encoder()], ['creator', getAddressEncoder()], ['tipHeight', getU32Encoder()], ['tipSlot', getU16Encoder()], ['tipSeq', getU32Encoder()], ['tipWork', getU128Encoder()], ['tipHash', fixEncoderSize(getBytesEncoder(), 32)], ['checkpoint', getCheckpointEncoder()], ['finalizedHeight', getU32Encoder()], ['finalizedHash', fixEncoderSize(getBytesEncoder(), 32)], ['leafCount', getU32Encoder()], ['haltHeight', getU32Encoder()], ['haltHash', fixEncoderSize(getBytesEncoder(), 32)], ['reserved', fixEncoderSize(getBytesEncoder(), 52)], ['filledSubtrees', getArrayEncoder(fixEncoderSize(getBytesEncoder(), 32), { size: 20 })], ['roots', getArrayEncoder(fixEncoderSize(getBytesEncoder(), 32), { size: 128 })]]), (value) => ({ ...value, discriminator: RELAY_DISCRIMINATOR }));
 }
 
 /** Gets the decoder for {@link Relay} account data. */
 export function getRelayDecoder(): FixedSizeDecoder<Relay> {
-    return getStructDecoder([['discriminator', getU8Decoder()], ['version', getU8Decoder()], ['state', getU8Decoder()], ['halted', getU8Decoder()], ['creator', getAddressDecoder()], ['tipHeight', getU32Decoder()], ['tipSlot', getU16Decoder()], ['tipSeq', getU32Decoder()], ['tipWork', getU128Decoder()], ['tipHash', fixDecoderSize(getBytesDecoder(), 32)], ['checkpoint', getCheckpointDecoder()], ['reserved', fixDecoderSize(getBytesDecoder(), 128)]]);
+    return getStructDecoder([['discriminator', getU8Decoder()], ['version', getU8Decoder()], ['state', getU8Decoder()], ['halted', getU8Decoder()], ['creator', getAddressDecoder()], ['tipHeight', getU32Decoder()], ['tipSlot', getU16Decoder()], ['tipSeq', getU32Decoder()], ['tipWork', getU128Decoder()], ['tipHash', fixDecoderSize(getBytesDecoder(), 32)], ['checkpoint', getCheckpointDecoder()], ['finalizedHeight', getU32Decoder()], ['finalizedHash', fixDecoderSize(getBytesDecoder(), 32)], ['leafCount', getU32Decoder()], ['haltHeight', getU32Decoder()], ['haltHash', fixDecoderSize(getBytesDecoder(), 32)], ['reserved', fixDecoderSize(getBytesDecoder(), 52)], ['filledSubtrees', getArrayDecoder(fixDecoderSize(getBytesDecoder(), 32), { size: 20 })], ['roots', getArrayDecoder(fixDecoderSize(getBytesDecoder(), 32), { size: 128 })]]);
 }
 
 /** Gets the codec for {@link Relay} account data. */

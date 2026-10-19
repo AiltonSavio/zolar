@@ -1247,6 +1247,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "header-relay-interface"
+version = "0.1.0"
+
+[[package]]
 name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1950,6 +1954,7 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "header-relay-client",
+ "header-relay-interface",
  "hex",
  "litesvm",
  "serde_json",

@@ -14,13 +14,16 @@
 //! | 5 | WriteBuffer `offset u16, bytes` | authority(s), buffer(w) |
 //! | 6 | BeginVerify | authority(s), buffer(w) |
 //! | 7 | StepVerify `leaves u16` | authority(s), buffer(w) |
-//! | 8 | AcceptHeader | authority(s), buffer(w), relay(w), store(w) |
+//! | 8 | AcceptHeader | authority(s), buffer(w), relay(w), store(w); follows the heaviest chain, appends final blocks to the Final Block Tree, Halts on a reorg past one |
 //! | 9 | ResetBuffer | authority(s), buffer(w) |
 //! | 10 | CloseBuffer | authority(ws), buffer(w) |
 #![cfg_attr(target_os = "solana", no_std)]
 
 pub mod error;
+pub mod finality;
 pub mod state;
+pub mod tree;
+pub mod zeros;
 
 pub mod processor;
 

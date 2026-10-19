@@ -16,6 +16,7 @@ pub struct Relay {
     pub version: u8,
     /// 0 pending (checkpoint being written), 1 active.
     pub state: u8,
+    /// 0 running; otherwise the Halt reason: 1 the heaviest chain reorganised past a final block, 2 the Final Block Tree is full.
     pub halted: u8,
     pub creator: Address,
     /// Height of the heaviest known header.
@@ -26,8 +27,21 @@ pub struct Relay {
     pub tip_work: u128,
     pub tip_hash: [u8; 32],
     pub checkpoint: Checkpoint,
-    /// Zeroed space for fields added by later tickets.
-    pub reserved: [u8; 128],
+    /// Height of the newest block in the Final Block Tree (the checkpoint height before the first leaf).
+    pub finalized_height: u32,
+    pub finalized_hash: [u8; 32],
+    /// Leaves in the Final Block Tree: finalizedHeight - checkpoint height.
+    pub leaf_count: u32,
+    /// Tip height when the relay Halted.
+    pub halt_height: u32,
+    /// Hash of the header whose acceptance caused the Halt.
+    pub halt_hash: [u8; 32],
+    /// Zeroed space for later fields.
+    pub reserved: [u8; 52],
+    /// Final Block Tree frontier: the left sibling waiting at each level.
+    pub filled_subtrees: [[u8; 32]; 20],
+    /// Ring of tree roots (32-byte big-endian field elements): the root after n appends is at roots[n % 128]; roots[0] starts as the empty-tree root.
+    pub roots: [[u8; 32]; 128],
 }
 
 pub const RELAY_DISCRIMINATOR: u8 = 1;

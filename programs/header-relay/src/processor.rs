@@ -12,7 +12,13 @@ use zcash_header::{
     pow::{self, Network},
 };
 
-use crate::{error::RelayError, state::*};
+use crate::{
+    error::RelayError,
+    finality::{self, Block, Cursor, Outcome},
+    state::*,
+    tree,
+    zeros::{EMPTY_ROOT, ZEROS},
+};
 
 const SYSTEM_PROGRAM: Address = Address::new_from_array([0; 32]);
 
@@ -39,6 +45,32 @@ mod sys {
     pub fn find_program_address(seeds: &[&[u8]], program_id: &Address) -> (Address, u8) {
         Address::find_program_address(seeds, program_id)
     }
+
+    /// Poseidon over BN254 (circom parameters), big-endian; every input is a 32-byte field element.
+    pub fn poseidon(inputs: &[&[u8; 32]]) -> Result<[u8; 32], pinocchio::error::ProgramError> {
+        let mut vals = [&[0u8; 0][..]; 3];
+        for (v, i) in vals.iter_mut().zip(inputs) {
+            *v = &i[..];
+        }
+        let mut out = [0u8; 32];
+        // SAFETY: `vals` holds `inputs.len()` (ptr, len) slices, the layout the syscall reads.
+        let code = unsafe {
+            pinocchio::syscalls::sol_poseidon(
+                0,
+                0,
+                vals.as_ptr() as *const u8,
+                inputs.len() as u64,
+                out.as_mut_ptr(),
+            )
+        };
+        if code == 0 {
+            Ok(out)
+        } else {
+            Err(pinocchio::error::ProgramError::Custom(
+                crate::error::RelayError::PoseidonFailed as u32,
+            ))
+        }
+    }
 }
 
 #[cfg(not(target_os = "solana"))]
@@ -52,9 +84,13 @@ mod sys {
     pub fn find_program_address(_: &[&[u8]], _: &Address) -> (Address, u8) {
         unreachable!("the Header Relay runs only on Solana")
     }
+
+    pub fn poseidon(_: &[&[u8; 32]]) -> Result<[u8; 32], pinocchio::error::ProgramError> {
+        unreachable!("the Header Relay runs only on Solana")
+    }
 }
 
-use sys::{find_program_address, sha256};
+use sys::{find_program_address, poseidon, sha256};
 
 fn u16_at(d: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([d[at], d[at + 1]])
@@ -327,6 +363,12 @@ fn seal_relay(program_id: &Address, accounts: &[AccountView]) -> ProgramResult {
     let height = u32_at(cp, CP_HEIGHT);
     let hash = array32(cp, CP_HASH);
     r[R_STATE] = STATE_ACTIVE;
+    put(&mut r, R_FINALIZED_HEIGHT, &height.to_le_bytes());
+    put(&mut r, R_FINALIZED_HASH, &hash);
+    for (level, zero) in ZEROS.iter().enumerate() {
+        put(&mut r, R_FILLED + level * 32, zero);
+    }
+    put(&mut r, R_ROOTS, &EMPTY_ROOT);
     put(&mut r, R_TIP_HEIGHT, &height.to_le_bytes());
     put(&mut r, R_TIP_SLOT, &CHECKPOINT_SLOT.to_le_bytes());
     put(&mut r, R_TIP_HASH, &hash);
@@ -534,6 +576,204 @@ struct Parent {
     work: u128,
 }
 
+fn slot_range(index: usize) -> core::ops::Range<usize> {
+    let at = STORE_HEADER_LEN + index * SLOT_LEN;
+    at..at + SLOT_LEN
+}
+
+fn u128_at(d: &[u8], at: usize) -> u128 {
+    let mut w = [0u8; 16];
+    w.copy_from_slice(&d[at..at + 16]);
+    u128::from_le_bytes(w)
+}
+
+/// Checks the candidate's nTime and nBits against the difficulty context of its parent chain.
+#[inline(never)]
+fn check_difficulty(
+    r: &[u8],
+    s: &[u8],
+    capacity: usize,
+    parent: &Parent,
+    rules: &Rules,
+    height: u32,
+    header_bytes: &[u8; HEADER_LEN],
+) -> ProgramResult {
+    let ctx = load_context(
+        r,
+        s,
+        capacity,
+        parent,
+        rules.window(height) + difficulty::MEDIAN_SPAN,
+    )?;
+    let time = header::time(header_bytes);
+    difficulty::check_time(rules, height, time, &ctx.times).map_err(|e| fail(e.into()))?;
+    let expected = difficulty::expected_bits(rules, height, time, &ctx.times, &ctx.bits)
+        .map_err(|e| fail(e.into()))?;
+    if header::bits(header_bytes) != expected {
+        return Err(fail(RelayError::BadDifficulty));
+    }
+    Ok(())
+}
+
+/// What a new tip does to the Final Block Tree.
+enum Step {
+    Append {
+        slots: [u16; finality::MAX_APPENDS],
+        count: usize,
+    },
+    Halt(u8),
+}
+
+/// Asks which blocks the new tip finalises. An error here leaves the relay untouched.
+#[inline(never)]
+fn plan_finality(
+    r: &[u8],
+    s: &[u8],
+    capacity: usize,
+    height: u32,
+    parent: &Parent,
+) -> Result<Step, ProgramError> {
+    let cursor = Cursor {
+        checkpoint_height: u32_at(r, R_CHECKPOINT + CP_HEIGHT),
+        checkpoint_hash: array32(r, R_CHECKPOINT + CP_HASH),
+        height: u32_at(r, R_FINALIZED_HEIGHT),
+        hash: array32(r, R_FINALIZED_HASH),
+    };
+    let depth = u16_at(r, R_CHECKPOINT + CP_FINALITY_DEPTH);
+    let outcome = finality::plan(
+        &cursor,
+        depth,
+        height,
+        parent.slot,
+        parent.seq,
+        |slot, seq| {
+            let index = slot as usize;
+            if index >= capacity || seq == 0 {
+                return None;
+            }
+            let entry = &s[slot_range(index)];
+            (u32_at(entry, SL_SEQ) == seq).then(|| Block {
+                height: u32_at(entry, SL_HEIGHT),
+                hash: array32(entry, SL_HASH),
+                parent_slot: u16_at(entry, SL_PARENT_SLOT),
+                parent_seq: u32_at(entry, SL_PARENT_SEQ),
+            })
+        },
+    );
+    match outcome {
+        Outcome::Reorg => Ok(Step::Halt(HALT_DEEP_REORG)),
+        Outcome::Unreadable => Err(fail(RelayError::ContextUnavailable)),
+        Outcome::Extend { slots, count } => {
+            if u32_at(r, R_LEAF_COUNT) as u64 + count as u64 > TREE_CAPACITY {
+                Ok(Step::Halt(HALT_TREE_FULL))
+            } else {
+                Ok(Step::Append { slots, count })
+            }
+        }
+    }
+}
+
+/// Appends the blocks in `slots` (oldest first) to the Final Block Tree and moves the cursor.
+#[inline(never)]
+fn append_final_blocks(r: &mut [u8], s: &[u8], slots: &[u16]) -> ProgramResult {
+    if slots.is_empty() {
+        return Ok(());
+    }
+    let mut filled = [[0u8; 32]; TREE_DEPTH];
+    for (level, node) in filled.iter_mut().enumerate() {
+        *node = array32(r, R_FILLED + level * 32);
+    }
+    let mut count = u32_at(r, R_LEAF_COUNT);
+    let (mut last_height, mut last_hash) = (0, [0u8; 32]);
+    for slot in slots {
+        let entry = &s[slot_range(*slot as usize)];
+        last_height = u32_at(entry, SL_HEIGHT);
+        last_hash = array32(entry, SL_HASH);
+        let [h, hi, lo] = leaf_inputs(last_height, &array32(entry, SL_MERKLE_ROOT));
+        let leaf = poseidon(&[&h, &hi, &lo])?;
+        let root = tree::append(&mut filled, &ZEROS, count as u64, leaf, |a, b| {
+            poseidon(&[a, b])
+        })?;
+        count += 1;
+        put(r, R_ROOTS + (count as usize % ROOT_HISTORY) * 32, &root);
+    }
+    for (level, node) in filled.iter().enumerate() {
+        put(r, R_FILLED + level * 32, node);
+    }
+    put(r, R_LEAF_COUNT, &count.to_le_bytes());
+    put(r, R_FINALIZED_HEIGHT, &last_height.to_le_bytes());
+    put(r, R_FINALIZED_HASH, &last_hash);
+    Ok(())
+}
+
+/// Chooses the slot for a new header, never one of the protected chains, and applies the admission rule.
+#[inline(never)]
+fn choose_victim(
+    r: &[u8],
+    s: &[u8],
+    capacity: usize,
+    parent: &Parent,
+    class: u16,
+    becomes_tip: bool,
+    new_height: u32,
+) -> Result<usize, ProgramError> {
+    let link = |i: usize| {
+        let entry = &s[slot_range(i)];
+        (
+            u32_at(entry, SL_SEQ),
+            u16_at(entry, SL_PARENT_SLOT),
+            u32_at(entry, SL_PARENT_SEQ),
+        )
+    };
+    let mut protected = [false; MAX_CAPACITY];
+    let tip_depth = protected_tip_depth(u16_at(r, R_CHECKPOINT + CP_FINALITY_DEPTH));
+    mark_chain(
+        u16_at(r, R_TIP_SLOT),
+        u32_at(r, R_TIP_SEQ),
+        tip_depth,
+        link,
+        &mut protected,
+    );
+    let parent_depth = if becomes_tip { tip_depth } else { CONTEXT_LEN };
+    mark_chain(parent.slot, parent.seq, parent_depth, link, &mut protected);
+    let tip_height = if becomes_tip {
+        new_height
+    } else {
+        u32_at(r, R_TIP_HEIGHT)
+    };
+    let victim = choose_slot(
+        capacity,
+        |i| {
+            let entry = &s[slot_range(i)];
+            SlotInfo {
+                seq: u32_at(entry, SL_SEQ),
+                stale: is_too_old(tip_height, u32_at(entry, SL_HEIGHT) + 1),
+                class: difficulty_class(u32_at(entry, SL_BITS)),
+            }
+        },
+        |i| protected[i],
+    )
+    .ok_or(fail(RelayError::StoreFull))?;
+    if !admits(&victim, class, becomes_tip) {
+        return Err(fail(RelayError::NotAdmitted));
+    }
+    Ok(victim.index)
+}
+
+/// Whether a stored header's parent pointer still leads to its parent.
+fn link_is_valid(r: &[u8], s: &[u8], capacity: usize, entry: &[u8], prev: &[u8; 32]) -> bool {
+    let (slot, seq) = (u16_at(entry, SL_PARENT_SLOT), u32_at(entry, SL_PARENT_SEQ));
+    if slot == CHECKPOINT_SLOT {
+        return *prev == array32(r, R_CHECKPOINT + CP_HASH);
+    }
+    let index = slot as usize;
+    if index >= capacity || seq == 0 {
+        return false;
+    }
+    let parent = &s[slot_range(index)];
+    u32_at(parent, SL_SEQ) == seq && parent[SL_HASH..SL_HASH + 32] == *prev
+}
+
 fn accept_header(program_id: &Address, accounts: &[AccountView]) -> ProgramResult {
     let [authority, buffer, relay, store] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
@@ -555,7 +795,7 @@ fn accept_header(program_id: &Address, accounts: &[AccountView]) -> ProgramResul
     if r[R_STATE] != STATE_ACTIVE {
         return Err(fail(RelayError::RelayNotActive));
     }
-    if r[R_HALTED] != 0 {
+    if r[R_HALTED] != HALT_RUNNING {
         return Err(fail(RelayError::RelayHalted));
     }
     if b[B_ACCEPTED] != 0 {
@@ -597,79 +837,84 @@ fn accept_header(program_id: &Address, accounts: &[AccountView]) -> ProgramResul
         height: u32_at(&r, R_CHECKPOINT + CP_HEIGHT),
         work: 0,
     });
+    let mut duplicate = None;
     for i in 0..capacity {
-        let at = STORE_HEADER_LEN + i * SLOT_LEN;
-        let slot = &s[at..at + SLOT_LEN];
+        let slot = &s[slot_range(i)];
         if u32_at(slot, SL_SEQ) == 0 {
             continue;
         }
         if slot[SL_HASH..SL_HASH + 32] == hash {
-            return Err(fail(RelayError::DuplicateHeader));
+            duplicate = Some(i);
+            continue;
         }
         if slot[SL_HASH..SL_HASH + 32] == prev {
-            let mut w = [0u8; 16];
-            w.copy_from_slice(&slot[SL_WORK..SL_WORK + 16]);
             parent = Some(Parent {
                 slot: i as u16,
                 seq: u32_at(slot, SL_SEQ),
                 height: u32_at(slot, SL_HEIGHT),
-                work: u128::from_le_bytes(w),
+                work: u128_at(slot, SL_WORK),
             });
         }
+    }
+    if let Some(i) = duplicate {
+        // A stored header whose parent was evicted and later re-submitted points at a dead slot:
+        // submitting it again repairs the pointer. Otherwise it is a plain duplicate.
+        if link_is_valid(&r, &s, capacity, &s[slot_range(i)], &prev) {
+            return Err(fail(RelayError::DuplicateHeader));
+        }
+        let parent = parent.ok_or(fail(RelayError::UnknownParent))?;
+        let at = slot_range(i).start;
+        put(&mut s, at + SL_PARENT_SLOT, &parent.slot.to_le_bytes());
+        put(&mut s, at + SL_PARENT_SEQ, &parent.seq.to_le_bytes());
+        b[B_ACCEPTED] = 1;
+        return Ok(());
     }
     let parent = parent.ok_or(fail(RelayError::UnknownParent))?;
 
     let height = parent.height + 1;
-    if is_too_old(u32_at(&r, R_TIP_HEIGHT), height) {
+    let tip_height = u32_at(&r, R_TIP_HEIGHT);
+    if is_too_old(tip_height, height) {
         return Err(fail(RelayError::TooOld));
     }
     let rules = Rules {
         network,
         nu7_height: u32_at(&r, R_CHECKPOINT + CP_NU7_HEIGHT),
     };
-    let time = header::time(header_bytes);
-    let ctx = load_context(
-        &r,
-        &s,
-        capacity,
-        &parent,
-        rules.window(height) + difficulty::MEDIAN_SPAN,
-    )?;
-    difficulty::check_time(&rules, height, time, &ctx.times).map_err(|e| fail(e.into()))?;
-    let expected = difficulty::expected_bits(&rules, height, time, &ctx.times, &ctx.bits)
-        .map_err(|e| fail(e.into()))?;
-    if header::bits(header_bytes) != expected {
-        return Err(fail(RelayError::BadDifficulty));
-    }
+    check_difficulty(&r, &s, capacity, &parent, &rules, height, header_bytes)?;
 
-    let mut tip_chain = [false; MAX_CAPACITY];
-    mark_tip_chain(
-        u16_at(&r, R_TIP_SLOT),
-        u32_at(&r, R_TIP_SEQ),
-        |i| {
-            let at = STORE_HEADER_LEN + i * SLOT_LEN;
-            (
-                u32_at(&s, at + SL_SEQ),
-                u16_at(&s, at + SL_PARENT_SLOT),
-                u32_at(&s, at + SL_PARENT_SEQ),
-            )
-        },
-        &mut tip_chain,
-    );
-    let index = choose_slot(
-        capacity,
-        |i| u32_at(&s, STORE_HEADER_LEN + i * SLOT_LEN + SL_SEQ),
-        |i| tip_chain[i] || i == parent.slot as usize,
-    )
-    .ok_or(fail(RelayError::TooOld))?;
-    let seq = count
-        .checked_add(1)
-        .ok_or(ProgramError::ArithmeticOverflow)?;
     let total = parent
         .work
         .checked_add(work)
         .ok_or(fail(RelayError::WorkOverflow))?;
-    let at = STORE_HEADER_LEN + index * SLOT_LEN;
+    let becomes_tip = total > u128_at(&r, R_TIP_WORK);
+    let mut appends = ([0u16; finality::MAX_APPENDS], 0);
+    if becomes_tip {
+        match plan_finality(&r, &s, capacity, height, &parent)? {
+            Step::Halt(reason) => {
+                r[R_HALTED] = reason;
+                put(&mut r, R_HALT_HEIGHT, &tip_height.to_le_bytes());
+                put(&mut r, R_HALT_HASH, &hash);
+                b[B_ACCEPTED] = 1;
+                return Ok(());
+            }
+            Step::Append { slots, count } => appends = (slots, count),
+        }
+    }
+    let index = choose_victim(
+        &r,
+        &s,
+        capacity,
+        &parent,
+        difficulty_class(header::bits(header_bytes)),
+        becomes_tip,
+        height,
+    )?;
+    let seq = count
+        .checked_add(1)
+        .ok_or(ProgramError::ArithmeticOverflow)?;
+    append_final_blocks(&mut r, &s, &appends.0[..appends.1])?;
+
+    let at = slot_range(index).start;
     let slot = &mut s[at..at + SLOT_LEN];
     put(slot, SL_HASH, &hash);
     put(slot, SL_MERKLE_ROOT, &header::merkle_root(header_bytes));
@@ -682,9 +927,7 @@ fn accept_header(program_id: &Address, accounts: &[AccountView]) -> ProgramResul
     put(slot, SL_PARENT_SEQ, &parent.seq.to_le_bytes());
     put(&mut s, S_COUNT, &seq.to_le_bytes());
 
-    let mut tip_work = [0u8; 16];
-    tip_work.copy_from_slice(&r[R_TIP_WORK..R_TIP_WORK + 16]);
-    if total > u128::from_le_bytes(tip_work) {
+    if becomes_tip {
         put(&mut r, R_TIP_HEIGHT, &height.to_le_bytes());
         put(&mut r, R_TIP_SLOT, &(index as u16).to_le_bytes());
         put(&mut r, R_TIP_SEQ, &seq.to_le_bytes());

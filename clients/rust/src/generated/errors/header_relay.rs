@@ -97,9 +97,18 @@ pub enum HeaderRelayError {
     /// 29 - nTime is more than 90 minutes after the median of the previous eleven blocks
     #[error("nTime is more than 90 minutes after the median of the previous eleven blocks")]
     TimeTooFarAhead = 0x1D,
-    /// 30 - The parent chain is no longer stored far enough back to compute the difficulty
-    #[error("The parent chain is no longer stored far enough back to compute the difficulty")]
+    /// 30 - The parent chain is no longer stored far enough back to compute the difficulty or to walk to the finalised block
+    #[error("The parent chain is no longer stored far enough back to compute the difficulty or to walk to the finalised block")]
     ContextUnavailable = 0x1E,
+    /// 31 - The header is not a new tip and is easier than every block it could replace in a full Store
+    #[error("The header is not a new tip and is easier than every block it could replace in a full Store")]
+    NotAdmitted = 0x1F,
+    /// 32 - Every slot of the Store is protected
+    #[error("Every slot of the Store is protected")]
+    StoreFull = 0x20,
+    /// 33 - The Poseidon syscall rejected its input
+    #[error("The Poseidon syscall rejected its input")]
+    PoseidonFailed = 0x21,
 }
 
 impl From<HeaderRelayError> for solana_program_error::ProgramError {
