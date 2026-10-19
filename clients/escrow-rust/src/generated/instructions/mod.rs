@@ -6,7 +6,9 @@
 //!
 
 pub(crate) mod r#create_escrow;
+pub(crate) mod r#private_claim;
 pub(crate) mod r#reveal_claim;
 
 pub use self::r#create_escrow::*;
+pub use self::r#private_claim::*;
 pub use self::r#reveal_claim::*;

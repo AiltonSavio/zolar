@@ -1311,6 +1311,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "groth16-solana"
+version = "0.2.0"
+source = "git+https://github.com/Lightprotocol/groth16-solana?rev=ac9d959f9b14479c20c9d4f8168fa4cc47c13071#ac9d959f9b14479c20c9d4f8168fa4cc47c13071"
+dependencies = [
+ "ark-serialize 0.5.0",
+ "num-bigint 0.4.8",
+ "pinocchio",
+ "serde",
+ "serde_json",
+ "solana-bn254",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2001,6 +2015,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "pinocchio"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c06810dac15a4ef83d3dabdb4f2f22fb39c9adff669cd2781da4f716510a647c"
+dependencies = [
+ "solana-account-view",
+ "solana-address 2.9.0",
+ "solana-define-syscall 4.0.1",
+ "solana-instruction-view",
+ "solana-program-error",
+]
+
+[[package]]
 name = "pkcs8"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2556,6 +2583,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-account-view"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f37ca34c37f92ee341b73d5ce7c8ef5bb38e9a87955b4bd343c63fa18b149215"
+dependencies = [
+ "solana-address 2.9.0",
+ "solana-program-error",
+]
+
+[[package]]
 name = "solana-address"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3033,6 +3070,18 @@ dependencies = [
  "num-traits",
  "serde",
  "serde_derive",
+ "solana-program-error",
+]
+
+[[package]]
+name = "solana-instruction-view"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60147e4d0a4620013df40bf30a86dd299203ff12fcb8b593cd51014fce0875d8"
+dependencies = [
+ "solana-account-view",
+ "solana-address 2.9.0",
+ "solana-define-syscall 4.0.1",
  "solana-program-error",
 ]
 
@@ -4608,6 +4657,8 @@ name = "zolar-claim"
 version = "0.1.0"
 dependencies = [
  "ark-bn254 0.5.0",
+ "ark-ff 0.5.0",
+ "groth16-solana",
  "hex",
  "light-poseidon 0.4.1",
  "serde_json",

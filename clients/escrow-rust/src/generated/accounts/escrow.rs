@@ -39,7 +39,7 @@ pub struct Escrow {
     pub created_tip: u32,
     /// Zcash height by which the payment must be mined.
     pub expiry_height: u32,
-    /// 0 a Reveal Claim may settle; 1 only a Private Claim may (ticket 10).
+    /// 0 a Reveal Claim or a Private Claim may settle; 1 only a Private Claim may.
     pub claim_mode: u8,
     pub reserved: [u8; 63],
 }

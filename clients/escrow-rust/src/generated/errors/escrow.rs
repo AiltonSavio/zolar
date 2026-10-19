@@ -57,6 +57,9 @@ pub enum EscrowError {
     /// 15 - The claim mode is not supported, or the Escrow does not allow a Reveal Claim
     #[error("The claim mode is not supported, or the Escrow does not allow a Reveal Claim")]
     ClaimModeNotAllowed = 0xF,
+    /// 16 - The Groth16 proof does not verify against the Escrow's public inputs
+    #[error("The Groth16 proof does not verify against the Escrow's public inputs")]
+    InvalidProof = 0x10,
 }
 
 impl From<EscrowError> for solana_program_error::ProgramError {

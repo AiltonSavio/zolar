@@ -35,7 +35,7 @@ createdAt: bigint;
 createdTip: number; 
 /** Zcash height by which the payment must be mined. */
 expiryHeight: number; 
-/** 0 a Reveal Claim may settle; 1 only a Private Claim may (ticket 10). */
+/** 0 a Reveal Claim or a Private Claim may settle; 1 only a Private Claim may. */
 claimMode: number; reserved: ReadonlyUint8Array;  };
 
 export type EscrowArgs = { version: number; 
@@ -59,7 +59,7 @@ createdAt: number | bigint;
 createdTip: number; 
 /** Zcash height by which the payment must be mined. */
 expiryHeight: number; 
-/** 0 a Reveal Claim may settle; 1 only a Private Claim may (ticket 10). */
+/** 0 a Reveal Claim or a Private Claim may settle; 1 only a Private Claim may. */
 claimMode: number; reserved: ReadonlyUint8Array;  };
 
 /** Gets the encoder for {@link EscrowArgs} account data. */

@@ -7,4 +7,5 @@
  */
 
 export * from './createEscrow';
+export * from './privateClaim';
 export * from './revealClaim';

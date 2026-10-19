@@ -107,3 +107,37 @@ jobs:
           pnpm --dir clients/codama install --frozen-lockfile
           pnpm --dir clients/codama generate
           test -z "$(git status --porcelain --untracked-files=all -- clients)"
+
+  circuits:
+    runs-on: ubuntu-latest
+    env:
+      ZOLAR_DATA: ${{ github.workspace }}/.zolar-data
+      ZOLAR_NO_CAP: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@1.91.1
+      - name: Install circom 2.2.3
+        run: |
+          mkdir -p .zolar-data/bin
+          curl -sSfL -o .zolar-data/bin/circom https://github.com/iden3/circom/releases/download/v2.2.3/circom-linux-amd64
+          echo "85342c7ff332d948df7c0c50ecf201e6129349aef550ce873f3c811b79fe53a3  .zolar-data/bin/circom" | sha256sum -c -
+          chmod +x .zolar-data/bin/circom
+      - name: Circuit tests (depth-2 instance, real swap transactions)
+        run: |
+          pnpm --dir circuits install --frozen-lockfile
+          circuits/scripts/build.sh 2
+          node --test circuits/test/*.test.mjs
+      - name: The production circuit still compiles to the committed R1CS
+        run: |
+          circuits/scripts/build.sh 8
+          test "$(sha256sum "$ZOLAR_DATA/build/d8/private_claim_d8.r1cs" | cut -d' ' -f1)" = "$(cut -d' ' -f1 circuits/private_claim_d8.r1cs.sha256)"
+      - name: The verifying key constants are generated from the committed verification key
+        run: |
+          cargo run -p zolar-claim --example gen_vk -- circuits/verification_key.json programs/escrow/src
+          test -z "$(git status --porcelain -- programs/escrow/src)"

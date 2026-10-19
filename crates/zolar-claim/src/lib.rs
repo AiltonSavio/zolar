@@ -9,6 +9,8 @@ use ark_bn254::Fr;
 use light_poseidon::{Poseidon, PoseidonBytesHasher, PoseidonError};
 use sha2::{Digest, Sha256};
 
+pub mod private_claim;
+
 /// Levels of the Final Block Tree.
 pub const DEPTH: usize = 20;
 

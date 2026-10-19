@@ -27,4 +27,6 @@ pub enum EscrowError {
     BondNotSupported = 14,
     /// The claim mode is not supported, or the Escrow does not allow a Reveal Claim.
     ClaimModeNotAllowed = 15,
+    /// The Groth16 proof does not verify against the Escrow's public inputs.
+    InvalidProof = 16,
 }
