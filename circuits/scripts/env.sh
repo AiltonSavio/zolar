@@ -7,7 +7,7 @@ ZOLAR_DATA="${ZOLAR_DATA:-$CIRCUITS/../../../.zolar-data/t10}"
 mkdir -p "$ZOLAR_DATA"
 ZOLAR_DATA="$(cd "$ZOLAR_DATA" && pwd)"
 CIRCOM="${CIRCOM:-$ZOLAR_DATA/bin/circom}"
-RAPIDSNARK="${RAPIDSNARK:-$(ls "$ZOLAR_DATA"/rs/rapidsnark-*/bin/prover 2>/dev/null | head -1)}"
+RAPIDSNARK="${RAPIDSNARK:-$(compgen -G "$ZOLAR_DATA/rs/rapidsnark-*/bin/prover" | head -1 || true)}"
 SNARKJS="node --max-old-space-size=${ZOLAR_NODE_MB:-1500} $CIRCUITS/node_modules/snarkjs/build/cli.cjs"
 
 # capped <command...>: run under a hard memory cap and print wall time and peak RSS.
