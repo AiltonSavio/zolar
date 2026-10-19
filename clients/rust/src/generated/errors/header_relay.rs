@@ -103,12 +103,15 @@ pub enum HeaderRelayError {
     /// 31 - The header is not a new tip and is easier than every block it could replace in a full Store
     #[error("The header is not a new tip and is easier than every block it could replace in a full Store")]
     NotAdmitted = 0x1F,
-    /// 32 - Every slot of the Store is protected
+    /// 32 - The new tip would finalise more than 40 blocks at once
+    #[error("The new tip would finalise more than 40 blocks at once")]
+    TooManyAppends = 0x20,
+    /// 33 - Every slot of the Store is protected
     #[error("Every slot of the Store is protected")]
-    StoreFull = 0x20,
-    /// 33 - The Poseidon syscall rejected its input
+    StoreFull = 0x21,
+    /// 34 - The Poseidon syscall rejected its input
     #[error("The Poseidon syscall rejected its input")]
-    PoseidonFailed = 0x21,
+    PoseidonFailed = 0x22,
 }
 
 impl From<HeaderRelayError> for solana_program_error::ProgramError {

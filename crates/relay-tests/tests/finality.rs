@@ -1,7 +1,8 @@
 //! Final Block Tree, Finality Depth and the read interface, driven through the generated client.
 
 use header_relay_interface::{
-    RelayView, HALT_DEEP_REORG, HALT_TREE_FULL, ROOT_HISTORY, R_LEAF_COUNT, TREE_CAPACITY,
+    RelayView, HALT_DEEP_REORG, HALT_TREE_FULL, ROOT_HISTORY, R_FINALIZED_HASH, R_FINALIZED_HEIGHT,
+    R_LEAF_COUNT, TREE_CAPACITY,
 };
 use relay_tests::{synthetic::*, *};
 use solana_address::Address;
@@ -108,6 +109,7 @@ fn send_all(h: &mut Harness, relay: &Address, blocks: &[Synth]) {
 const DUPLICATE_HEADER: u32 = 13;
 const RELAY_HALTED: u32 = 16;
 const CONTEXT_UNAVAILABLE: u32 = 30;
+const TOO_MANY_APPENDS: u32 = 32;
 
 fn build_trunk(h: &mut Harness, depth: u16, blocks: usize) -> (Address, Branch, Vec<Synth>) {
     let checkpoint = synthetic_checkpoint(depth, 0);
@@ -344,22 +346,60 @@ fn a_full_final_block_tree_halts_the_relay_instead_of_bricking_it() {
     let mut h = Harness::new();
     let checkpoint = synthetic_checkpoint(1, 0);
     let relay = h.init_relay(&checkpoint);
+    // Forge the counter to one leaf below capacity (the frontier is left as it is: only the
+    // boundary is under test, not the hashes).
     let mut account = h.svm.get_account(&relay).unwrap();
-    account.data[R_LEAF_COUNT..R_LEAF_COUNT + 4]
-        .copy_from_slice(&(TREE_CAPACITY as u32).to_le_bytes());
+    let last = (TREE_CAPACITY - 1) as u32;
+    account.data[R_LEAF_COUNT..R_LEAF_COUNT + 4].copy_from_slice(&last.to_le_bytes());
     h.svm.set_account(relay, account).unwrap();
     let mut branch = Branch::new(&checkpoint);
     send_all(&mut h, &relay, &[branch.next(1)]);
-    h.relay_synthetic(&relay, &branch.next(2).raw)
+    send_all(&mut h, &relay, &[branch.next(2)]);
+    let data = h.relay_data(&relay);
+    let view = RelayView::parse(&data).unwrap();
+    assert_eq!(
+        view.leaf_count() as u64,
+        TREE_CAPACITY,
+        "the last leaf fits"
+    );
+    assert!(!view.is_halted());
+    h.relay_synthetic(&relay, &branch.next(3).raw)
         .expect("the Halting header succeeds");
     let data = h.relay_data(&relay);
     let view = RelayView::parse(&data).unwrap();
     assert_eq!(view.halt_reason(), HALT_TREE_FULL);
-    assert_eq!(view.tip_height(), CHECKPOINT_HEIGHT + 1);
+    assert_eq!(view.tip_height(), CHECKPOINT_HEIGHT + 2);
+    assert_eq!(view.leaf_count() as u64, TREE_CAPACITY);
     assert_eq!(
-        h.relay_synthetic(&relay, &branch.next(3).raw),
+        h.relay_synthetic(&relay, &branch.next(4).raw),
         Err(RELAY_HALTED)
     );
+}
+
+#[test]
+fn a_tip_that_finalises_forty_blocks_is_accepted_and_forty_one_is_refused() {
+    let mut h = Harness::new();
+    let (relay, mut branch, chain) = build_trunk(&mut h, 1, 60);
+    // Rewind the cursor (forged) so the next header has 40, then 41, blocks to append.
+    let rewind = |h: &mut Harness, to: usize| {
+        let mut account = h.svm.get_account(&relay).unwrap();
+        let height = CHECKPOINT_HEIGHT + to as u32;
+        account.data[R_FINALIZED_HEIGHT..R_FINALIZED_HEIGHT + 4]
+            .copy_from_slice(&height.to_le_bytes());
+        account.data[R_FINALIZED_HASH..R_FINALIZED_HASH + 32].copy_from_slice(&chain[to - 1].hash);
+        account.data[R_LEAF_COUNT..R_LEAF_COUNT + 4].copy_from_slice(&(to as u32).to_le_bytes());
+        h.svm.set_account(relay, account).unwrap();
+    };
+    let next = branch.next(61);
+    rewind(&mut h, 19);
+    assert_eq!(h.relay_synthetic(&relay, &next.raw), Err(TOO_MANY_APPENDS));
+    rewind(&mut h, 20);
+    let cu = h.relay_synthetic(&relay, &next.raw).expect("forty appends");
+    println!("CU AcceptHeader alone with 40 appends: {cu}");
+    let data = h.relay_data(&relay);
+    let view = RelayView::parse(&data).unwrap();
+    assert_eq!(view.finalized_height(), CHECKPOINT_HEIGHT + 60);
+    assert_eq!(view.leaf_count(), 60);
 }
 
 #[test]

@@ -319,7 +319,7 @@ const instructions = [
   instructionNode({
     name: 'acceptHeader',
     docs: [
-      'After the Equihash solution verified: checks proof of work, difficulty, median time and the parent, stores the header, follows the heaviest chain and appends newly final blocks (at most 40 per header; a tip further ahead is caught up by the next headers) to the Final Block Tree. A reorganisation past a final block does not fail: it succeeds and Halts the relay. Re-submitting a stored header whose parent was evicted and re-added repairs its parent pointer.',
+      'After the Equihash solution verified: checks proof of work, difficulty, median time and the parent, stores the header, follows the heaviest chain and appends newly final blocks (at most 40 per header; a header that would append more is refused) to the Final Block Tree. A reorganisation past a final block does not fail: it succeeds and Halts the relay. Re-submitting a stored header whose parent was evicted and re-added repairs its parent pointer.',
     ],
     discriminators: [fieldDiscriminatorNode('discriminator')],
     accounts: [
@@ -384,6 +384,7 @@ const errors = [
   ['timeTooFarAhead', 'nTime is more than 90 minutes after the median of the previous eleven blocks'],
   ['contextUnavailable', 'The parent chain is no longer stored far enough back to compute the difficulty or to walk to the finalised block'],
   ['notAdmitted', 'The header is not a new tip and is easier than every block it could replace in a full Store'],
+  ['tooManyAppends', 'The new tip would finalise more than 40 blocks at once'],
   ['storeFull', 'Every slot of the Store is protected'],
   ['poseidonFailed', 'The Poseidon syscall rejected its input'],
 ].map(([name, message], i) => errorNode({ name, code: i + 1, message }));

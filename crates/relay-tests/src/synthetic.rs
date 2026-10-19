@@ -182,13 +182,11 @@ impl Harness {
     pub fn relay_synthetic(&mut self, relay: &Address, header: &[u8]) -> Result<u64, u32> {
         let buffer = Self::buffer_addr(relay, &self.payer.pubkey(), 0);
         let split = 850;
-        self.ok(
-            &[
-                self.create_buffer_ix(relay, 0),
-                self.write_ix(&buffer, 0, &header[..split]),
-            ],
-            &[],
-        );
+        let create = [
+            self.create_buffer_ix(relay, 0),
+            self.write_ix(&buffer, 0, &header[..split]),
+        ];
+        self.send_code(&create)?;
         self.ok(&[self.write_ix(&buffer, split, &header[split..])], &[]);
         let mut account = self.svm.get_account(&buffer).unwrap();
         account.data[VERIFIER_OFFSET] = 2;
@@ -197,7 +195,14 @@ impl Harness {
             set_compute_limit(crate::CU_CAP),
             self.accept_ix(&buffer, relay),
         ];
-        let result = match self.send(&accept, &[]) {
+        let result = self.send_code(&accept);
+        self.ok(&[self.close_ix(&buffer)], &[]);
+        result
+    }
+
+    /// Sends, returning the compute units used or the custom error code.
+    fn send_code(&mut self, ixs: &[solana_instruction::Instruction]) -> Result<u64, u32> {
+        match self.send(ixs, &[]) {
             Ok(meta) => Ok(meta.compute_units_consumed),
             Err(e) => match e.err {
                 solana_transaction_error::TransactionError::InstructionError(
@@ -206,8 +211,6 @@ impl Harness {
                 ) => Err(code),
                 other => panic!("unexpected failure {other:?}\n{}", e.meta.pretty_logs()),
             },
-        };
-        self.ok(&[self.close_ix(&buffer)], &[]);
-        result
+        }
     }
 }

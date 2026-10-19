@@ -205,7 +205,10 @@ mod tests {
     #[test]
     fn the_store_minimum_holds_the_protected_chains_and_room_to_evict() {
         assert_eq!(protected_tip_depth(30), 204);
+        // Worst case, a header that is not the tip: the tip chain, a fork's 113 context blocks, headroom.
         assert!(MIN_CAPACITY >= protected_tip_depth(MAX_FINALITY_DEPTH) + CONTEXT_LEN + 80);
+        // A header that becomes the tip protects its own chain only.
+        assert!(MIN_CAPACITY > protected_tip_depth(MAX_FINALITY_DEPTH) + 100);
         assert!(MIN_CAPACITY <= MAX_CAPACITY);
     }
 

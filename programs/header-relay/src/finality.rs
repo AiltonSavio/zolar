@@ -3,9 +3,9 @@
 //! A block is final once Finality Depth `D` blocks follow it on the tip's chain: a tip at height `T`
 //! finalises every block up to `T - D`. The relay keeps a cursor `F`, the height of the last block
 //! appended to the Final Block Tree, and moves it on every tip change, so the cursor block is always
-//! on the tip's chain unless the relay Halted. One header appends at most `MAX_APPENDS` blocks; if a tip
-//! is further ahead the cursor lags and the following headers catch up. A lagging cursor is safe: Halt
-//! and Claims both look only at what the tree holds.
+//! on the tip's chain unless the relay Halted and, after every accepted header, `F` is the tip height
+//! minus `D` (or higher, when a heavier chain is shorter). A header that would append more than
+//! `MAX_APPENDS` blocks is refused whole, so the cursor never lags.
 
 use crate::state::CHECKPOINT_SLOT;
 
@@ -42,6 +42,8 @@ pub enum Outcome {
     Reorg,
     /// An ancestor was evicted, so the question cannot be answered. Nothing may change.
     Unreadable,
+    /// The new tip's chain contains the cursor block but would finalise more than `MAX_APPENDS` blocks.
+    TooManyAppends,
 }
 
 /// Plans the effect of a header at `height` whose parent is at `(parent_slot, parent_seq)` becoming the
@@ -57,9 +59,7 @@ pub fn plan(
     if height <= cursor.height {
         return Outcome::Reorg;
     }
-    let finalised_top = height
-        .saturating_sub(depth as u32)
-        .min(cursor.height.saturating_add(MAX_APPENDS as u32));
+    let finalised_top = height.saturating_sub(depth as u32);
     let count = finalised_top.saturating_sub(cursor.height) as usize;
     let mut slots = [0u16; MAX_APPENDS];
     let (mut slot, mut seq) = (parent_slot, parent_seq);
@@ -76,14 +76,19 @@ pub fn plan(
             if hash != cursor.hash {
                 return Outcome::Reorg;
             }
+            if count > MAX_APPENDS {
+                return Outcome::TooManyAppends;
+            }
             return Outcome::Extend { slots, count };
         }
         if block_height < cursor.height {
             return Outcome::Unreadable;
         }
         if block_height <= finalised_top {
-            // Blocks F+1..=top are met top-down: fill the array from the back of the used part.
-            slots[(block_height - cursor.height - 1) as usize] = slot;
+            // Blocks F+1..=top are met top-down; `slots` keeps the first `MAX_APPENDS` of them.
+            if let Some(entry) = slots.get_mut((block_height - cursor.height - 1) as usize) {
+                *entry = slot;
+            }
         }
         match next {
             Some((s, q)) => (slot, seq) = (s, q),
@@ -223,33 +228,25 @@ mod tests {
     }
 
     #[test]
-    fn a_tip_far_ahead_appends_forty_and_the_cursor_catches_up_later() {
+    fn at_most_forty_blocks_become_final_at_once() {
+        let (s, q) = parent_of(140);
+        let ok = plan(&cursor_at(CP), 1, 141, s, q, chain(140, 0));
+        let Outcome::Extend { slots, count } = ok else {
+            panic!("expected extend")
+        };
+        assert_eq!((count, slots[0], slots[39]), (40, 0, 39));
         let (s, q) = parent_of(141);
-        let Outcome::Extend { slots, count } = plan(&cursor_at(CP), 1, 142, s, q, chain(141, 0))
-        else {
-            panic!("expected extend")
-        };
-        assert_eq!(count, 40, "blocks 101..=140 now, 141 on the next header");
-        assert_eq!((slots[0], slots[39]), (0, 39));
-        let Outcome::Extend { count, .. } = plan(
-            &cursor_at(140),
-            1,
-            143,
-            parent_of(142).0,
-            parent_of(142).1,
-            chain(142, 0),
-        ) else {
-            panic!("expected extend")
-        };
-        assert_eq!(count, 2, "141 and 142");
+        let too = plan(&cursor_at(CP), 1, 142, s, q, chain(141, 0));
+        assert_eq!(too, Outcome::TooManyAppends);
     }
 
     #[test]
-    fn a_conflicting_chain_is_a_reorg_however_far_ahead_it_is() {
+    fn a_conflicting_chain_is_a_reorg_even_when_it_is_far_ahead() {
         let (s, q) = parent_of(180);
         assert_eq!(
             plan(&cursor_at(105), 1, 181, s, q, chain(180, 1)),
-            Outcome::Reorg
+            Outcome::Reorg,
+            "the cursor check comes before the append limit"
         );
     }
 }

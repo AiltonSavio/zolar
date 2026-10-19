@@ -409,8 +409,14 @@ fn create_buffer(program_id: &Address, accounts: &[AccountView], args: &[u8]) ->
     };
     require_signer(authority)?;
     check_kind(program_id, relay, DISC_RELAY, RELAY_LEN)?;
-    if relay.try_borrow()?[R_STATE] != STATE_ACTIVE {
-        return Err(fail(RelayError::RelayNotActive));
+    {
+        let r = relay.try_borrow()?;
+        if r[R_STATE] != STATE_ACTIVE {
+            return Err(fail(RelayError::RelayNotActive));
+        }
+        if r[R_HALTED] != HALT_RUNNING {
+            return Err(fail(RelayError::RelayHalted));
+        }
     }
     create_pda::<5>(
         program_id,
@@ -663,6 +669,7 @@ fn plan_finality(
     match outcome {
         Outcome::Reorg => Ok(Step::Halt(HALT_DEEP_REORG)),
         Outcome::Unreadable => Err(fail(RelayError::ContextUnavailable)),
+        Outcome::TooManyAppends => Err(fail(RelayError::TooManyAppends)),
         Outcome::Extend { slots, count } => {
             if u32_at(r, R_LEAF_COUNT) as u64 + count as u64 > TREE_CAPACITY {
                 Ok(Step::Halt(HALT_TREE_FULL))
@@ -725,17 +732,23 @@ fn choose_victim(
             u32_at(entry, SL_PARENT_SEQ),
         )
     };
+    // The chain the relay will follow after this header is what must stay readable: the new parent's
+    // chain when the header becomes the tip, otherwise the current tip's chain plus the parent's
+    // difficulty context (which is a competing branch above the fork point).
     let mut protected = [false; MAX_CAPACITY];
     let tip_depth = protected_tip_depth(u16_at(r, R_CHECKPOINT + CP_FINALITY_DEPTH));
-    mark_chain(
-        u16_at(r, R_TIP_SLOT),
-        u32_at(r, R_TIP_SEQ),
-        tip_depth,
-        link,
-        &mut protected,
-    );
-    let parent_depth = if becomes_tip { tip_depth } else { CONTEXT_LEN };
-    mark_chain(parent.slot, parent.seq, parent_depth, link, &mut protected);
+    if becomes_tip {
+        mark_chain(parent.slot, parent.seq, tip_depth, link, &mut protected);
+    } else {
+        mark_chain(
+            u16_at(r, R_TIP_SLOT),
+            u32_at(r, R_TIP_SEQ),
+            tip_depth,
+            link,
+            &mut protected,
+        );
+        mark_chain(parent.slot, parent.seq, CONTEXT_LEN, link, &mut protected);
+    }
     let tip_height = if becomes_tip {
         new_height
     } else {
