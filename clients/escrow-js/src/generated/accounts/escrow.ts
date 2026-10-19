@@ -15,7 +15,7 @@ export function getEscrowDiscriminatorBytes(): ReadonlyUint8Array { return getU8
 
 /** SPL tokens a Payee locked for a Payer, released by a Claim. 300 bytes, PDA ["escrow", payee, commitment]. */
 export type Escrow = { discriminator: number; version: number; 
-/** 0 open. A Claim or refund closes the account. */
+/** 0 open; 1 refund requested (a Claim still settles until the Refund closes the account). */
 state: number; bump: number; 
 /** Created the Escrow; gets the rent back and, with refunds, the tokens. */
 payee: Address; 
@@ -27,8 +27,10 @@ vault: Address;
 relay: Address; 
 /** Payment Commitment: Poseidon(txid_hi, txid_lo, salt). */
 commitment: ReadonlyUint8Array; amount: bigint; 
-/** Used by the Bond (ticket 09). */
-bondRequired: bigint; bondDeposited: bigint; 
+/** Tokens of the mint the Payer must lock before a Claim can settle. */
+bondRequired: bigint; 
+/** Equals bondRequired once the Payer deposited; the Bond sits in the vault. */
+bondDeposited: bigint; 
 /** Solana unix time of creation. */
 createdAt: bigint; 
 /** Relay tip height at creation; a Claim must prove a block above it. */
@@ -36,10 +38,12 @@ createdTip: number;
 /** Zcash height by which the payment must be mined. */
 expiryHeight: number; 
 /** 0 a Reveal Claim or a Private Claim may settle; 1 only a Private Claim may. */
-claimMode: number; reserved: ReadonlyUint8Array;  };
+claimMode: number; 
+/** Solana unix time of RequestRefund; 0 while state is 0. */
+refundRequestedAt: bigint; reserved: ReadonlyUint8Array;  };
 
 export type EscrowArgs = { version: number; 
-/** 0 open. A Claim or refund closes the account. */
+/** 0 open; 1 refund requested (a Claim still settles until the Refund closes the account). */
 state: number; bump: number; 
 /** Created the Escrow; gets the rent back and, with refunds, the tokens. */
 payee: Address | HasAddress; 
@@ -51,8 +55,10 @@ vault: Address | HasAddress;
 relay: Address | HasAddress; 
 /** Payment Commitment: Poseidon(txid_hi, txid_lo, salt). */
 commitment: ReadonlyUint8Array; amount: number | bigint; 
-/** Used by the Bond (ticket 09). */
-bondRequired: number | bigint; bondDeposited: number | bigint; 
+/** Tokens of the mint the Payer must lock before a Claim can settle. */
+bondRequired: number | bigint; 
+/** Equals bondRequired once the Payer deposited; the Bond sits in the vault. */
+bondDeposited: number | bigint; 
 /** Solana unix time of creation. */
 createdAt: number | bigint; 
 /** Relay tip height at creation; a Claim must prove a block above it. */
@@ -60,16 +66,18 @@ createdTip: number;
 /** Zcash height by which the payment must be mined. */
 expiryHeight: number; 
 /** 0 a Reveal Claim or a Private Claim may settle; 1 only a Private Claim may. */
-claimMode: number; reserved: ReadonlyUint8Array;  };
+claimMode: number; 
+/** Solana unix time of RequestRefund; 0 while state is 0. */
+refundRequestedAt: number | bigint; reserved: ReadonlyUint8Array;  };
 
 /** Gets the encoder for {@link EscrowArgs} account data. */
 export function getEscrowEncoder(): FixedSizeEncoder<EscrowArgs> {
-    return transformEncoder(getStructEncoder([['discriminator', getU8Encoder()], ['version', getU8Encoder()], ['state', getU8Encoder()], ['bump', getU8Encoder()], ['payee', getAddressEncoder()], ['payout', getAddressEncoder()], ['mint', getAddressEncoder()], ['vault', getAddressEncoder()], ['relay', getAddressEncoder()], ['commitment', fixEncoderSize(getBytesEncoder(), 32)], ['amount', getU64Encoder()], ['bondRequired', getU64Encoder()], ['bondDeposited', getU64Encoder()], ['createdAt', getI64Encoder()], ['createdTip', getU32Encoder()], ['expiryHeight', getU32Encoder()], ['claimMode', getU8Encoder()], ['reserved', fixEncoderSize(getBytesEncoder(), 63)]]), (value) => ({ ...value, discriminator: ESCROW_DISCRIMINATOR }));
+    return transformEncoder(getStructEncoder([['discriminator', getU8Encoder()], ['version', getU8Encoder()], ['state', getU8Encoder()], ['bump', getU8Encoder()], ['payee', getAddressEncoder()], ['payout', getAddressEncoder()], ['mint', getAddressEncoder()], ['vault', getAddressEncoder()], ['relay', getAddressEncoder()], ['commitment', fixEncoderSize(getBytesEncoder(), 32)], ['amount', getU64Encoder()], ['bondRequired', getU64Encoder()], ['bondDeposited', getU64Encoder()], ['createdAt', getI64Encoder()], ['createdTip', getU32Encoder()], ['expiryHeight', getU32Encoder()], ['claimMode', getU8Encoder()], ['refundRequestedAt', getI64Encoder()], ['reserved', fixEncoderSize(getBytesEncoder(), 55)]]), (value) => ({ ...value, discriminator: ESCROW_DISCRIMINATOR }));
 }
 
 /** Gets the decoder for {@link Escrow} account data. */
 export function getEscrowDecoder(): FixedSizeDecoder<Escrow> {
-    return getStructDecoder([['discriminator', getU8Decoder()], ['version', getU8Decoder()], ['state', getU8Decoder()], ['bump', getU8Decoder()], ['payee', getAddressDecoder()], ['payout', getAddressDecoder()], ['mint', getAddressDecoder()], ['vault', getAddressDecoder()], ['relay', getAddressDecoder()], ['commitment', fixDecoderSize(getBytesDecoder(), 32)], ['amount', getU64Decoder()], ['bondRequired', getU64Decoder()], ['bondDeposited', getU64Decoder()], ['createdAt', getI64Decoder()], ['createdTip', getU32Decoder()], ['expiryHeight', getU32Decoder()], ['claimMode', getU8Decoder()], ['reserved', fixDecoderSize(getBytesDecoder(), 63)]]);
+    return getStructDecoder([['discriminator', getU8Decoder()], ['version', getU8Decoder()], ['state', getU8Decoder()], ['bump', getU8Decoder()], ['payee', getAddressDecoder()], ['payout', getAddressDecoder()], ['mint', getAddressDecoder()], ['vault', getAddressDecoder()], ['relay', getAddressDecoder()], ['commitment', fixDecoderSize(getBytesDecoder(), 32)], ['amount', getU64Decoder()], ['bondRequired', getU64Decoder()], ['bondDeposited', getU64Decoder()], ['createdAt', getI64Decoder()], ['createdTip', getU32Decoder()], ['expiryHeight', getU32Decoder()], ['claimMode', getU8Decoder()], ['refundRequestedAt', getI64Decoder()], ['reserved', fixDecoderSize(getBytesDecoder(), 55)]]);
 }
 
 /** Gets the codec for {@link Escrow} account data. */

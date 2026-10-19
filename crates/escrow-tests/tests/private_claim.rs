@@ -18,7 +18,10 @@ fn funded(claim_mode: u8) -> (World, Deal, PrivateFixture) {
     let fx = PrivateFixture::load();
     let mut w = World::new(FINALITY_DEPTH);
     let tip = w.tip();
-    assert_eq!(tip, 4_000_002, "the proof was made for an Escrow created at tip 4,000,002");
+    assert_eq!(
+        tip, 4_000_002,
+        "the proof was made for an Escrow created at tip 4,000,002"
+    );
     let deal = w.deal_with_salt(fx.txids.clone(), fx.index, fx.salt, tip + 15);
     w.create_with_mode(&deal, claim_mode);
     w.forge_latest_root(fx.root());
@@ -41,8 +44,16 @@ fn a_real_proof_pays_the_payer_and_closes_the_escrow() {
     println!("CU PrivateClaim {cu}");
 
     assert_eq!(token_balance(&w.h, &w.payer_token), Some(deal.amount));
-    assert!(w.h.svm.get_account(&deal.escrow).is_none_or(|a| a.lamports == 0));
-    assert!(w.h.svm.get_account(&deal.vault).is_none_or(|a| a.lamports == 0));
+    assert!(w
+        .h
+        .svm
+        .get_account(&deal.escrow)
+        .is_none_or(|a| a.lamports == 0));
+    assert!(w
+        .h
+        .svm
+        .get_account(&deal.vault)
+        .is_none_or(|a| a.lamports == 0));
     let payee_after = w.h.svm.get_balance(&w.payee.pubkey()).unwrap();
     assert_eq!(payee_after - payee_before, escrow_lamports + vault_lamports);
 }
@@ -134,7 +145,10 @@ fn a_root_that_aged_out_of_the_history_is_rejected() {
     let start = w.tip();
     w.finalize(start + appended);
     let data = w.h.relay_data(&w.relay);
-    assert!(!data[R_ROOTS..].windows(32).any(|r| r == fx.root()), "root still stored");
+    assert!(
+        !data[R_ROOTS..].windows(32).any(|r| r == fx.root()),
+        "root still stored"
+    );
     let ix = w.private_claim_ix(&deal, &fx.proof, fx.root());
     assert_eq!(w.claim_err(ix), UNKNOWN_ROOT);
 }
@@ -145,7 +159,9 @@ fn the_proof_pays_only_the_stored_payout_whoever_submits_it() {
     let stranger = w.h.payer.pubkey();
     let loot = solana_address::Address::new_unique();
     let mint = w.mint;
-    w.h.svm.set_account(loot, token_account(&mint, &stranger, 0)).unwrap();
+    w.h.svm
+        .set_account(loot, token_account(&mint, &stranger, 0))
+        .unwrap();
     let mut theirs = w.private_claim_ix(&deal, &fx.proof, fx.root());
     theirs.accounts[3].pubkey = loot;
     assert_eq!(w.claim_err(theirs), BAD_TOKEN_ACCOUNT);

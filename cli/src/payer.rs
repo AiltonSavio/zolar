@@ -7,7 +7,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail, ensure};
-use escrow_client::{accounts::Escrow, instructions::RevealClaimBuilder};
+use escrow_client::{
+    accounts::Escrow,
+    instructions::{DepositBondBuilder, RevealClaimBuilder},
+};
 use solana_address::Address;
 use solana_signer::Signer;
 use zolar_claim::{FinalBlockTree, block_leaf, tx_merkle_path};
@@ -83,6 +86,8 @@ pub struct Check<'a> {
     pub expected_mint: Address,
     /// The least tokens (smallest unit) the Payer agreed to be paid.
     pub min_amount: u64,
+    /// The most the Payer agreed to lock as a Bond.
+    pub max_bond: u64,
     /// How long to wait for the Escrow to be finalized on Solana.
     pub finalized_wait: Duration,
 }
@@ -94,8 +99,12 @@ pub fn check_terms(
     relay: &Address,
     expected_mint: &Address,
     min_amount: u64,
+    max_bond: u64,
 ) -> Result<()> {
-    ensure!(escrow.state == 0, "the Escrow is not open");
+    ensure!(
+        escrow.state == 0,
+        "the Escrow is not open (a refund may be under way)"
+    );
     ensure!(
         &escrow.relay == relay,
         "the Escrow trusts relay {}, not the expected {relay}",
@@ -117,10 +126,30 @@ pub fn check_terms(
         escrow.amount
     );
     ensure!(
-        escrow.bond_required == 0,
-        "the Escrow asks for a Bond; this version cannot lock one"
+        escrow.bond_required <= max_bond,
+        "the Escrow asks for a Bond of {}, more than the agreed {max_bond}",
+        escrow.bond_required
     );
     Ok(())
+}
+
+/// Waits until the Bond is in a finalized Escrow: once a Zcash payment is out, a rolled back deposit
+/// could not be repeated after a refund request.
+fn bond_is_finalized(chains: &Chains, escrow_address: Address, required: u64) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        let data =
+            finalized_account_within(&chains.rpc_url, &escrow_address, Duration::from_secs(120))?;
+        if read_escrow(&data)?.bond_deposited >= required {
+            println!("the Bond is finalized on Solana");
+            return Ok(());
+        }
+        ensure!(
+            started.elapsed() < Duration::from_secs(120),
+            "the Bond is not finalized on Solana after 2 minutes; do not pay yet"
+        );
+        sleep(Duration::from_secs(5));
+    }
 }
 
 /// Everything a Payer verifies before signing. Read-only.
@@ -143,6 +172,7 @@ pub fn check_escrow(c: &Check) -> Result<Checked> {
         &c.chains.relay,
         &c.expected_mint,
         c.min_amount,
+        c.max_bond,
     )?;
     let commitment = zolar_claim::payment_commitment(&internal_txid(&s.txid)?, &c.salt)?;
     ensure!(
@@ -198,6 +228,10 @@ pub fn check_escrow(c: &Check) -> Result<Checked> {
         escrow.amount, vault.amount
     );
     println!("  payout          : {}", escrow.payout);
+    println!(
+        "  Bond            : {} required, {} deposited",
+        escrow.bond_required, escrow.bond_deposited
+    );
     println!("  transaction ID  : {}", s.txid);
     println!(
         "  expiry          : {} (relay tip {}, Finality Depth {})",
@@ -211,6 +245,48 @@ pub fn check_escrow(c: &Check) -> Result<Checked> {
         escrow,
         escrow_address: c.escrow_address,
     })
+}
+
+/// Locks the Bond the Escrow requires, if it is not locked yet. A Payer calls this before broadcasting:
+/// a Reveal Claim cannot settle without it, and it returns with the tokens.
+pub fn deposit_bond(chains: &Chains, keypair: &Path, escrow_address: Address) -> Result<()> {
+    let mut rpc = HttpRpc::new(&chains.rpc_url);
+    let payer = load_keypair(keypair)?;
+    let escrow = read_escrow(&read_account(&mut rpc, &escrow_address)?)?;
+    ensure!(
+        escrow.payout == payer.pubkey(),
+        "the Escrow pays {}, not this keypair; only that wallet can lock the Bond",
+        escrow.payout
+    );
+    if escrow.bond_required == 0 {
+        println!("the Escrow requires no Bond");
+        return Ok(());
+    }
+    if escrow.bond_deposited >= escrow.bond_required {
+        println!("the Bond of {} is already locked", escrow.bond_deposited);
+        return bond_is_finalized(chains, escrow_address, escrow.bond_required);
+    }
+    let source = associated_token_account(&payer.pubkey(), &escrow.mint);
+    let held = parse_token_account(&read_account(&mut rpc, &source)?)
+        .context("the Payer has no token account for the Escrow's mint, so no tokens for the Bond")?
+        .amount;
+    ensure!(
+        held >= escrow.bond_required,
+        "the Payer holds {held} tokens, fewer than the {} Bond",
+        escrow.bond_required
+    );
+    let ix = DepositBondBuilder::new()
+        .payer(payer.pubkey())
+        .escrow(escrow_address)
+        .payer_token(source)
+        .vault(escrow.vault)
+        .instruction();
+    let signature = send(&mut rpc, &[ix], &payer)?;
+    println!(
+        "Bond locked         : {signature} ({} tokens)",
+        escrow.bond_required
+    );
+    bond_is_finalized(chains, escrow_address, escrow.bond_required)
 }
 
 /// Proves, signs and broadcasts the checked PCZT, then waits until the explorer shows it mined.
@@ -420,22 +496,25 @@ mod tests {
     fn the_payer_pays_only_into_the_agreed_mint_and_amount() {
         let e = escrow();
         let (payer, relay, mint) = (e.payout, e.relay, e.mint);
-        check_terms(&e, &payer, &relay, &mint, 5_000_000).unwrap();
-        check_terms(&e, &payer, &relay, &mint, 1).unwrap();
+        check_terms(&e, &payer, &relay, &mint, 5_000_000, 0).unwrap();
+        check_terms(&e, &payer, &relay, &mint, 1, 0).unwrap();
         // A worthless token locked against the right payout and relay.
         let other = Address::new_from_array([9; 32]);
-        assert!(check_terms(&e, &payer, &relay, &other, 1).is_err());
+        assert!(check_terms(&e, &payer, &relay, &other, 1, 0).is_err());
         // Underfunded.
-        assert!(check_terms(&e, &payer, &relay, &mint, 5_000_001).is_err());
+        assert!(check_terms(&e, &payer, &relay, &mint, 5_000_001, 0).is_err());
         // Another payout wallet, another relay, a required Bond, a closed Escrow.
-        assert!(check_terms(&e, &other, &relay, &mint, 1).is_err());
-        assert!(check_terms(&e, &payer, &other, &mint, 1).is_err());
+        assert!(check_terms(&e, &other, &relay, &mint, 1, 0).is_err());
+        assert!(check_terms(&e, &payer, &other, &mint, 1, 0).is_err());
+        // A Bond above the agreed maximum is refused, one within it accepted.
         let with_bond = Escrow {
-            bond_required: 1,
+            bond_required: 100,
             ..e.clone()
         };
-        assert!(check_terms(&with_bond, &payer, &relay, &mint, 1).is_err());
+        assert!(check_terms(&with_bond, &payer, &relay, &mint, 1, 99).is_err());
+        assert!(check_terms(&with_bond, &payer, &relay, &mint, 1, 100).is_ok());
+        assert!(check_terms(&with_bond, &payer, &relay, &mint, 1, 0).is_err());
         let closed = Escrow { state: 1, ..e };
-        assert!(check_terms(&closed, &payer, &relay, &mint, 1).is_err());
+        assert!(check_terms(&closed, &payer, &relay, &mint, 1, 0).is_err());
     }
 }

@@ -15,7 +15,7 @@ use solana_address::Address;
 pub struct Escrow {
     pub discriminator: u8,
     pub version: u8,
-    /// 0 open. A Claim or refund closes the account.
+    /// 0 open; 1 refund requested (a Claim still settles until the Refund closes the account).
     pub state: u8,
     pub bump: u8,
     /// Created the Escrow; gets the rent back and, with refunds, the tokens.
@@ -30,8 +30,9 @@ pub struct Escrow {
     /// Payment Commitment: Poseidon(txid_hi, txid_lo, salt).
     pub commitment: [u8; 32],
     pub amount: u64,
-    /// Used by the Bond (ticket 09).
+    /// Tokens of the mint the Payer must lock before a Claim can settle.
     pub bond_required: u64,
+    /// Equals bondRequired once the Payer deposited; the Bond sits in the vault.
     pub bond_deposited: u64,
     /// Solana unix time of creation.
     pub created_at: i64,
@@ -41,7 +42,9 @@ pub struct Escrow {
     pub expiry_height: u32,
     /// 0 a Reveal Claim or a Private Claim may settle; 1 only a Private Claim may.
     pub claim_mode: u8,
-    pub reserved: [u8; 63],
+    /// Solana unix time of RequestRefund; 0 while state is 0.
+    pub refund_requested_at: i64,
+    pub reserved: [u8; 55],
 }
 
 pub const ESCROW_DISCRIMINATOR: u8 = 1;

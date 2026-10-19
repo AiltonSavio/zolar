@@ -3,6 +3,8 @@
 pub const DISC_ESCROW: u8 = 1;
 pub const VERSION: u8 = 1;
 pub const STATE_OPEN: u8 = 0;
+/// A refund was requested; a Claim still settles until the Refund closes the Escrow.
+pub const STATE_REFUND_REQUESTED: u8 = 1;
 
 /// Reveal Claim allowed.
 pub const MODE_REVEAL_ALLOWED: u8 = 0;
@@ -26,7 +28,8 @@ pub const E_CREATED_AT: usize = 220;
 pub const E_CREATED_TIP: usize = 228;
 pub const E_EXPIRY_HEIGHT: usize = 232;
 pub const E_CLAIM_MODE: usize = 236;
-pub const E_RESERVED: usize = 237;
+pub const E_REFUND_REQUESTED_AT: usize = 237;
+pub const E_RESERVED: usize = 245;
 pub const ESCROW_LEN: usize = 300;
 
 pub const SEED_ESCROW: &[u8] = b"escrow";
@@ -53,6 +56,10 @@ pub const BN254_MODULUS: [u8; 32] = [
 pub const MAX_EXPIRY_AHEAD: u32 = 20;
 /// Deepest transaction Merkle tree a Reveal Claim accepts (2^24 transactions).
 pub const MAX_TX_PATH: usize = 24;
+/// Seconds after creation when a refund no longer depends on the relay.
+pub const BACKSTOP_SECS: i64 = 24 * 60 * 60;
+/// Seconds a Payer has to claim between RequestRefund and Refund.
+pub const CLAIM_WINDOW_SECS: i64 = 15 * 60;
 
 /// Lowest block height a Claim may prove: blocks above the final cursor can be replaced, so a payment
 /// broadcast after the Escrow was created can land `finality_depth - 1` blocks below the tip it saw.
@@ -151,7 +158,8 @@ mod tests {
         assert_eq!(E_CREATED_AT + 8, E_CREATED_TIP);
         assert_eq!(E_CREATED_TIP + 4, E_EXPIRY_HEIGHT);
         assert_eq!(E_EXPIRY_HEIGHT + 4, E_CLAIM_MODE);
-        assert_eq!(E_CLAIM_MODE + 1, E_RESERVED);
-        assert_eq!(E_RESERVED + 63, ESCROW_LEN);
+        assert_eq!(E_CLAIM_MODE + 1, E_REFUND_REQUESTED_AT);
+        assert_eq!(E_REFUND_REQUESTED_AT + 8, E_RESERVED);
+        assert_eq!(E_RESERVED + 55, ESCROW_LEN);
     }
 }

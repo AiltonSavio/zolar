@@ -70,6 +70,9 @@ struct Terms {
     /// The least tokens (smallest unit of the mint) the Payer agreed to be paid.
     #[arg(long)]
     min_amount: u64,
+    /// The most tokens the Payer agreed to lock as a Bond (0: the Escrow must require none).
+    #[arg(long, default_value_t = 0)]
+    max_bond: u64,
     /// Seconds to wait for the Escrow to be finalized on Solana before paying.
     #[arg(long, default_value_t = 120)]
     finalized_wait_secs: u64,
@@ -129,6 +132,11 @@ enum Command {
         #[arg(long)]
         work_dir: PathBuf,
     },
+    /// Lock the Bond the Escrow requires (`pay` does this itself before it broadcasts).
+    DepositBond {
+        #[arg(long)]
+        escrow: String,
+    },
     /// Wait until the payment's block is in the Final Block Tree and send the Reveal Claim.
     Claim {
         #[arg(long)]
@@ -158,6 +166,12 @@ fn main() -> Result<()> {
             .as_ref()
             .context("--keypair (or ZOLAR_PAYER_KEYPAIR) is required")?;
         Ok(load_keypair(path)?.pubkey())
+    };
+    let keypair_path = || -> Result<PathBuf> {
+        cli.net
+            .keypair
+            .clone()
+            .context("--keypair (or ZOLAR_PAYER_KEYPAIR) is required")
     };
     match cli.command {
         Command::CreatePczt {
@@ -197,6 +211,7 @@ fn main() -> Result<()> {
                 accept_freeze_authority,
                 expected_mint: parse_address(&terms.mint)?,
                 min_amount: terms.min_amount,
+                max_bond: terms.max_bond,
                 finalized_wait: std::time::Duration::from_secs(terms.finalized_wait_secs),
             })?;
         }
@@ -218,10 +233,15 @@ fn main() -> Result<()> {
                 accept_freeze_authority,
                 expected_mint: parse_address(&terms.mint)?,
                 min_amount: terms.min_amount,
+                max_bond: terms.max_bond,
                 finalized_wait: std::time::Duration::from_secs(terms.finalized_wait_secs),
             })?;
+            payer::deposit_bond(&chains, &keypair_path()?, parse_address(&escrow)?)?;
             let height = payer::pay(&chains, &zcash.tool(), &checked, &pczt, &work_dir)?;
             println!("payment {} mined in block {height}", checked.txid);
+        }
+        Command::DepositBond { escrow } => {
+            payer::deposit_bond(&chains, &keypair_path()?, parse_address(&escrow)?)?;
         }
         Command::Claim {
             escrow,

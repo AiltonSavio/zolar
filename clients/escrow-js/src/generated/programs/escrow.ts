@@ -9,7 +9,7 @@
 import { assertIsInstructionWithAccounts, containsBytes, extendClient, getU8Encoder, SOLANA_ERROR__PROGRAM_CLIENTS__FAILED_TO_IDENTIFY_ACCOUNT, SOLANA_ERROR__PROGRAM_CLIENTS__FAILED_TO_IDENTIFY_INSTRUCTION, SOLANA_ERROR__PROGRAM_CLIENTS__UNRECOGNIZED_INSTRUCTION_TYPE, SolanaError, type Address, type ClientWithRpc, type ClientWithTransactionPlanning, type ClientWithTransactionSending, type ExtendedClient, type GetAccountInfoApi, type GetMultipleAccountsApi, type HasAddress, type Instruction, type InstructionWithData, type ReadonlyUint8Array } from '@solana/kit';
 import { addSelfFetchFunctions, addSelfPlanAndSendFunctions, type SelfFetchFunctions, type SelfPlanAndSendFunctions } from '@solana/program-client-core';
 import { getEscrowCodec, type Escrow, type EscrowArgs } from '../accounts';
-import { getCreateEscrowInstructionAsync, getPrivateClaimInstruction, getRevealClaimInstruction, parseCreateEscrowInstruction, parsePrivateClaimInstruction, parseRevealClaimInstruction, type CreateEscrowAsyncInput, type ParsedCreateEscrowInstruction, type ParsedPrivateClaimInstruction, type ParsedRevealClaimInstruction, type PrivateClaimInput, type RevealClaimInput } from '../instructions';
+import { getCreateEscrowInstructionAsync, getDepositBondInstruction, getPrivateClaimInstruction, getRefundInstruction, getRequestRefundInstruction, getRevealClaimInstruction, parseCreateEscrowInstruction, parseDepositBondInstruction, parsePrivateClaimInstruction, parseRefundInstruction, parseRequestRefundInstruction, parseRevealClaimInstruction, type CreateEscrowAsyncInput, type DepositBondInput, type ParsedCreateEscrowInstruction, type ParsedDepositBondInstruction, type ParsedPrivateClaimInstruction, type ParsedRefundInstruction, type ParsedRequestRefundInstruction, type ParsedRevealClaimInstruction, type PrivateClaimInput, type RefundInput, type RequestRefundInput, type RevealClaimInput } from '../instructions';
 import { findEscrowPda } from '../pdas';
 
 export const ESCROW_PROGRAM_ADDRESS = 'HMew6N4iWjmWMbJBoK6WfQRucBt8ZfWpMadd9mpMtbML' as Address<'HMew6N4iWjmWMbJBoK6WfQRucBt8ZfWpMadd9mpMtbML'>;
@@ -22,12 +22,15 @@ export function identifyEscrowAccount(account: { data: ReadonlyUint8Array } | Re
     throw new SolanaError(SOLANA_ERROR__PROGRAM_CLIENTS__FAILED_TO_IDENTIFY_ACCOUNT, { accountData: data, programName: "escrow" });
 }
 
-export enum EscrowInstruction { CreateEscrow, RevealClaim, PrivateClaim }
+export enum EscrowInstruction { CreateEscrow, RevealClaim, DepositBond, Refund, RequestRefund, PrivateClaim }
 
 export function identifyEscrowInstruction(instruction: { data: ReadonlyUint8Array } | ReadonlyUint8Array): EscrowInstruction {
     const data = 'data' in instruction ? instruction.data : instruction;
     if (containsBytes(data, getU8Encoder().encode(0), 0)) { return EscrowInstruction.CreateEscrow; }
 if (containsBytes(data, getU8Encoder().encode(1), 0)) { return EscrowInstruction.RevealClaim; }
+if (containsBytes(data, getU8Encoder().encode(2), 0)) { return EscrowInstruction.DepositBond; }
+if (containsBytes(data, getU8Encoder().encode(3), 0)) { return EscrowInstruction.Refund; }
+if (containsBytes(data, getU8Encoder().encode(5), 0)) { return EscrowInstruction.RequestRefund; }
 if (containsBytes(data, getU8Encoder().encode(4), 0)) { return EscrowInstruction.PrivateClaim; }
     throw new SolanaError(SOLANA_ERROR__PROGRAM_CLIENTS__FAILED_TO_IDENTIFY_INSTRUCTION, { instructionData: data, programName: "escrow" });
 }
@@ -35,6 +38,9 @@ if (containsBytes(data, getU8Encoder().encode(4), 0)) { return EscrowInstruction
 export type ParsedEscrowInstruction<TProgram extends string = 'HMew6N4iWjmWMbJBoK6WfQRucBt8ZfWpMadd9mpMtbML'> =
 | { instructionType: EscrowInstruction.CreateEscrow } & ParsedCreateEscrowInstruction<TProgram>
 | { instructionType: EscrowInstruction.RevealClaim } & ParsedRevealClaimInstruction<TProgram>
+| { instructionType: EscrowInstruction.DepositBond } & ParsedDepositBondInstruction<TProgram>
+| { instructionType: EscrowInstruction.Refund } & ParsedRefundInstruction<TProgram>
+| { instructionType: EscrowInstruction.RequestRefund } & ParsedRequestRefundInstruction<TProgram>
 | { instructionType: EscrowInstruction.PrivateClaim } & ParsedPrivateClaimInstruction<TProgram>
 
 
@@ -48,6 +54,12 @@ export type ParsedEscrowInstruction<TProgram extends string = 'HMew6N4iWjmWMbJBo
 return { instructionType: EscrowInstruction.CreateEscrow, ...parseCreateEscrowInstruction(instruction) }; }
 case EscrowInstruction.RevealClaim: { assertIsInstructionWithAccounts(instruction);
 return { instructionType: EscrowInstruction.RevealClaim, ...parseRevealClaimInstruction(instruction) }; }
+case EscrowInstruction.DepositBond: { assertIsInstructionWithAccounts(instruction);
+return { instructionType: EscrowInstruction.DepositBond, ...parseDepositBondInstruction(instruction) }; }
+case EscrowInstruction.Refund: { assertIsInstructionWithAccounts(instruction);
+return { instructionType: EscrowInstruction.Refund, ...parseRefundInstruction(instruction) }; }
+case EscrowInstruction.RequestRefund: { assertIsInstructionWithAccounts(instruction);
+return { instructionType: EscrowInstruction.RequestRefund, ...parseRequestRefundInstruction(instruction) }; }
 case EscrowInstruction.PrivateClaim: { assertIsInstructionWithAccounts(instruction);
 return { instructionType: EscrowInstruction.PrivateClaim, ...parsePrivateClaimInstruction(instruction) }; }
                 default: throw new SolanaError(SOLANA_ERROR__PROGRAM_CLIENTS__UNRECOGNIZED_INSTRUCTION_TYPE, { instructionType: instructionType as string, programName: "escrow" });
@@ -58,7 +70,7 @@ export type EscrowPlugin = { accounts: EscrowPluginAccounts; instructions: Escro
 
 export type EscrowPluginAccounts = { escrow: ReturnType<typeof getEscrowCodec> & SelfFetchFunctions<EscrowArgs, Escrow>; }
 
-export type EscrowPluginInstructions = { createEscrow: (input: CreateEscrowAsyncInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getCreateEscrowInstructionAsync> & SelfPlanAndSendFunctions; revealClaim: (input: RevealClaimInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getRevealClaimInstruction> & SelfPlanAndSendFunctions; privateClaim: (input: PrivateClaimInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getPrivateClaimInstruction> & SelfPlanAndSendFunctions; }
+export type EscrowPluginInstructions = { createEscrow: (input: CreateEscrowAsyncInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getCreateEscrowInstructionAsync> & SelfPlanAndSendFunctions; revealClaim: (input: RevealClaimInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getRevealClaimInstruction> & SelfPlanAndSendFunctions; depositBond: (input: DepositBondInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getDepositBondInstruction> & SelfPlanAndSendFunctions; refund: (input: RefundInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getRefundInstruction> & SelfPlanAndSendFunctions; requestRefund: (input: RequestRefundInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getRequestRefundInstruction> & SelfPlanAndSendFunctions; privateClaim: (input: PrivateClaimInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getPrivateClaimInstruction> & SelfPlanAndSendFunctions; }
 
 export type EscrowPluginPdas = { escrow: typeof findEscrowPda; }
 
@@ -66,6 +78,6 @@ export type EscrowPluginRequirements = ClientWithRpc<GetAccountInfoApi & GetMult
 
 export function escrowProgram(config: { programAddress?: Address | HasAddress } = {}) {
     return <T extends EscrowPluginRequirements>(client: T): ExtendedClient<T, { escrow: EscrowPlugin }> => {
-        return extendClient(client, { escrow: <EscrowPlugin>{ accounts: { escrow: addSelfFetchFunctions(client, getEscrowCodec()) }, instructions: { createEscrow: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getCreateEscrowInstructionAsync(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })), revealClaim: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getRevealClaimInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })), privateClaim: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getPrivateClaimInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })) }, pdas: { escrow: (seeds, pdaConfig) => findEscrowPda(seeds, { programAddress: pdaConfig?.programAddress ?? config.programAddress }) }, identifyAccount: identifyEscrowAccount, identifyInstruction: identifyEscrowInstruction, parseInstruction: parseEscrowInstruction } });
+        return extendClient(client, { escrow: <EscrowPlugin>{ accounts: { escrow: addSelfFetchFunctions(client, getEscrowCodec()) }, instructions: { createEscrow: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getCreateEscrowInstructionAsync(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })), revealClaim: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getRevealClaimInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })), depositBond: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getDepositBondInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })), refund: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getRefundInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })), requestRefund: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getRequestRefundInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })), privateClaim: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getPrivateClaimInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })) }, pdas: { escrow: (seeds, pdaConfig) => findEscrowPda(seeds, { programAddress: pdaConfig?.programAddress ?? config.programAddress }) }, identifyAccount: identifyEscrowAccount, identifyInstruction: identifyEscrowInstruction, parseInstruction: parseEscrowInstruction } });
     };
 }

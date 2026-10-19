@@ -11,9 +11,11 @@
 //! | 0 | CreateEscrow `commitment[32], payout[32], amount u64, bond_required u64, expiry_height u32, claim_mode u8` | payee(ws), escrow(w), payee_token(w), vault(w), relay, token program, system |
 //! | 1 | RevealClaim `txid[32], salt[32], block_height u32, tx_index u32, root[32], tree_path, tx_path` | escrow(w), relay, vault(w), payout_token(w), payee(w), token program |
 //!
-//! | 4 | PrivateClaim `proof_a[64] (negated), proof_b[128], proof_c[64], root[32]` | escrow(w), relay, vault(w), payout_token(w), payee(w), token program |
+//! | 2 | DepositBond | payer(s), escrow(w), payer_token(w), vault(w), token program |
+//! | 3 | Refund | escrow(w), relay, vault(w), payee_token(w), payee(w), token program |
+//! | 5 | RequestRefund | escrow(w), relay |
 //!
-//! Tags 2 (DepositBond) and 3 (Refund) are reserved for ticket 09.
+//! | 4 | PrivateClaim `proof_a[64] (negated), proof_b[128], proof_c[64], root[32]` | escrow(w), relay, vault(w), payout_token(w), payee(w), token program |
 #![cfg_attr(target_os = "solana", no_std)]
 
 pub mod error;

@@ -6,7 +6,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use zolar_cli::{
     DEVNET_RELAY, DEVNET_RPC, TESTNET_EXPLORER,
-    payee::{CreateEscrow, create_escrow},
+    payee::{CreateEscrow, RefundArgs, create_escrow, refund},
     solana::parse_address,
 };
 
@@ -52,12 +52,31 @@ enum Command {
         /// Where to write the salt for the Payer (must not exist).
         #[arg(long)]
         salt_out: PathBuf,
+        /// Bond the Payer must lock before a Claim can settle, in tokens of the mint. A Payer who
+        /// never pays forfeits it to the Payee at the refund.
+        #[arg(long, default_value_t = 0)]
+        bond: u64,
         #[arg(long, env = "ZOLAR_RPC_URL", default_value = DEVNET_RPC)]
         rpc_url: String,
         #[arg(long, env = "ZOLAR_RELAY", default_value = DEVNET_RELAY)]
         relay: String,
         #[arg(long, env = "ZOLAR_EXPLORER", default_value = TESTNET_EXPLORER)]
         explorer: String,
+    },
+    /// Take an unclaimed Escrow back, Bond included: request the refund once the relay tip is above
+    /// the expiry height plus Finality Depth (or 24 hours after creation), then refund after the
+    /// 15 minute claim window.
+    Refund {
+        #[arg(long)]
+        escrow: String,
+        /// The Payee's Solana keypair file (pays and signs).
+        #[arg(long, env = "ZOLAR_PAYEE_KEYPAIR")]
+        keypair: PathBuf,
+        /// Wait for the tip, the Halt backstop and the claim window instead of stopping.
+        #[arg(long)]
+        wait: bool,
+        #[arg(long, env = "ZOLAR_RPC_URL", default_value = DEVNET_RPC)]
+        rpc_url: String,
     },
 }
 
@@ -73,6 +92,7 @@ fn main() -> Result<()> {
             amount,
             keypair,
             salt_out,
+            bond,
             rpc_url,
             relay,
             explorer,
@@ -90,6 +110,20 @@ fn main() -> Result<()> {
                 mint: parse_address(&mint)?,
                 amount,
                 salt_out,
+                bond,
+            })?;
+        }
+        Command::Refund {
+            escrow,
+            keypair,
+            wait,
+            rpc_url,
+        } => {
+            refund(&RefundArgs {
+                rpc_url,
+                keypair,
+                escrow: parse_address(&escrow)?,
+                wait,
             })?;
         }
     }

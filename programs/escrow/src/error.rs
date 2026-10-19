@@ -23,10 +23,20 @@ pub enum EscrowError {
     /// The relay account is not a sealed Header Relay.
     RelayNotReadable = 12,
     PoseidonFailed = 13,
-    /// A Bond is not supported yet (ticket 09).
-    BondNotSupported = 14,
+    /// The Escrow requires a Bond that is not deposited.
+    BondNotDeposited = 14,
     /// The claim mode is not supported, or the Escrow does not allow a Reveal Claim.
     ClaimModeNotAllowed = 15,
+    /// The Escrow requires no Bond.
+    NoBondRequired = 16,
+    BondAlreadyDeposited = 17,
+    /// Neither the relay tip nor the backstop allows a refund yet.
+    RefundNotYet = 18,
+    RefundNotRequested = 19,
+    /// The claim window since the refund request has not passed.
+    ClaimWindowOpen = 20,
+    /// The Bond is not signed and paid by the Payer wallet.
+    NotPayer = 21,
     /// The Groth16 proof does not verify against the Escrow's public inputs.
-    InvalidProof = 16,
+    InvalidProof = 22,
 }

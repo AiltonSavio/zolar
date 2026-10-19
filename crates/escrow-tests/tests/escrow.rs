@@ -18,7 +18,6 @@ const COMMITMENT_MISMATCH: u32 = 8;
 const BLOCK_OUT_OF_RANGE: u32 = 9;
 const UNKNOWN_ROOT: u32 = 11;
 const POSEIDON_FAILED: u32 = 13;
-const BOND_NOT_SUPPORTED: u32 = 14;
 const CLAIM_MODE_NOT_ALLOWED: u32 = 15;
 
 const FINALITY_DEPTH: u16 = 3;
@@ -329,7 +328,10 @@ fn create_checks_expiry_amount_bond_mode_commitment_and_the_vault() {
         (escrow.state, escrow.claim_mode, escrow.bond_required),
         (0, 0, 0)
     );
-    assert_eq!(escrow.reserved, [0u8; 63]);
+    assert_eq!(
+        (escrow.refund_requested_at, escrow.reserved),
+        (0, [0u8; 55])
+    );
     assert_eq!(w.h.svm.get_account(&deal.escrow).unwrap().data.len(), 300);
 
     // The same Payee cannot open a second Escrow for the same commitment.
@@ -341,8 +343,6 @@ fn create_checks_expiry_amount_bond_mode_commitment_and_the_vault() {
     let deal = w.deal(txids(2), 0, 8, tip + 5);
     let ix = w.create_ix_with(&deal, 0, 0, 0);
     assert_eq!(w.create_err(ix), ZERO_AMOUNT);
-    let ix = w.create_ix_with(&deal, 10, 1, 0);
-    assert_eq!(w.create_err(ix), BOND_NOT_SUPPORTED);
     let ix = w.create_ix_with(&deal, 10, 0, 1);
     assert_eq!(w.create_err(ix), CLAIM_MODE_NOT_ALLOWED);
     let mut over = deal.clone();

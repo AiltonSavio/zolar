@@ -13,14 +13,15 @@ use relay_tests::{
 };
 use solana_account::Account;
 use solana_address::Address;
+use solana_clock::Clock;
 use solana_instruction::{error::InstructionError, Instruction};
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 use solana_transaction_error::TransactionError;
 use zolar_claim::{
-    block_leaf,
+    block_leaf, payment_commitment,
     private_claim::{public_from_snarkjs, ProofBytes},
-    payment_commitment, tx_merkle_path, tx_merkle_root, FinalBlockTree,
+    tx_merkle_path, tx_merkle_root, FinalBlockTree,
 };
 
 pub use relay_tests::{set_compute_limit, CU_CAP};
@@ -115,6 +116,12 @@ pub struct World {
 }
 
 pub const PAYEE_FUNDS: u64 = 5_000_000;
+/// Solana unix time at the start of every test world.
+pub const START_TIME: i64 = 1_800_000_000;
+/// Seconds after creation when a refund no longer needs the relay.
+pub const BACKSTOP_SECS: i64 = 24 * 60 * 60;
+/// Seconds a Payer has to claim after a refund request.
+pub const CLAIM_WINDOW_SECS: i64 = 15 * 60;
 
 impl World {
     /// A Header Relay at Finality Depth `depth` holding two blocks above its Checkpoint, an Escrow
@@ -155,8 +162,51 @@ impl World {
             payer_token,
             next_tag: 0,
         };
+        w.set_time(START_TIME);
         w.mine(2);
         w
+    }
+
+    pub fn now(&self) -> i64 {
+        self.h.svm.get_sysvar::<Clock>().unix_timestamp
+    }
+
+    pub fn set_time(&mut self, unix_timestamp: i64) {
+        let mut clock = self.h.svm.get_sysvar::<Clock>();
+        clock.unix_timestamp = unix_timestamp;
+        self.h.svm.set_sysvar(&clock);
+    }
+
+    pub fn advance_time(&mut self, seconds: i64) {
+        self.set_time(self.now() + seconds);
+    }
+
+    /// Replaces final blocks with a heavier fork so the relay Halts.
+    pub fn halt(&mut self) {
+        let mut fork = self.branch.fork_at(CHECKPOINT_HEIGHT + 3);
+        let behind = self.branch.tip_height() - (CHECKPOINT_HEIGHT + 3);
+        for i in 0..=behind {
+            let b = fork.next(9000 + i);
+            self.h
+                .relay_synthetic(&self.relay, &b.raw)
+                .expect("fork block");
+        }
+        let data = self.h.relay_data(&self.relay);
+        assert!(
+            RelayView::parse(&data).unwrap().is_halted(),
+            "the relay halted"
+        );
+    }
+
+    /// Gives the Payer's token account `amount` tokens.
+    pub fn fund_payer(&mut self, amount: u64) {
+        self.h
+            .svm
+            .set_account(
+                self.payer_token,
+                token_account(&self.mint, &self.payer.pubkey(), amount),
+            )
+            .unwrap();
     }
 
     /// Relays `n` ordinary blocks.
@@ -272,6 +322,22 @@ impl World {
         self.h.ok(&[set_compute_limit(CU_CAP), ix], &[&payee]) - 150
     }
 
+    /// Creates the Escrow with a required Bond.
+    pub fn create_with_bond(&mut self, deal: &Deal, bond: u64) -> u64 {
+        self.h
+            .svm
+            .set_account(deal.vault, token_account(&self.mint, &deal.escrow, 0))
+            .unwrap();
+        let ix = self.create_ix_with(deal, deal.amount, bond, 0);
+        let payee = self.payee.insecure_clone();
+        self.h.ok(&[set_compute_limit(CU_CAP), ix], &[&payee]) - 150
+    }
+
+    pub fn refund_err(&mut self, deal: &Deal) -> u32 {
+        let ix = self.refund_ix(deal);
+        self.h.custom_err(&[ix], &[])
+    }
+
     pub fn create_err(&mut self, ix: Instruction) -> u32 {
         let payee = self.payee.insecure_clone();
         self.h.custom_err(&[ix], &[&payee])
@@ -329,7 +395,8 @@ impl World {
     pub fn forge_latest_root(&mut self, root: [u8; 32]) {
         let mut account = self.h.svm.get_account(&self.relay).unwrap();
         let count = RelayView::parse(&account.data).unwrap().leaf_count() as usize;
-        let at = header_relay_interface::R_ROOTS + (count % header_relay_interface::ROOT_HISTORY) * 32;
+        let at =
+            header_relay_interface::R_ROOTS + (count % header_relay_interface::ROOT_HISTORY) * 32;
         account.data[at..at + 32].copy_from_slice(&root);
         self.h.svm.set_account(self.relay, account).unwrap();
     }
@@ -346,6 +413,44 @@ impl World {
             .proof_b(proof.b)
             .proof_c(proof.c)
             .root(root)
+            .instruction()
+    }
+
+    /// The Bond deposit, signed by the Payer wallet.
+    pub fn deposit_bond_ix(&self, deal: &Deal) -> Instruction {
+        DepositBondBuilder::new()
+            .payer(self.payer.pubkey())
+            .escrow(deal.escrow)
+            .payer_token(self.payer_token)
+            .vault(deal.vault)
+            .instruction()
+    }
+
+    pub fn deposit_bond(&mut self, deal: &Deal) -> u64 {
+        let ix = self.deposit_bond_ix(deal);
+        let payer = self.payer.insecure_clone();
+        self.h.ok(&[set_compute_limit(CU_CAP), ix], &[&payer]) - 150
+    }
+
+    pub fn deposit_bond_err(&mut self, ix: Instruction) -> u32 {
+        let payer = self.payer.insecure_clone();
+        self.h.custom_err(&[ix], &[&payer])
+    }
+
+    pub fn request_refund_ix(&self, deal: &Deal) -> Instruction {
+        RequestRefundBuilder::new()
+            .escrow(deal.escrow)
+            .relay(self.relay)
+            .instruction()
+    }
+
+    pub fn refund_ix(&self, deal: &Deal) -> Instruction {
+        RefundBuilder::new()
+            .escrow(deal.escrow)
+            .relay(self.relay)
+            .vault(deal.vault)
+            .payee_token(self.payee_token)
+            .payee(self.payee.pubkey())
             .instruction()
     }
 
@@ -401,13 +506,17 @@ pub struct PrivateFixture {
 impl PrivateFixture {
     pub fn load() -> Self {
         let block: serde_json::Value =
-            serde_json::from_str(include_str!("../../../circuits/fixtures/swap2-block.json")).unwrap();
+            serde_json::from_str(include_str!("../../../circuits/fixtures/swap2-block.json"))
+                .unwrap();
         let txids = block["txids_display"]
             .as_array()
             .unwrap()
             .iter()
             .map(|t| {
-                let mut id: [u8; 32] = hex::decode(t.as_str().unwrap()).unwrap().try_into().unwrap();
+                let mut id: [u8; 32] = hex::decode(t.as_str().unwrap())
+                    .unwrap()
+                    .try_into()
+                    .unwrap();
                 id.reverse();
                 id
             })
@@ -415,11 +524,18 @@ impl PrivateFixture {
         Self {
             txids,
             index: block["index"].as_u64().unwrap() as usize,
-            salt: hex::decode(block["salt"].as_str().unwrap()).unwrap().try_into().unwrap(),
-            proof: ProofBytes::from_snarkjs(include_str!("../../../circuits/fixtures/swap2.proof.json"))
+            salt: hex::decode(block["salt"].as_str().unwrap())
+                .unwrap()
+                .try_into()
                 .unwrap(),
-            public: public_from_snarkjs(include_str!("../../../circuits/fixtures/swap2.public.json"))
-                .unwrap(),
+            proof: ProofBytes::from_snarkjs(include_str!(
+                "../../../circuits/fixtures/swap2.proof.json"
+            ))
+            .unwrap(),
+            public: public_from_snarkjs(include_str!(
+                "../../../circuits/fixtures/swap2.public.json"
+            ))
+            .unwrap(),
         }
     }
 

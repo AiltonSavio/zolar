@@ -51,15 +51,33 @@ pub enum EscrowError {
     /// 13 - The Poseidon syscall rejected its input
     #[error("The Poseidon syscall rejected its input")]
     PoseidonFailed = 0xD,
-    /// 14 - A Bond is not supported yet
-    #[error("A Bond is not supported yet")]
-    BondNotSupported = 0xE,
+    /// 14 - The Bond the Escrow requires is not deposited
+    #[error("The Bond the Escrow requires is not deposited")]
+    BondNotDeposited = 0xE,
     /// 15 - The claim mode is not supported, or the Escrow does not allow a Reveal Claim
     #[error("The claim mode is not supported, or the Escrow does not allow a Reveal Claim")]
     ClaimModeNotAllowed = 0xF,
-    /// 16 - The Groth16 proof does not verify against the Escrow's public inputs
+    /// 16 - The Escrow requires no Bond
+    #[error("The Escrow requires no Bond")]
+    NoBondRequired = 0x10,
+    /// 17 - The Bond is already deposited
+    #[error("The Bond is already deposited")]
+    BondAlreadyDeposited = 0x11,
+    /// 18 - Neither the relay tip nor the 24 hour backstop allows a refund yet
+    #[error("Neither the relay tip nor the 24 hour backstop allows a refund yet")]
+    RefundNotYet = 0x12,
+    /// 19 - No refund was requested
+    #[error("No refund was requested")]
+    RefundNotRequested = 0x13,
+    /// 20 - The claim window since the refund request has not passed
+    #[error("The claim window since the refund request has not passed")]
+    ClaimWindowOpen = 0x14,
+    /// 21 - The Bond must be signed and paid by the Payer wallet
+    #[error("The Bond must be signed and paid by the Payer wallet")]
+    NotPayer = 0x15,
+    /// 22 - The Groth16 proof does not verify against the Escrow's public inputs
     #[error("The Groth16 proof does not verify against the Escrow's public inputs")]
-    InvalidProof = 0x10,
+    InvalidProof = 0x16,
 }
 
 impl From<EscrowError> for solana_program_error::ProgramError {
