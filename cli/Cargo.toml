@@ -1,0 +1,49 @@
+[package]
+name = "zolar-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+publish = false
+description = "Payee and Payer command line tools for a Zolar swap: shielded Zcash testnet ZEC for SPL tokens on Solana devnet"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "zolar-payee"
+path = "src/bin/zolar-payee.rs"
+
+[[bin]]
+name = "zolar-payer"
+path = "src/bin/zolar-payer.rs"
+
+[dependencies]
+zolar-pczt = { path = "../crates/zolar-pczt" }
+zolar-claim = { path = "../crates/zolar-claim" }
+zolar-relayer = { path = "../crates/relayer" }
+escrow-client = { path = "../clients/escrow-rust" }
+header-relay-client = { path = "../clients/rust" }
+header-relay-interface = { path = "../crates/header-relay-interface" }
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+hex = "0.4"
+rand = "0.8"
+serde_json = "1"
+solana-address = "2"
+solana-instruction = "3"
+solana-keypair = "3"
+solana-signer = "3"
+ureq = { version = "3", features = ["json"] }
+
+# A workspace of its own: the Zcash dependency tree (librustzcash, pinned to the revision zcash-devtool
+# uses for NU7 and Ironwood) must not enter the Solana workspace lockfile, and the Solana crates have
+# their own. It joins both because a swap needs both.
+[workspace]
+
+[patch.crates-io]
+pczt = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_address = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_encoding = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_keys = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_primitives = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_protocol = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_transparent = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+equihash = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }

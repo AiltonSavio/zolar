@@ -2,7 +2,7 @@
 //! zcash-devtool on Zcash testnet (NU7). The expected transaction ID was printed by
 //! `zcash-devtool pczt inspect` before signing and later matched the mined transaction.
 
-use zolar_pczt::{Network, inspect};
+use zolar_pczt::{Network, inspect, summary};
 
 const PCZT: &[u8] = include_bytes!("fixtures/payment-unsigned.pczt");
 const PAYEE_UFVK: &str = include_str!("fixtures/payee.ufvk");
@@ -14,6 +14,16 @@ fn txid_is_computed_from_the_unsigned_pczt() {
     let report = inspect(PCZT, PAYEE_UFVK.trim(), Network::Testnet).unwrap();
     assert_eq!(report.txid, TXID);
     assert_eq!(report.tx_version, 6);
+    assert_eq!(report.expiry_height, 4_515_973);
+}
+
+#[test]
+fn the_payer_reads_txid_and_expiry_without_any_viewing_key() {
+    let s = summary(PCZT).unwrap();
+    assert_eq!(s.txid, TXID);
+    assert_eq!(s.tx_version, 6);
+    assert_eq!(s.expiry_height, 4_515_973);
+    assert!(summary(b"not a pczt").is_err());
 }
 
 #[test]

@@ -8,7 +8,7 @@ use orchard::keys::{IncomingViewingKey, Scope};
 use pczt::Pczt;
 use zcash_keys::keys::UnifiedFullViewingKey;
 use zcash_primitives::transaction::{
-    TxVersion,
+    TransactionData, TxVersion,
     txid::{TxIdDigester, to_txid},
 };
 use zcash_protocol::{
@@ -31,12 +31,25 @@ pub struct Output {
     pub pool: &'static str,
 }
 
+/// What anyone holding the PCZT can read without a key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Summary {
+    /// Transaction ID in the conventional display (byte-reversed hex) form.
+    pub txid: String,
+    /// Transaction format version: 5 or 6.
+    pub tx_version: u8,
+    /// The last block the transaction can be mined in.
+    pub expiry_height: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Report {
     /// Transaction ID in the conventional display (byte-reversed hex) form.
     pub txid: String,
     /// Transaction format version: 5 or 6.
     pub tx_version: u8,
+    /// The last block the transaction can be mined in.
+    pub expiry_height: u32,
     /// Outputs addressed to the viewing key (external scope), in action order.
     pub received: Vec<Output>,
 }
@@ -53,6 +66,35 @@ pub enum Error {
     Version,
 }
 
+/// The transaction ID, version and expiry height of `pczt`.
+pub fn summary(pczt: &[u8]) -> Result<Summary, Error> {
+    let (_, summary) = parse(pczt)?;
+    Ok(summary)
+}
+
+fn parse(pczt: &[u8]) -> Result<(TransactionData<pczt::EffectsOnly>, Summary), Error> {
+    let pczt = Pczt::parse(pczt).map_err(|e| Error::Pczt(format!("{e:?}")))?;
+    let tx = pczt
+        .into_effects()
+        .map_err(|e| Error::Effects(format!("{e:?}")))?;
+    let parts = tx.digest(TxIdDigester);
+    let txid = to_txid(tx.version(), tx.consensus_branch_id(), &parts).to_string();
+    let tx_version = match tx.version() {
+        TxVersion::V5 => 5,
+        TxVersion::V6 => 6,
+        _ => return Err(Error::Version),
+    };
+    let expiry_height = u32::from(tx.expiry_height());
+    Ok((
+        tx,
+        Summary {
+            txid,
+            tx_version,
+            expiry_height,
+        },
+    ))
+}
+
 /// Computes the transaction ID of `pczt` and decrypts the Orchard and Ironwood outputs addressed
 /// to `ufvk`. Needs no spending key.
 pub fn inspect(pczt: &[u8], ufvk: &str, network: Network) -> Result<Report, Error> {
@@ -63,18 +105,7 @@ pub fn inspect(pczt: &[u8], ufvk: &str, network: Network) -> Result<Report, Erro
     .map_err(|e| Error::ViewingKey(e.to_string()))?;
     let ivk: Option<IncomingViewingKey> = ufvk.orchard().map(|f| f.to_ivk(Scope::External));
 
-    let pczt = Pczt::parse(pczt).map_err(|e| Error::Pczt(format!("{e:?}")))?;
-    let tx = pczt
-        .into_effects()
-        .map_err(|e| Error::Effects(format!("{e:?}")))?;
-
-    let parts = tx.digest(TxIdDigester);
-    let txid = to_txid(tx.version(), tx.consensus_branch_id(), &parts).to_string();
-    let tx_version = match tx.version() {
-        TxVersion::V5 => 5,
-        TxVersion::V6 => 6,
-        _ => return Err(Error::Version),
-    };
+    let (tx, summary) = parse(pczt)?;
 
     let mut received = Vec::new();
     if let Some(ivk) = ivk {
@@ -101,8 +132,9 @@ pub fn inspect(pczt: &[u8], ufvk: &str, network: Network) -> Result<Report, Erro
     }
 
     Ok(Report {
-        txid,
-        tx_version,
+        txid: summary.txid,
+        tx_version: summary.tx_version,
+        expiry_height: summary.expiry_height,
         received,
     })
 }
