@@ -38,33 +38,51 @@ describe('classifyTransaction', () => {
     [4, 'private-claim'],
     [5, 'refund-requested'],
   ])('instruction tag %s is %s', (tag, kind) => {
-    expect(classifyTransaction(tx(tag), ESCROW_PROGRAM)).toMatchObject({ kind, signature: 'SigAAA', escrow: ESCROW });
+    expect(classifyTransaction(tx(tag), ESCROW_PROGRAM)).toMatchObject([{ kind, signature: 'SigAAA', escrow: ESCROW }]);
   });
 
   it('carries the amount the Escrow held and its mint', () => {
-    expect(classifyTransaction(tx(1), ESCROW_PROGRAM)).toMatchObject({ amount: 2_500_000n, mint: MINT });
+    expect(classifyTransaction(tx(1), ESCROW_PROGRAM)[0]).toMatchObject({ amount: 2_500_000n, mint: MINT });
   });
 
   it('marks a failed transaction', () => {
-    expect(classifyTransaction(tx(1, [], { InstructionError: [0, 'Custom'] }), ESCROW_PROGRAM)?.failed).toBe(true);
+    expect(classifyTransaction(tx(1, [], { InstructionError: [0, 'Custom'] }), ESCROW_PROGRAM)[0]?.failed).toBe(true);
   });
 
   it('ignores transactions that do not call the Escrow program', () => {
     const other = tx(1);
     other.transaction.message.instructions[0]!.programIdIndex = 0;
-    expect(classifyTransaction(other, ESCROW_PROGRAM)).toBeNull();
+    expect(classifyTransaction(other, ESCROW_PROGRAM)).toEqual([]);
   });
 
   it('never carries anything from the Reveal Claim payload (the revealed txid)', () => {
     const txidBytes = Array.from({ length: 32 }, (_, i) => 200 - i);
     const raw = tx(1, txidBytes);
-    const event = classifyTransaction(raw, ESCROW_PROGRAM);
-    const dump = JSON.stringify(event, (_, v) => (typeof v === 'bigint' ? v.toString() : v));
+    const events = classifyTransaction(raw, ESCROW_PROGRAM);
+    const dump = JSON.stringify(events, (_, v) => (typeof v === 'bigint' ? v.toString() : v));
     const data = raw.transaction.message.instructions[0]!.data;
     expect(dump).not.toContain(data);
     expect(dump).not.toContain(data.slice(4, 24));
-    expect(Object.keys(event ?? {}).sort()).toEqual(
-      ['amount', 'blockTime', 'escrow', 'failed', 'kind', 'mint', 'signature', 'slot'].sort(),
+    expect(Object.keys(events[0] ?? {}).sort()).toEqual(
+      ['amount', 'blockTime', 'escrow', 'failed', 'index', 'kind', 'mint', 'signature', 'slot'].sort(),
     );
+  });
+
+  it('finds the Escrow when its address comes from an address lookup table', () => {
+    const raw = tx(4);
+    raw.transaction.message.accountKeys = ['Payer', 'Relay', ESCROW_PROGRAM];
+    raw.transaction.message.instructions[0] = { programIdIndex: 2, accounts: [3, 1], data: b58([4]) };
+    raw.meta!.loadedAddresses = { writable: [ESCROW], readonly: [] };
+    expect(classifyTransaction(raw, ESCROW_PROGRAM)).toMatchObject([{ kind: 'private-claim', escrow: ESCROW }]);
+  });
+
+  it('reports every Escrow instruction of a transaction, in order', () => {
+    const raw = tx(2);
+    raw.transaction.message.instructions = [
+      { programIdIndex: 3, accounts: [0, 1], data: b58([2]) },
+      { programIdIndex: 3, accounts: [1, 2], data: b58([4]) },
+    ];
+    const events = classifyTransaction(raw, ESCROW_PROGRAM);
+    expect(events.map((e) => [e.kind, e.index])).toEqual([['bond-deposited', 0], ['private-claim', 1]]);
   });
 });

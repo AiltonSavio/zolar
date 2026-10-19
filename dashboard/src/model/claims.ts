@@ -24,6 +24,8 @@ export type EventKind =
 export interface EscrowEvent {
   kind: EventKind;
   signature: string;
+  /** Position among the transaction's Escrow instructions; with the signature it identifies the event. */
+  index: number;
   slot: number;
   blockTime: number | null;
   escrow: string;
@@ -45,6 +47,7 @@ export interface RpcTransaction {
   };
   meta: {
     err: unknown;
+    loadedAddresses?: { writable: string[]; readonly: string[] } | null;
     preTokenBalances?: { owner?: string; mint: string; uiTokenAmount: { amount: string } }[] | null;
   } | null;
 }
@@ -65,25 +68,32 @@ const escrowIndex = (kind: EventKind) => ESCROW_ACCOUNT_INDEX[kind] ?? 0;
 
 const base58 = getBase58Encoder();
 
-export function classifyTransaction(tx: RpcTransaction, escrowProgram: string): EscrowEvent | null {
+export function classifyTransaction(tx: RpcTransaction, escrowProgram: string): EscrowEvent[] {
   const { accountKeys, instructions } = tx.transaction.message;
-  const ix = instructions.find((i) => accountKeys[i.programIdIndex] === escrowProgram);
+  const loaded = tx.meta?.loadedAddresses;
+  const keys = [...accountKeys, ...(loaded?.writable ?? []), ...(loaded?.readonly ?? [])];
   const signature = tx.transaction.signatures[0];
-  if (!ix || !signature) return null;
-  // Only the instruction tag (first byte) is read; the payload is never decoded.
-  const kind = KINDS[base58.encode(ix.data)[0] ?? -1];
-  if (!kind) return null;
-  const escrow = accountKeys[ix.accounts[escrowIndex(kind)] ?? -1];
-  if (!escrow) return null;
-  const held = tx.meta?.preTokenBalances?.find((b) => b.owner === escrow);
-  return {
-    kind,
-    signature,
-    slot: tx.slot,
-    blockTime: tx.blockTime,
-    escrow,
-    failed: tx.meta?.err != null,
-    amount: held ? BigInt(held.uiTokenAmount.amount) : null,
-    mint: held?.mint ?? null,
-  };
+  if (!signature) return [];
+  const events: EscrowEvent[] = [];
+  for (const ix of instructions) {
+    if (keys[ix.programIdIndex] !== escrowProgram) continue;
+    // Only the instruction tag (first byte) is read; the payload is never decoded.
+    const kind = KINDS[base58.encode(ix.data)[0] ?? -1];
+    if (!kind) continue;
+    const escrow = keys[ix.accounts[escrowIndex(kind)] ?? -1];
+    if (!escrow) continue;
+    const held = tx.meta?.preTokenBalances?.find((b) => b.owner === escrow);
+    events.push({
+      kind,
+      signature,
+      index: events.length,
+      slot: tx.slot,
+      blockTime: tx.blockTime,
+      escrow,
+      failed: tx.meta?.err != null,
+      amount: held ? BigInt(held.uiTokenAmount.amount) : null,
+      mint: held?.mint ?? null,
+    });
+  }
+  return events;
 }

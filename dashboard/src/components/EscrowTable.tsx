@@ -17,6 +17,14 @@ function expiryText(e: EscrowView, tip: number | undefined) {
   return left > 0 ? `${left} blocks left` : 'past expiry';
 }
 
+/** The Claim window lasts 15 minutes of Solana time after a refund request. */
+const CLAIM_WINDOW_SECS = 900;
+
+function claimWindowText(requestedAt: number, nowSec: number) {
+  const left = requestedAt + CLAIM_WINDOW_SECS - nowSec;
+  return left > 0 ? `Claim window ${Math.floor(left / 60)}m ${left % 60}s left` : 'Claim window over';
+}
+
 export function EscrowTable({ escrows, decimals, relays, nowSec, cluster }: Props) {
   return (
     <section className="card" aria-label="Open Escrows">
@@ -48,7 +56,7 @@ export function EscrowTable({ escrows, decimals, relays, nowSec, cluster }: Prop
                       {e.state === 'open'
                         ? <span className="chip chip-open">Open</span>
                         : <span className="chip chip-refund" title="A Claim still settles until the Refund closes the Escrow">
-                            Refund requested{e.refundRequestedAt ? ` · ${Math.max(0, nowSec - e.refundRequestedAt)}s` : ''}
+                            Refund requested{e.refundRequestedAt ? ` · ${claimWindowText(e.refundRequestedAt, nowSec)}` : ''}
                           </span>}
                     </td>
                     <td className="mono">

@@ -2,7 +2,7 @@ import type { Config } from './config';
 import { RelayCard } from './components/RelayCard';
 import { EscrowTable } from './components/EscrowTable';
 import { EventFeed } from './components/EventFeed';
-import { useEscrows, useEvents, useNow, useRelays, useRpc } from './hooks';
+import { useEscrows, useEvents, useMintDecimals, useNow, useRelays, useRpc } from './hooks';
 import { shorten } from './format';
 
 export function App({ config }: { config: Config }) {
@@ -11,6 +11,10 @@ export function App({ config }: { config: Config }) {
   const escrows = useEscrows(rpc, config);
   const events = useEvents(rpc, config);
   const now = useNow();
+  const decimals = useMintDecimals(rpc, [
+    ...(escrows.data ?? []).map((e) => e.mint),
+    ...(events.data ?? []).flatMap((e) => (e.mint ? [e.mint] : [])),
+  ]);
 
   const readings = relays.data;
   const haltedLabels = config.relays
@@ -64,13 +68,13 @@ export function App({ config }: { config: Config }) {
         </div>
 
         <EscrowTable
-          escrows={escrows.data?.escrows}
-          decimals={escrows.data?.decimals ?? {}}
+          escrows={escrows.data}
+          decimals={decimals}
           relays={relayInfo}
           nowSec={Math.floor(now / 1000)}
           cluster={config.cluster}
         />
-        <EventFeed events={events.data} decimals={escrows.data?.decimals ?? {}} nowMs={now} cluster={config.cluster} />
+        <EventFeed events={events.data} decimals={decimals} nowMs={now} cluster={config.cluster} />
 
         <footer className="foot">
           Read-only. Testnet Finality Depth is a labelled demo value, not mainnet-safe. Escrow program {shorten(config.escrowProgram, 6, 6)}, Header Relay program {shorten(config.relayProgram, 6, 6)}.

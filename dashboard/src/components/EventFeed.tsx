@@ -35,7 +35,7 @@ export function EventFeed({ events, decimals, nowMs, cluster }: Props) {
           const d = ev.mint ? decimals[ev.mint] : undefined;
           const strong = ev.kind === 'reveal-claim' || ev.kind === 'private-claim' || ev.kind === 'refund';
           return (
-            <li key={ev.signature} className={strong ? 'ev ev-strong' : 'ev'}>
+            <li key={`${ev.signature}:${ev.index}`} className={strong ? 'ev ev-strong' : 'ev'}>
               <span className={`chip ${l.cls}`}>{l.text}</span>
               <span className="ev-body">
                 {ev.amount !== null && ev.mint && (

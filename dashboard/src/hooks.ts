@@ -5,7 +5,7 @@ import type { EscrowView } from './model/escrow';
 import {
   Rpc,
   fetchEscrows,
-  fetchEvent,
+  fetchEvents,
   fetchMintDecimals,
   fetchNewSignatures,
   fetchRelays,
@@ -58,39 +58,67 @@ export function useRelays(rpc: Rpc, config: Config): Polled<RelayReading[]> {
   return usePoll(() => fetchRelays(rpc, config.relayProgram, addresses), config.relayPollMs);
 }
 
-export interface EscrowsData {
-  escrows: EscrowView[];
-  decimals: Record<string, number>;
+export function useEscrows(rpc: Rpc, config: Config): Polled<EscrowView[]> {
+  return usePoll(() => fetchEscrows(rpc, config.escrowProgram), config.escrowPollMs);
 }
 
-export function useEscrows(rpc: Rpc, config: Config): Polled<EscrowsData> {
-  const decimals = useRef<Record<string, number>>({});
-  return usePoll(async () => {
-    const escrows = await fetchEscrows(rpc, config.escrowProgram);
-    const missing = [...new Set(escrows.map((e) => e.mint))].filter((m) => !(m in decimals.current));
-    Object.assign(decimals.current, await fetchMintDecimals(rpc, missing));
-    return { escrows, decimals: { ...decimals.current } };
-  }, config.escrowPollMs);
+/** Decimals of every mint seen so far; each mint is looked up once. */
+export function useMintDecimals(rpc: Rpc, mints: string[]): Record<string, number> {
+  const [decimals, setDecimals] = useState<Record<string, number>>({});
+  const asked = useRef(new Set<string>());
+  const wanted = [...new Set(mints)].sort().join(',');
+  useEffect(() => {
+    const missing = wanted.split(',').filter((m) => m && !asked.current.has(m));
+    if (missing.length === 0) return;
+    missing.forEach((m) => asked.current.add(m));
+    fetchMintDecimals(rpc, missing)
+      .then((found) => setDecimals((d) => ({ ...d, ...found })))
+      .catch(() => missing.forEach((m) => asked.current.delete(m)));
+  }, [rpc, wanted]);
+  return decimals;
 }
 
 const FIRST_LOAD = 8;
+const PAGE = 25;
+const MAX_PAGES = 4;
 const KEEP = 40;
+const MAX_ATTEMPTS = 5;
 
-/** Escrow program transactions as they land, newest first. Failed transactions are left out. */
+/**
+ * Escrow program transactions as they land, newest first. Failed transactions are left out.
+ * A transaction the RPC cannot return yet is retried on later polls (up to MAX_ATTEMPTS) without
+ * holding back the others.
+ */
 export function useEvents(rpc: Rpc, config: Config): Polled<EscrowEvent[]> {
   const events = useRef<EscrowEvent[]>([]);
   const newest = useRef<string | undefined>(undefined);
+  const retry = useRef(new Map<string, number>());
   return usePoll(async () => {
-    const sigs = await fetchNewSignatures(rpc, config.escrowProgram, newest.current, newest.current ? 25 : FIRST_LOAD);
-    const fresh: EscrowEvent[] = [];
-    for (const s of sigs.filter((x) => x.err == null)) {
-      if (fresh.length > 0) await new Promise((r) => setTimeout(r, 400));
-      const ev = await fetchEvent(rpc, s.signature, config.escrowProgram);
-      if (ev) fresh.push(ev);
-    }
+    const sigs = newest.current
+      ? await fetchNewSignatures(rpc, config.escrowProgram, newest.current, PAGE, MAX_PAGES)
+      : await fetchNewSignatures(rpc, config.escrowProgram, undefined, FIRST_LOAD, 1);
     if (sigs[0]) newest.current = sigs[0].signature;
-    const known = new Set(events.current.map((e) => e.signature));
-    events.current = [...fresh.filter((e) => !known.has(e.signature)), ...events.current].slice(0, KEEP);
+    const todo = [...sigs.filter((x) => x.err == null).map((x) => x.signature)];
+    for (const sig of retry.current.keys()) if (!todo.includes(sig)) todo.push(sig);
+
+    const fresh: EscrowEvent[] = [];
+    let first = true;
+    for (const sig of todo) {
+      if (!first) await new Promise((r) => setTimeout(r, 400));
+      first = false;
+      try {
+        fresh.push(...(await fetchEvents(rpc, sig, config.escrowProgram)));
+        retry.current.delete(sig);
+      } catch {
+        const attempts = (retry.current.get(sig) ?? 0) + 1;
+        if (attempts >= MAX_ATTEMPTS) retry.current.delete(sig);
+        else retry.current.set(sig, attempts);
+      }
+    }
+    const key = (e: EscrowEvent) => `${e.signature}:${e.index}`;
+    const known = new Set(events.current.map(key));
+    const merged = [...fresh.filter((e) => !known.has(key(e))), ...events.current];
+    events.current = merged.sort((a, b) => b.slot - a.slot || a.index - b.index).slice(0, KEEP);
     return events.current;
   }, config.escrowPollMs);
 }

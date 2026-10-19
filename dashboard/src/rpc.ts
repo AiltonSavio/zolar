@@ -3,6 +3,7 @@ import { classifyTransaction, type EscrowEvent, type RpcTransaction } from './mo
 import { toEscrowView, type EscrowView } from './model/escrow';
 import { toRelayView, type RelayView } from './model/relay';
 
+const MAX_MULTIPLE_ACCOUNTS = 100;
 const ESCROW_ACCOUNT_SIZE = 300;
 const ESCROW_DISCRIMINATOR_B58 = '2'; // base58 of the single byte 0x01
 
@@ -75,33 +76,44 @@ export async function fetchEscrows(rpc: Rpc, escrowProgram: string): Promise<Esc
 }
 
 export async function fetchMintDecimals(rpc: Rpc, mints: string[]): Promise<Record<string, number>> {
-  if (mints.length === 0) return {};
-  const { value } = await rpc.call<{
-    value: ({ data: { parsed?: { info?: { decimals?: number } } } } | null)[];
-  }>('getMultipleAccounts', [mints, { encoding: 'jsonParsed', commitment: 'confirmed' }]);
   const out: Record<string, number> = {};
-  value.forEach((acc, i) => {
-    const decimals = acc?.data?.parsed?.info?.decimals;
-    const mint = mints[i];
-    if (mint && typeof decimals === 'number') out[mint] = decimals;
-  });
+  for (let i = 0; i < mints.length; i += MAX_MULTIPLE_ACCOUNTS) {
+    const batch = mints.slice(i, i + MAX_MULTIPLE_ACCOUNTS);
+    const { value } = await rpc.call<{
+      value: ({ data: { parsed?: { info?: { decimals?: number } } } } | null)[];
+    }>('getMultipleAccounts', [batch, { encoding: 'jsonParsed', commitment: 'confirmed' }]);
+    value.forEach((acc, j) => {
+      const decimals = acc?.data?.parsed?.info?.decimals;
+      const mint = batch[j];
+      if (mint && typeof decimals === 'number') out[mint] = decimals;
+    });
+  }
   return out;
 }
 
-/** Signatures of the program's transactions newer than `until`, newest first. */
+/** Signatures of the program's transactions newer than `until` (paging back from the newest), newest first. */
 export async function fetchNewSignatures(
   rpc: Rpc,
   program: string,
   until: string | undefined,
-  limit: number,
+  pageSize: number,
+  maxPages: number,
 ): Promise<{ signature: string; err: unknown }[]> {
-  return rpc.call('getSignaturesForAddress', [
-    program,
-    { limit, commitment: 'confirmed', ...(until ? { until } : {}) },
-  ]);
+  const all: { signature: string; err: unknown }[] = [];
+  let before: string | undefined;
+  for (let page = 0; page < maxPages; page++) {
+    const sigs = await rpc.call<{ signature: string; err: unknown }[]>('getSignaturesForAddress', [
+      program,
+      { limit: pageSize, commitment: 'confirmed', ...(until ? { until } : {}), ...(before ? { before } : {}) },
+    ]);
+    all.push(...sigs);
+    if (sigs.length < pageSize || !until) break;
+    before = sigs[sigs.length - 1]?.signature;
+  }
+  return all;
 }
 
-export async function fetchEvent(rpc: Rpc, signature: string, escrowProgram: string): Promise<EscrowEvent | null> {
+export async function fetchEvents(rpc: Rpc, signature: string, escrowProgram: string): Promise<EscrowEvent[]> {
   const tx = await rpc.call<RpcTransaction | null>('getTransaction', [
     signature,
     { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 },
