@@ -42,6 +42,26 @@ jobs:
       - name: Tests (program unit tests)
         run: cargo test --manifest-path programs/header-relay/Cargo.toml
 
+  pczt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          components: rustfmt, clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/zolar-pczt/target
+          key: pczt-${{ hashFiles('crates/zolar-pczt/Cargo.lock') }}
+      - name: Format, clippy and tests (zolar-pczt, own workspace)
+        run: |
+          cargo fmt --manifest-path crates/zolar-pczt/Cargo.toml --check
+          cargo clippy --manifest-path crates/zolar-pczt/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path crates/zolar-pczt/Cargo.toml
+
   clients:
     runs-on: ubuntu-latest
     steps:
