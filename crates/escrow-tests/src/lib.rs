@@ -423,6 +423,7 @@ impl World {
             .escrow(deal.escrow)
             .payer_token(self.payer_token)
             .vault(deal.vault)
+            .relay(self.relay)
             .instruction()
     }
 

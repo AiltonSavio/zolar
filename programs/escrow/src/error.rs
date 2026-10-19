@@ -39,4 +39,6 @@ pub enum EscrowError {
     NotPayer = 21,
     /// The Groth16 proof does not verify against the Escrow's public inputs.
     InvalidProof = 22,
+    /// A refund can already be requested, so a Bond deposited now could only feed it.
+    BondTooLate = 23,
 }

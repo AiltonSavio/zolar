@@ -16,6 +16,7 @@ const REFUND_NOT_YET: u32 = 18;
 const REFUND_NOT_REQUESTED: u32 = 19;
 const CLAIM_WINDOW_OPEN: u32 = 20;
 const NOT_PAYER: u32 = 21;
+const BOND_TOO_LATE: u32 = 23;
 
 const FINALITY_DEPTH: u16 = 3;
 const BOND: u64 = 200_000;
@@ -134,6 +135,72 @@ fn only_the_payer_wallet_deposits_the_exact_bond_once_and_not_after_a_refund_req
     w.fund_payer(BOND);
     let ix = w.deposit_bond_ix(&deal);
     assert_eq!(w.deposit_bond_err(ix), NO_BOND_REQUIRED);
+}
+
+#[test]
+fn a_bond_is_refused_once_the_tip_passes_the_expiry_plus_finality_depth() {
+    let (mut w, deal) = escrow_with_bond(BOND);
+    let passes = deal.expiry + FINALITY_DEPTH as u32;
+
+    // At `expiry + Finality Depth` the Payee still cannot ask for a refund, so the Bond is welcome.
+    mine_to(&mut w, passes);
+    let ix = w.request_refund_ix(&deal);
+    assert_eq!(w.claim_err(ix), REFUND_NOT_YET);
+
+    // One block later it can, and a Bond now could only feed the Refund.
+    mine_to(&mut w, passes + 1);
+    let ix = w.deposit_bond_ix(&deal);
+    assert_eq!(w.deposit_bond_err(ix), BOND_TOO_LATE);
+    assert_eq!(token_balance(&w.h, &w.payer_token), Some(BOND));
+    assert_eq!(token_balance(&w.h, &deal.vault), Some(deal.amount));
+}
+
+#[test]
+fn a_bond_at_the_last_height_before_a_refund_is_possible_is_accepted() {
+    let (mut w, deal) = escrow_with_bond(BOND);
+    mine_to(&mut w, deal.expiry + FINALITY_DEPTH as u32);
+    w.deposit_bond(&deal);
+    let escrow = Escrow::from_bytes(&w.h.svm.get_account(&deal.escrow).unwrap().data).unwrap();
+    assert_eq!(escrow.bond_deposited, BOND);
+}
+
+#[test]
+fn a_bond_is_refused_once_the_24_hour_backstop_has_passed() {
+    let (mut w, deal) = escrow_with_bond(BOND);
+    let created = Escrow::from_bytes(&w.h.svm.get_account(&deal.escrow).unwrap().data)
+        .unwrap()
+        .created_at;
+    w.set_time(created + BACKSTOP_SECS);
+    let ix = w.deposit_bond_ix(&deal);
+    assert_eq!(w.deposit_bond_err(ix), BOND_TOO_LATE);
+    assert_eq!(token_balance(&w.h, &w.payer_token), Some(BOND));
+
+    let (mut w, deal) = escrow_with_bond(BOND);
+    w.set_time(created + BACKSTOP_SECS - 1);
+    w.deposit_bond(&deal);
+}
+
+#[test]
+fn a_bond_waits_out_a_halted_relay_and_is_then_refused_at_the_backstop() {
+    let (mut w, deal) = escrow_with_bond(BOND);
+    w.mine(8);
+    w.halt();
+    let ix = w.deposit_bond_ix(&deal);
+    assert_eq!(
+        w.deposit_bond_err(ix.clone()),
+        RELAY_HALTED,
+        "claims are impossible while Halted, so a Bond would sit idle until the Payee takes it"
+    );
+    w.set_time(START_TIME + BACKSTOP_SECS);
+    assert_eq!(w.deposit_bond_err(ix), BOND_TOO_LATE);
+}
+
+#[test]
+fn a_bond_needs_the_escrows_own_relay() {
+    let (mut w, deal) = escrow_with_bond(BOND);
+    let mut ix = w.deposit_bond_ix(&deal);
+    ix.accounts[5].pubkey = w.payee_token;
+    assert_eq!(w.deposit_bond_err(ix), WRONG_ACCOUNT);
 }
 
 #[test]

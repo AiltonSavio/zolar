@@ -164,7 +164,7 @@ const instructions = [
   instructionNode({
     name: 'depositBond',
     docs: [
-      'The Payer wallet (`payout`) locks exactly `bondRequired` tokens of the mint in the vault, once. The Bond returns to the Payer on a Claim and goes to the Payee on a refund.',
+      'The Payer wallet (`payout`) locks exactly `bondRequired` tokens of the mint in the vault, once. The Bond returns to the Payer on a Claim and goes to the Payee on a refund. It is refused once the Payee could already request a refund (the Escrow\'s relay is running with a tip above the expiry height plus Finality Depth, or 24 hours have passed since creation), and while the relay is Halted.',
     ],
     discriminators: [fieldDiscriminatorNode('discriminator')],
     accounts: [
@@ -173,6 +173,7 @@ const instructions = [
       instructionAccountNode({ name: 'payerToken', isWritable: true, isSigner: false }),
       instructionAccountNode({ name: 'vault', isWritable: true, isSigner: false }),
       program('tokenProgram', TOKEN_PROGRAM),
+      instructionAccountNode({ name: 'relay', isWritable: false, isSigner: false }),
     ],
     arguments: [disc(2)],
   }),
@@ -252,6 +253,7 @@ const errors = [
   ['claimWindowOpen', 'The claim window since the refund request has not passed'],
   ['notPayer', 'The Bond must be signed and paid by the Payer wallet'],
   ['invalidProof', 'The Groth16 proof does not verify against the Escrow\'s public inputs'],
+  ['bondTooLate', 'A refund can already be requested, so a Bond deposited now could only feed it'],
 ].map(([name, message], i) => errorNode({ name, code: i + 1, message }));
 
 export const root = rootNode(

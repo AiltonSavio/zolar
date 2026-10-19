@@ -14,8 +14,8 @@ export const DEPOSIT_BOND_DISCRIMINATOR = 2;
 
 export function getDepositBondDiscriminatorBytes(): ReadonlyUint8Array { return getU8Encoder().encode(DEPOSIT_BOND_DISCRIMINATOR); }
 
-export type DepositBondInstruction<TProgram extends string = typeof ESCROW_PROGRAM_ADDRESS, TAccountPayer extends string | AccountMeta<string> = string, TAccountEscrow extends string | AccountMeta<string> = string, TAccountPayerToken extends string | AccountMeta<string> = string, TAccountVault extends string | AccountMeta<string> = string, TAccountTokenProgram extends string | AccountMeta<string> = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", TRemainingAccounts extends readonly AccountMeta<string>[] = []> =
-Instruction<TProgram> & InstructionWithData<ReadonlyUint8Array> & InstructionWithAccounts<[TAccountPayer extends string ? ReadonlySignerAccount<TAccountPayer> & AccountSignerMeta<TAccountPayer> : TAccountPayer, TAccountEscrow extends string ? WritableAccount<TAccountEscrow> : TAccountEscrow, TAccountPayerToken extends string ? WritableAccount<TAccountPayerToken> : TAccountPayerToken, TAccountVault extends string ? WritableAccount<TAccountVault> : TAccountVault, TAccountTokenProgram extends string ? ReadonlyAccount<TAccountTokenProgram> : TAccountTokenProgram, ...TRemainingAccounts]>;
+export type DepositBondInstruction<TProgram extends string = typeof ESCROW_PROGRAM_ADDRESS, TAccountPayer extends string | AccountMeta<string> = string, TAccountEscrow extends string | AccountMeta<string> = string, TAccountPayerToken extends string | AccountMeta<string> = string, TAccountVault extends string | AccountMeta<string> = string, TAccountTokenProgram extends string | AccountMeta<string> = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", TAccountRelay extends string | AccountMeta<string> = string, TRemainingAccounts extends readonly AccountMeta<string>[] = []> =
+Instruction<TProgram> & InstructionWithData<ReadonlyUint8Array> & InstructionWithAccounts<[TAccountPayer extends string ? ReadonlySignerAccount<TAccountPayer> & AccountSignerMeta<TAccountPayer> : TAccountPayer, TAccountEscrow extends string ? WritableAccount<TAccountEscrow> : TAccountEscrow, TAccountPayerToken extends string ? WritableAccount<TAccountPayerToken> : TAccountPayerToken, TAccountVault extends string ? WritableAccount<TAccountVault> : TAccountVault, TAccountTokenProgram extends string ? ReadonlyAccount<TAccountTokenProgram> : TAccountTokenProgram, TAccountRelay extends string ? ReadonlyAccount<TAccountRelay> : TAccountRelay, ...TRemainingAccounts]>;
 
 export type DepositBondInstructionData = { discriminator: number;  };
 
@@ -33,15 +33,16 @@ export function getDepositBondInstructionDataCodec(): FixedSizeCodec<DepositBond
     return combineCodec(getDepositBondInstructionDataEncoder(), getDepositBondInstructionDataDecoder());
 }
 
-export type DepositBondInput<TAccountPayer extends InstructionSignerInput = InstructionSignerInput, TAccountEscrow extends InstructionAccountInput = InstructionAccountInput, TAccountPayerToken extends InstructionAccountInput = InstructionAccountInput, TAccountVault extends InstructionAccountInput = InstructionAccountInput, TAccountTokenProgram extends InstructionAccountInput = InstructionAccountInput> =  {
+export type DepositBondInput<TAccountPayer extends InstructionSignerInput = InstructionSignerInput, TAccountEscrow extends InstructionAccountInput = InstructionAccountInput, TAccountPayerToken extends InstructionAccountInput = InstructionAccountInput, TAccountVault extends InstructionAccountInput = InstructionAccountInput, TAccountTokenProgram extends InstructionAccountInput = InstructionAccountInput, TAccountRelay extends InstructionAccountInput = InstructionAccountInput> =  {
   payer: TAccountPayer;
 escrow: TAccountEscrow;
 payerToken: TAccountPayerToken;
 vault: TAccountVault;
 tokenProgram?: TAccountTokenProgram;
+relay: TAccountRelay;
 }
 
-export function getDepositBondInstruction<TAccountPayer extends InstructionSignerInput, TAccountEscrow extends InstructionAccountInput, TAccountPayerToken extends InstructionAccountInput, TAccountVault extends InstructionAccountInput, TAccountTokenProgram extends InstructionAccountInput, TProgramAddress extends Address = typeof ESCROW_PROGRAM_ADDRESS>(input: DepositBondInput<TAccountPayer, TAccountEscrow, TAccountPayerToken, TAccountVault, TAccountTokenProgram>, config?: { programAddress?: TProgramAddress | { readonly address: TProgramAddress } } ): DepositBondInstruction<TProgramAddress, ResolvedInstructionAccountMeta<TAccountPayer, InstructionAccountInputAddress<TAccountPayer>>, ResolvedInstructionAccountMeta<TAccountEscrow, InstructionAccountInputAddress<TAccountEscrow>>, ResolvedInstructionAccountMeta<TAccountPayerToken, InstructionAccountInputAddress<TAccountPayerToken>>, ResolvedInstructionAccountMeta<TAccountVault, InstructionAccountInputAddress<TAccountVault>>, ResolvedInstructionAccountMeta<TAccountTokenProgram, InstructionAccountInputAddress<TAccountTokenProgram>>> {
+export function getDepositBondInstruction<TAccountPayer extends InstructionSignerInput, TAccountEscrow extends InstructionAccountInput, TAccountPayerToken extends InstructionAccountInput, TAccountVault extends InstructionAccountInput, TAccountTokenProgram extends InstructionAccountInput, TAccountRelay extends InstructionAccountInput, TProgramAddress extends Address = typeof ESCROW_PROGRAM_ADDRESS>(input: DepositBondInput<TAccountPayer, TAccountEscrow, TAccountPayerToken, TAccountVault, TAccountTokenProgram, TAccountRelay>, config?: { programAddress?: TProgramAddress | { readonly address: TProgramAddress } } ): DepositBondInstruction<TProgramAddress, ResolvedInstructionAccountMeta<TAccountPayer, InstructionAccountInputAddress<TAccountPayer>>, ResolvedInstructionAccountMeta<TAccountEscrow, InstructionAccountInputAddress<TAccountEscrow>>, ResolvedInstructionAccountMeta<TAccountPayerToken, InstructionAccountInputAddress<TAccountPayerToken>>, ResolvedInstructionAccountMeta<TAccountVault, InstructionAccountInputAddress<TAccountVault>>, ResolvedInstructionAccountMeta<TAccountTokenProgram, InstructionAccountInputAddress<TAccountTokenProgram>>, ResolvedInstructionAccountMeta<TAccountRelay, InstructionAccountInputAddress<TAccountRelay>>> {
   // Program address.
 const programAddressInput = config?.programAddress ?? ESCROW_PROGRAM_ADDRESS;
 const programAddress = typeof programAddressInput === 'string' ? programAddressInput : programAddressInput.address;
@@ -50,7 +51,7 @@ const programAddress = typeof programAddressInput === 'string' ? programAddressI
 const getAccountMeta = getAccountMetaFactory(programAddress, 'programId');
 
  // Original accounts.
-const originalAccounts = { payer: { value: input.payer ?? null, isSigner: true, isWritable: false }, escrow: { value: input.escrow ?? null, isSigner: false, isWritable: true }, payerToken: { value: input.payerToken ?? null, isSigner: false, isWritable: true }, vault: { value: input.vault ?? null, isSigner: false, isWritable: true }, tokenProgram: { value: input.tokenProgram ?? null, isSigner: false, isWritable: false } }
+const originalAccounts = { payer: { value: input.payer ?? null, isSigner: true, isWritable: false }, escrow: { value: input.escrow ?? null, isSigner: false, isWritable: true }, payerToken: { value: input.payerToken ?? null, isSigner: false, isWritable: true }, vault: { value: input.vault ?? null, isSigner: false, isWritable: true }, tokenProgram: { value: input.tokenProgram ?? null, isSigner: false, isWritable: false }, relay: { value: input.relay ?? null, isSigner: false, isWritable: false } }
 const accounts = originalAccounts as Record<keyof typeof originalAccounts, ResolvedInstructionAccount>;
 
 
@@ -59,7 +60,7 @@ if (!accounts.tokenProgram.value) {
 accounts.tokenProgram.value = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' as Address<'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'>;
 }
 
-return Object.freeze({ accounts: [getAccountMeta("payer", accounts.payer), getAccountMeta("escrow", accounts.escrow), getAccountMeta("payerToken", accounts.payerToken), getAccountMeta("vault", accounts.vault), getAccountMeta("tokenProgram", accounts.tokenProgram)], data: getDepositBondInstructionDataEncoder().encode({}), programAddress } as DepositBondInstruction<TProgramAddress, ResolvedInstructionAccountMeta<TAccountPayer, InstructionAccountInputAddress<TAccountPayer>>, ResolvedInstructionAccountMeta<TAccountEscrow, InstructionAccountInputAddress<TAccountEscrow>>, ResolvedInstructionAccountMeta<TAccountPayerToken, InstructionAccountInputAddress<TAccountPayerToken>>, ResolvedInstructionAccountMeta<TAccountVault, InstructionAccountInputAddress<TAccountVault>>, ResolvedInstructionAccountMeta<TAccountTokenProgram, InstructionAccountInputAddress<TAccountTokenProgram>>>);
+return Object.freeze({ accounts: [getAccountMeta("payer", accounts.payer), getAccountMeta("escrow", accounts.escrow), getAccountMeta("payerToken", accounts.payerToken), getAccountMeta("vault", accounts.vault), getAccountMeta("tokenProgram", accounts.tokenProgram), getAccountMeta("relay", accounts.relay)], data: getDepositBondInstructionDataEncoder().encode({}), programAddress } as DepositBondInstruction<TProgramAddress, ResolvedInstructionAccountMeta<TAccountPayer, InstructionAccountInputAddress<TAccountPayer>>, ResolvedInstructionAccountMeta<TAccountEscrow, InstructionAccountInputAddress<TAccountEscrow>>, ResolvedInstructionAccountMeta<TAccountPayerToken, InstructionAccountInputAddress<TAccountPayerToken>>, ResolvedInstructionAccountMeta<TAccountVault, InstructionAccountInputAddress<TAccountVault>>, ResolvedInstructionAccountMeta<TAccountTokenProgram, InstructionAccountInputAddress<TAccountTokenProgram>>, ResolvedInstructionAccountMeta<TAccountRelay, InstructionAccountInputAddress<TAccountRelay>>>);
 }
 
 export type ParsedDepositBondInstruction<TProgram extends string = typeof ESCROW_PROGRAM_ADDRESS, TAccountMetas extends readonly AccountMeta[] = readonly AccountMeta[]> = { programAddress: Address<TProgram>;
@@ -69,12 +70,13 @@ escrow: TAccountMetas[1];
 payerToken: TAccountMetas[2];
 vault: TAccountMetas[3];
 tokenProgram: TAccountMetas[4];
+relay: TAccountMetas[5];
 };
 data: DepositBondInstructionData; };
 
 export function parseDepositBondInstruction<TProgram extends string, TAccountMetas extends readonly AccountMeta[]>(instruction: Instruction<TProgram> & InstructionWithAccounts<TAccountMetas> & InstructionWithData<ReadonlyUint8Array>): ParsedDepositBondInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 5) {
-  throw new SolanaError(SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS, { actualAccountMetas: instruction.accounts.length, expectedAccountMetas: 5 });
+  if (instruction.accounts.length < 6) {
+  throw new SolanaError(SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS, { actualAccountMetas: instruction.accounts.length, expectedAccountMetas: 6 });
 }
 let accountIndex = 0;
 const getNextAccount = () => {
@@ -82,5 +84,5 @@ const getNextAccount = () => {
   accountIndex += 1;
   return accountMeta;
 }
-  return { programAddress: instruction.programAddress, accounts: { payer: getNextAccount(), escrow: getNextAccount(), payerToken: getNextAccount(), vault: getNextAccount(), tokenProgram: getNextAccount() }, data: getDepositBondInstructionDataDecoder().decode(instruction.data) };
+  return { programAddress: instruction.programAddress, accounts: { payer: getNextAccount(), escrow: getNextAccount(), payerToken: getNextAccount(), vault: getNextAccount(), tokenProgram: getNextAccount(), relay: getNextAccount() }, data: getDepositBondInstructionDataDecoder().decode(instruction.data) };
 }

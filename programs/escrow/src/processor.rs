@@ -677,7 +677,7 @@ fn check_escrow(program_id: &Address, escrow: &AccountView) -> ProgramResult {
 }
 
 fn deposit_bond(program_id: &Address, accounts: &[AccountView], args: &[u8]) -> ProgramResult {
-    let [payer, escrow, payer_token, vault, token_program] = accounts else {
+    let [payer, escrow, payer_token, vault, token_program, relay] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
     if !args.is_empty() {
@@ -708,6 +708,11 @@ fn deposit_bond(program_id: &Address, accounts: &[AccountView], args: &[u8]) -> 
         }
         (bond, array32(&e, E_MINT))
     };
+    // Once the Payee could request a refund, a Bond could only feed it. A Halted relay fails here too:
+    // no Claim can settle until it recovers or the backstop passes, so the Bond would sit idle.
+    if refund_possible(escrow, relay, Clock::get()?.unix_timestamp)? {
+        return Err(fail(EscrowError::BondTooLate));
+    }
     let source = read_token(payer_token, false)?;
     if source.mint != mint || source.owner != *payer.address().as_ref() {
         return Err(fail(EscrowError::BadTokenAccount));
@@ -721,10 +726,14 @@ fn deposit_bond(program_id: &Address, accounts: &[AccountView], args: &[u8]) -> 
     Ok(())
 }
 
-/// A refund is allowed 24 hours after creation whatever the relay says, or while the Escrow's
-/// relay is running with a tip above the expiry height plus Finality Depth. Both steps check it, so
-/// a Halt after the request sends the Payee back to the backstop.
-fn require_refundable(escrow: &AccountView, relay: &AccountView, now: i64) -> ProgramResult {
+/// Whether a refund may be requested: 24 hours after creation whatever the relay says, or while the
+/// Escrow's relay is running with a tip above the expiry height plus Finality Depth. A relay that is
+/// not the Escrow's own, or is Halted before the backstop, is an error.
+fn refund_possible(
+    escrow: &AccountView,
+    relay: &AccountView,
+    now: i64,
+) -> Result<bool, ProgramError> {
     let (created_at, expiry_height) = {
         let e = escrow.try_borrow()?;
         if array32(&e, E_RELAY) != *relay.address().as_ref() {
@@ -733,14 +742,21 @@ fn require_refundable(escrow: &AccountView, relay: &AccountView, now: i64) -> Pr
         (i64_at(&e, E_CREATED_AT), u32_at(&e, E_EXPIRY_HEIGHT))
     };
     if now >= created_at.saturating_add(BACKSTOP_SECS) {
-        return Ok(());
+        return Ok(true);
     }
     let data = relay.try_borrow()?;
     let view = relay_view(relay, &data)?;
-    if view.tip_height() <= expiry_height.saturating_add(view.finality_depth() as u32) {
-        return Err(fail(EscrowError::RefundNotYet));
+    Ok(view.tip_height() > expiry_height.saturating_add(view.finality_depth() as u32))
+}
+
+/// Both refund steps need [`refund_possible`], so a Halt after the request sends the Payee back to
+/// the backstop.
+fn require_refundable(escrow: &AccountView, relay: &AccountView, now: i64) -> ProgramResult {
+    if refund_possible(escrow, relay, now)? {
+        Ok(())
+    } else {
+        Err(fail(EscrowError::RefundNotYet))
     }
-    Ok(())
 }
 
 /// First step of a refund, once [`require_refundable`] holds. Starts the claim window; a Claim still

@@ -78,6 +78,9 @@ pub enum EscrowError {
     /// 22 - The Groth16 proof does not verify against the Escrow's public inputs
     #[error("The Groth16 proof does not verify against the Escrow's public inputs")]
     InvalidProof = 0x16,
+    /// 23 - A refund can already be requested, so a Bond deposited now could only feed it
+    #[error("A refund can already be requested, so a Bond deposited now could only feed it")]
+    BondTooLate = 0x17,
 }
 
 impl From<EscrowError> for solana_program_error::ProgramError {

@@ -22,6 +22,8 @@ pub struct DepositBond {
     pub vault: solana_address::Address,
 
     pub token_program: solana_address::Address,
+
+    pub relay: solana_address::Address,
 }
 
 impl DepositBond {
@@ -34,7 +36,7 @@ impl DepositBond {
         &self,
         remaining_accounts: &[solana_instruction::AccountMeta],
     ) -> solana_instruction::Instruction {
-        let mut accounts = Vec::with_capacity(5 + remaining_accounts.len());
+        let mut accounts = Vec::with_capacity(6 + remaining_accounts.len());
         accounts.push(solana_instruction::AccountMeta::new_readonly(
             self.payer, true,
         ));
@@ -47,6 +49,9 @@ impl DepositBond {
         accounts.push(solana_instruction::AccountMeta::new_readonly(
             self.token_program,
             false,
+        ));
+        accounts.push(solana_instruction::AccountMeta::new_readonly(
+            self.relay, false,
         ));
         accounts.extend_from_slice(remaining_accounts);
         let data = DepositBondInstructionData::new().try_to_vec().unwrap();
@@ -89,6 +94,7 @@ impl Default for DepositBondInstructionData {
 ///   2. `[writable]` payer_token
 ///   3. `[writable]` vault
 ///   4. `[optional]` token_program (default to `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`)
+///   5. `[]` relay
 #[derive(Clone, Debug, Default)]
 pub struct DepositBondBuilder {
     payer: Option<solana_address::Address>,
@@ -96,6 +102,7 @@ pub struct DepositBondBuilder {
     payer_token: Option<solana_address::Address>,
     vault: Option<solana_address::Address>,
     token_program: Option<solana_address::Address>,
+    relay: Option<solana_address::Address>,
     __remaining_accounts: Vec<solana_instruction::AccountMeta>,
 }
 
@@ -129,6 +136,11 @@ impl DepositBondBuilder {
         self.token_program = Some(token_program);
         self
     }
+    #[inline(always)]
+    pub fn relay(&mut self, relay: solana_address::Address) -> &mut Self {
+        self.relay = Some(relay);
+        self
+    }
     /// Add an additional account to the instruction.
     #[inline(always)]
     pub fn add_remaining_account(&mut self, account: solana_instruction::AccountMeta) -> &mut Self {
@@ -154,6 +166,7 @@ impl DepositBondBuilder {
             token_program: self.token_program.unwrap_or(solana_address::address!(
                 "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             )),
+            relay: self.relay.expect("relay is not set"),
         };
 
         accounts.instruction_with_remaining_accounts(&self.__remaining_accounts)
@@ -171,6 +184,8 @@ pub struct DepositBondCpiAccounts<'a, 'b> {
     pub vault: &'b solana_account_info::AccountInfo<'a>,
 
     pub token_program: &'b solana_account_info::AccountInfo<'a>,
+
+    pub relay: &'b solana_account_info::AccountInfo<'a>,
 }
 
 /// `deposit_bond` CPI instruction.
@@ -187,6 +202,8 @@ pub struct DepositBondCpi<'a, 'b> {
     pub vault: &'b solana_account_info::AccountInfo<'a>,
 
     pub token_program: &'b solana_account_info::AccountInfo<'a>,
+
+    pub relay: &'b solana_account_info::AccountInfo<'a>,
 }
 
 impl<'a, 'b> DepositBondCpi<'a, 'b> {
@@ -201,6 +218,7 @@ impl<'a, 'b> DepositBondCpi<'a, 'b> {
             payer_token: accounts.payer_token,
             vault: accounts.vault,
             token_program: accounts.token_program,
+            relay: accounts.relay,
         }
     }
     #[inline(always)]
@@ -226,7 +244,7 @@ impl<'a, 'b> DepositBondCpi<'a, 'b> {
         signers_seeds: &[&[&[u8]]],
         remaining_accounts: &[(&'b solana_account_info::AccountInfo<'a>, bool, bool)],
     ) -> solana_program_error::ProgramResult {
-        let mut accounts = Vec::with_capacity(5 + remaining_accounts.len());
+        let mut accounts = Vec::with_capacity(6 + remaining_accounts.len());
         accounts.push(solana_instruction::AccountMeta::new_readonly(
             *self.payer.key,
             true,
@@ -244,6 +262,10 @@ impl<'a, 'b> DepositBondCpi<'a, 'b> {
             *self.token_program.key,
             false,
         ));
+        accounts.push(solana_instruction::AccountMeta::new_readonly(
+            *self.relay.key,
+            false,
+        ));
         remaining_accounts.iter().for_each(|remaining_account| {
             accounts.push(solana_instruction::AccountMeta {
                 pubkey: *remaining_account.0.key,
@@ -258,13 +280,14 @@ impl<'a, 'b> DepositBondCpi<'a, 'b> {
             accounts,
             data,
         };
-        let mut account_infos = Vec::with_capacity(6 + remaining_accounts.len());
+        let mut account_infos = Vec::with_capacity(7 + remaining_accounts.len());
         account_infos.push(self.__program.clone());
         account_infos.push(self.payer.clone());
         account_infos.push(self.escrow.clone());
         account_infos.push(self.payer_token.clone());
         account_infos.push(self.vault.clone());
         account_infos.push(self.token_program.clone());
+        account_infos.push(self.relay.clone());
         remaining_accounts
             .iter()
             .for_each(|remaining_account| account_infos.push(remaining_account.0.clone()));
@@ -286,6 +309,7 @@ impl<'a, 'b> DepositBondCpi<'a, 'b> {
 ///   2. `[writable]` payer_token
 ///   3. `[writable]` vault
 ///   4. `[]` token_program
+///   5. `[]` relay
 #[derive(Clone, Debug)]
 pub struct DepositBondCpiBuilder<'a, 'b> {
     instruction: Box<DepositBondCpiBuilderInstruction<'a, 'b>>,
@@ -300,6 +324,7 @@ impl<'a, 'b> DepositBondCpiBuilder<'a, 'b> {
             payer_token: None,
             vault: None,
             token_program: None,
+            relay: None,
             __remaining_accounts: Vec::new(),
         });
         Self { instruction }
@@ -333,6 +358,11 @@ impl<'a, 'b> DepositBondCpiBuilder<'a, 'b> {
         token_program: &'b solana_account_info::AccountInfo<'a>,
     ) -> &mut Self {
         self.instruction.token_program = Some(token_program);
+        self
+    }
+    #[inline(always)]
+    pub fn relay(&mut self, relay: &'b solana_account_info::AccountInfo<'a>) -> &mut Self {
+        self.instruction.relay = Some(relay);
         self
     }
     /// Add an additional account to the instruction.
@@ -387,6 +417,8 @@ impl<'a, 'b> DepositBondCpiBuilder<'a, 'b> {
                 .instruction
                 .token_program
                 .expect("token_program is not set"),
+
+            relay: self.instruction.relay.expect("relay is not set"),
         };
         instruction.invoke_signed_with_remaining_accounts(
             signers_seeds,
@@ -403,6 +435,7 @@ struct DepositBondCpiBuilderInstruction<'a, 'b> {
     payer_token: Option<&'b solana_account_info::AccountInfo<'a>>,
     vault: Option<&'b solana_account_info::AccountInfo<'a>>,
     token_program: Option<&'b solana_account_info::AccountInfo<'a>>,
+    relay: Option<&'b solana_account_info::AccountInfo<'a>>,
     /// Additional instruction accounts `(AccountInfo, is_writable, is_signer)`.
     __remaining_accounts: Vec<(&'b solana_account_info::AccountInfo<'a>, bool, bool)>,
 }

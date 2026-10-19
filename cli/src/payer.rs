@@ -288,6 +288,7 @@ pub fn deposit_bond(chains: &Chains, keypair: &Path, escrow_address: Address) ->
         .escrow(escrow_address)
         .payer_token(source)
         .vault(escrow.vault)
+        .relay(escrow.relay)
         .instruction();
     let signature = send(&mut rpc, &[ix], &payer)?;
     println!(
