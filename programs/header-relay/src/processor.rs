@@ -642,11 +642,24 @@ fn accept_header(program_id: &Address, accounts: &[AccountView]) -> ProgramResul
         return Err(fail(RelayError::BadDifficulty));
     }
 
-    let protected = [u16_at(&r, R_TIP_SLOT) as usize, parent.slot as usize];
+    let mut tip_chain = [false; MAX_CAPACITY];
+    mark_tip_chain(
+        u16_at(&r, R_TIP_SLOT),
+        u32_at(&r, R_TIP_SEQ),
+        |i| {
+            let at = STORE_HEADER_LEN + i * SLOT_LEN;
+            (
+                u32_at(&s, at + SL_SEQ),
+                u16_at(&s, at + SL_PARENT_SLOT),
+                u32_at(&s, at + SL_PARENT_SEQ),
+            )
+        },
+        &mut tip_chain,
+    );
     let index = choose_slot(
         capacity,
         |i| u32_at(&s, STORE_HEADER_LEN + i * SLOT_LEN + SL_SEQ),
-        &protected,
+        |i| tip_chain[i] || i == parent.slot as usize,
     )
     .ok_or(fail(RelayError::TooOld))?;
     let seq = count

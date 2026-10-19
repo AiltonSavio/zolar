@@ -112,12 +112,37 @@ pub fn is_too_old(tip_height: u32, height: u32) -> bool {
     tip_height.saturating_sub(height) > REORG_WINDOW
 }
 
+/// Marks the slots holding the last `CONTEXT_LEN` blocks of the tip's chain (the tip and its
+/// ancestors, following parent pointers while each slot still holds the block pointed to).
+/// `link(slot)` returns that slot's `(seq, parent_slot, parent_seq)`. These blocks are the
+/// difficulty context of the next header on the tip, so a flood of siblings must not evict them.
+pub fn mark_tip_chain(
+    tip_slot: u16,
+    tip_seq: u32,
+    link: impl Fn(usize) -> (u32, u16, u32),
+    marked: &mut [bool],
+) {
+    let (mut slot, mut seq) = (tip_slot, tip_seq);
+    for _ in 0..zcash_header::difficulty::CONTEXT_LEN {
+        let index = slot as usize;
+        if slot == CHECKPOINT_SLOT || index >= marked.len() {
+            return;
+        }
+        let (stored_seq, parent_slot, parent_seq) = link(index);
+        if stored_seq != seq {
+            return;
+        }
+        marked[index] = true;
+        (slot, seq) = (parent_slot, parent_seq);
+    }
+}
+
 /// Picks the slot a new header is written to: the first never-used slot (sequence 0),
-/// otherwise the oldest slot that is not `protected` (the tip and the new header's parent).
+/// otherwise the oldest slot that is not `protected` (the tip's chain and the new header's parent).
 pub fn choose_slot(
     capacity: usize,
     seq_of: impl Fn(usize) -> u32,
-    protected: &[usize],
+    protected: impl Fn(usize) -> bool,
 ) -> Option<usize> {
     let mut oldest: Option<(u32, usize)> = None;
     for i in 0..capacity {
@@ -125,7 +150,7 @@ pub fn choose_slot(
         if seq == 0 {
             return Some(i);
         }
-        if protected.contains(&i) {
+        if protected(i) {
             continue;
         }
         if oldest.is_none_or(|(s, _)| seq < s) {
@@ -152,22 +177,62 @@ mod tests {
     #[test]
     fn uses_free_slots_before_evicting() {
         let seqs = [3, 4, 0, 0];
-        assert_eq!(choose_slot(4, |i| seqs[i], &[]), Some(2));
+        assert_eq!(choose_slot(4, |i| seqs[i], |_| false), Some(2));
     }
 
     #[test]
     fn evicts_the_oldest_unprotected_slot() {
         let seqs = [7, 5, 9, 6];
-        assert_eq!(choose_slot(4, |i| seqs[i], &[]), Some(1));
-        assert_eq!(choose_slot(4, |i| seqs[i], &[1]), Some(3));
-        assert_eq!(choose_slot(4, |i| seqs[i], &[1, 3]), Some(0));
+        assert_eq!(choose_slot(4, |i| seqs[i], |_| false), Some(1));
+        assert_eq!(choose_slot(4, |i| seqs[i], |i| i == 1), Some(3));
+        assert_eq!(choose_slot(4, |i| seqs[i], |i| i == 1 || i == 3), Some(0));
     }
 
     #[test]
     fn never_evicts_the_tip_or_the_parent_so_insertion_cannot_deadlock() {
         // The tip sits in the oldest slot (as after a heavier branch): the next oldest goes.
         let seqs = [1, 2, 3];
-        assert_eq!(choose_slot(3, |i| seqs[i], &[0, 1]), Some(2));
-        assert_eq!(choose_slot(2, |i| seqs[i], &[0, 1]), None);
+        assert_eq!(choose_slot(3, |i| seqs[i], |i| i < 2), Some(2));
+        assert_eq!(choose_slot(2, |i| seqs[i], |_| true), None);
+    }
+
+    /// A chain of three blocks (slots 2, 0, 1 in insertion order) behind a tip, plus a sibling in slot 3.
+    #[test]
+    fn the_tip_chain_survives_a_flood_of_siblings() {
+        // slot: (seq, parent_slot, parent_seq)
+        let slots = [
+            (2, 2, 1),               // slot 0: second block, child of slot 2
+            (3, 0, 2),               // slot 1: the tip, child of slot 0
+            (1, CHECKPOINT_SLOT, 0), // slot 2: first block, child of the checkpoint
+            (9, 2, 1),               // slot 3: a sibling of the second block
+        ];
+        let mut marked = [false; 4];
+        mark_tip_chain(1, 3, |i| slots[i], &mut marked);
+        assert_eq!(marked, [true, true, true, false]);
+        let seqs = [2, 3, 1, 9];
+        assert_eq!(
+            choose_slot(4, |i| seqs[i], |i| marked[i]),
+            Some(3),
+            "only the sibling is evictable"
+        );
+    }
+
+    #[test]
+    fn a_stale_pointer_ends_the_marked_chain() {
+        // slot 2 was overwritten by seq 7 after slot 0 pointed at seq 1.
+        let slots = [(2, 2, 1), (3, 0, 2), (7, CHECKPOINT_SLOT, 0)];
+        let mut marked = [false; 3];
+        mark_tip_chain(1, 3, |i| slots[i], &mut marked);
+        assert_eq!(marked, [true, true, false]);
+    }
+
+    #[test]
+    fn marking_stops_after_the_difficulty_context() {
+        // 120 blocks in a line: slot i holds seq i + 1, child of slot i - 1.
+        let link = |i: usize| (i as u32 + 1, i.wrapping_sub(1) as u16, i as u32);
+        let mut marked = [false; 120];
+        mark_tip_chain(119, 120, link, &mut marked);
+        assert_eq!(marked.iter().filter(|m| **m).count(), 113);
+        assert!(marked[119] && marked[7] && !marked[6]);
     }
 }
