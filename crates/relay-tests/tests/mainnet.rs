@@ -33,7 +33,7 @@ fn the_relay_accepts_287_recorded_mainnet_headers() {
 }
 
 #[test]
-fn a_mainnet_relay_logs_the_accept_header_compute_units() {
+fn accept_header_on_mainnet_costs_under_100k_compute_units() {
     let rows = fixture_rows(MAINNET_FIXTURE);
     let mut h = Harness::new();
     let relay = mainnet_relay(&mut h, &rows, 113);
@@ -112,14 +112,20 @@ fn a_testnet_and_a_mainnet_relay_run_side_by_side_in_one_program() {
     assert_eq!(h.store(&testnet).0.count, 60);
     assert_eq!(h.store(&mainnet).0.count, 60);
 
-    // Neither relay takes the other network's next header: the parent is unknown to it, and a
-    // testnet header also fails the mainnet limit.
-    let next_testnet = &testnet_rows[173].1;
+    // Neither relay takes the other network's next header. The testnet minimum-difficulty block
+    // 4,495,487 (nBits 0x2007ffff) is above the mainnet limit; the next NU7 testnet header meets that
+    // limit but its parent is unknown to the mainnet relay.
+    let min_difficulty_rows = fixture_rows(MIN_DIFFICULTY_FIXTURE);
+    let easy = &min_difficulty_rows
+        .iter()
+        .find(|r| r.0 == 4_495_487)
+        .unwrap()
+        .1;
     let mut cu = Cu::default();
-    let buffer = h.upload_and_verify(&mainnet, 0, next_testnet, &mut cu);
-    let code = h.custom_err(&h.finish_ixs(&buffer, &mainnet), &[]);
-    assert!(code == 10 || code == 12, "got {code}");
-    let next_mainnet = &mainnet_rows[173].1;
-    let buffer = h.upload_and_verify(&testnet, 1, next_mainnet, &mut cu);
+    let buffer = h.upload_and_verify(&mainnet, 0, easy, &mut cu);
+    assert_eq!(h.custom_err(&h.finish_ixs(&buffer, &mainnet), &[]), 10);
+    let buffer = h.upload_and_verify(&mainnet, 1, &testnet_rows[173].1, &mut cu);
+    assert_eq!(h.custom_err(&h.finish_ixs(&buffer, &mainnet), &[]), 12);
+    let buffer = h.upload_and_verify(&testnet, 1, &mainnet_rows[173].1, &mut cu);
     assert_eq!(h.custom_err(&h.finish_ixs(&buffer, &testnet), &[]), 12);
 }

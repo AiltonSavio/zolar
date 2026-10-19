@@ -27,7 +27,7 @@ pub fn mainnet_checkpoint(
 /// context `nBits` exponent one lower). The relay then demands a target about 256 times tighter than
 /// the one real block `rows[end]` carries, so that real, valid header is a target above the real
 /// difficulty of that chain. A header with real work at the mainnet limit would be the purer forgery,
-/// but mining one takes about 8,192 solutions (tens of core-hours); see the ticket 05 research note.
+/// but mining one takes about 8,192 solutions (measured: tens of seconds per solver nonce, hence core-days).
 pub fn harder_mainnet_checkpoint(rows: &[(u32, Vec<u8>)], end: usize) -> Checkpoint {
     let mut checkpoint = mainnet_checkpoint(rows, end, 10, 0);
     for bits in checkpoint.bits.iter_mut() {

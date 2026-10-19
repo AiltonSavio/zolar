@@ -8,7 +8,7 @@ height, hash, time and bits from https://api.blockchair.com/zcash/dashboards/blo
 per request) and compares them with the values recomputed from the raw header (hash = SHA-256d,
 reversed). Exits non-zero on any mismatch. Chain linkage of every header is checked too.
 """
-import hashlib, json, struct, sys, time, urllib.request
+import calendar, hashlib, json, struct, sys, time, urllib.request
 
 
 def sha256d(b):
@@ -31,7 +31,7 @@ def main():
             got = data[str(height)]["block"]
             t, bits = struct.unpack("<II", raw[100:108])
             hash_hex = sha256d(raw)[::-1].hex()
-            explorer_time = int(time.mktime(time.strptime(got["time"], "%Y-%m-%d %H:%M:%S"))) - time.timezone
+            explorer_time = calendar.timegm(time.strptime(got["time"], "%Y-%m-%d %H:%M:%S"))
             assert got["hash"] == hash_hex, f"{height}: hash {got['hash']} != {hash_hex}"
             assert explorer_time == t, f"{height}: time {explorer_time} != {t}"
             assert int(got["bits"]) == bits, f"{height}: bits {got['bits']} != {bits}"

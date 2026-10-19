@@ -120,8 +120,8 @@ fn a_solution_with_a_flipped_bit_is_rejected() {
     assert!(!solution_verifies(&bad));
 }
 
-/// Real blocks carry about 2^215; a forger who claims the mainnet limit (2^243) mines 8,192 times
-/// faster, and the exact-match rule is what turns that header away.
+/// Real blocks carry a target of about 2^215; a forger who claims the mainnet limit (2^243) needs
+/// about 2^28 times less work per block, and the exact-match rule is what turns that header away.
 #[test]
 fn a_target_above_the_real_difficulty_is_not_the_expected_target() {
     let rows = rows();
