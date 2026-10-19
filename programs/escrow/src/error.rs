@@ -37,4 +37,6 @@ pub enum EscrowError {
     ClaimWindowOpen = 20,
     /// The Bond is not signed and paid by the Payer wallet.
     NotPayer = 21,
+    /// The Groth16 proof does not verify against the Escrow's public inputs.
+    InvalidProof = 22,
 }

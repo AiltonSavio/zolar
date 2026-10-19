@@ -15,12 +15,14 @@
 //! | 3 | Refund | escrow(w), relay, vault(w), payee_token(w), payee(w), token program |
 //! | 5 | RequestRefund | escrow(w), relay |
 //!
-//! Tag 4 (PrivateClaim) is reserved for ticket 10.
+//! | 4 | PrivateClaim `proof_a[64] (negated), proof_b[128], proof_c[64], root[32]` | escrow(w), relay, vault(w), payout_token(w), payee(w), token program |
 #![cfg_attr(target_os = "solana", no_std)]
 
 pub mod error;
 pub mod processor;
 pub mod state;
+pub mod verifying_key;
+mod verifying_key_generated;
 pub mod zeros;
 
 #[cfg(all(target_os = "solana", not(feature = "no-entrypoint")))]

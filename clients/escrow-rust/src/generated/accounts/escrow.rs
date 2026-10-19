@@ -40,7 +40,7 @@ pub struct Escrow {
     pub created_tip: u32,
     /// Zcash height by which the payment must be mined.
     pub expiry_height: u32,
-    /// 0 a Reveal Claim may settle; 1 only a Private Claim may (ticket 10).
+    /// 0 a Reveal Claim or a Private Claim may settle; 1 only a Private Claim may.
     pub claim_mode: u8,
     /// Solana unix time of RequestRefund; 0 while state is 0.
     pub refund_requested_at: i64,

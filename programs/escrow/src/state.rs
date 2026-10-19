@@ -73,6 +73,14 @@ pub fn block_in_window(
         && block_height <= expiry_height
 }
 
+/// Lowest block height a Private Claim may prove: the same rule as `block_in_window`
+/// (`block + finality_depth > created_tip`) written as a bound the circuit can compare against.
+pub fn claim_window_lower(created_tip: u32, finality_depth: u16) -> u32 {
+    created_tip
+        .saturating_add(1)
+        .saturating_sub(finality_depth as u32)
+}
+
 /// `value` is a canonical BN254 field element (big-endian, below the modulus).
 pub fn below_modulus(value: &[u8; 32]) -> bool {
     value < &BN254_MODULUS
@@ -109,6 +117,22 @@ mod tests {
         assert!(!block_in_window(90, 100, 120, 10));
         assert!(block_in_window(120, 100, 120, 10));
         assert!(!block_in_window(121, 100, 120, 10));
+    }
+
+    #[test]
+    fn window_lower_bound_is_the_same_rule_as_the_reveal_window() {
+        for created_tip in [0u32, 1, 2, 9, 10, 11, 100, u32::MAX - 1] {
+            for depth in [0u16, 1, 2, 10, 100, u16::MAX] {
+                let lower = claim_window_lower(created_tip, depth);
+                for block in lower.saturating_sub(2)..=lower.saturating_add(2) {
+                    assert_eq!(
+                        block >= lower,
+                        block_in_window(block, created_tip, u32::MAX, depth),
+                        "tip {created_tip} depth {depth} block {block}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

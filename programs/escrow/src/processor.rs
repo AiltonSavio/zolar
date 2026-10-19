@@ -1,3 +1,4 @@
+use groth16_solana::groth16::Groth16Verifier;
 use header_relay_interface::{leaf_inputs, RelayView, ViewError, TREE_DEPTH};
 use pinocchio::{
     cpi::{invoke_signed, Seed, Signer},
@@ -7,7 +8,7 @@ use pinocchio::{
     AccountView, Address, ProgramResult,
 };
 
-use crate::{error::EscrowError, state::*, zeros::ZEROS};
+use crate::{error::EscrowError, state::*, verifying_key, zeros::ZEROS};
 
 const SYSTEM_PROGRAM: Address = Address::new_from_array([0; 32]);
 const TOKEN: Address = Address::new_from_array(TOKEN_PROGRAM);
@@ -82,6 +83,26 @@ mod sys {
 
 use sys::{find_program_address, poseidon, sha256};
 
+/// Groth16 over BN254 with the Private Claim verifying key. `proof_a` is already negated.
+fn verify_proof(
+    proof_a: &[u8; 64],
+    proof_b: &[u8; 128],
+    proof_c: &[u8; 64],
+    public_inputs: &[[u8; 32]; verifying_key::PUBLIC_INPUTS],
+) -> Result<(), ProgramError> {
+    let invalid = |_| fail(EscrowError::InvalidProof);
+    Groth16Verifier::<{ verifying_key::PUBLIC_INPUTS }>::new(
+        proof_a,
+        proof_b,
+        proof_c,
+        public_inputs,
+        &verifying_key::VERIFYINGKEY,
+    )
+    .map_err(invalid)?
+    .verify()
+    .map_err(invalid)
+}
+
 fn sha256d_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     let mut data = [0u8; 64];
     data[..32].copy_from_slice(left);
@@ -122,6 +143,7 @@ pub fn process_instruction(
         1 => reveal_claim(program_id, accounts, args),
         2 => deposit_bond(program_id, accounts, args),
         3 => refund(program_id, accounts, args),
+        4 => private_claim(program_id, accounts, args),
         5 => request_refund(program_id, accounts, args),
         _ => Err(ProgramError::InvalidInstructionData),
     }
@@ -347,7 +369,7 @@ fn create_escrow(program_id: &Address, accounts: &[AccountView], args: &[u8]) ->
     if amount == 0 {
         return Err(fail(EscrowError::ZeroAmount));
     }
-    if claim_mode != MODE_REVEAL_ALLOWED {
+    if claim_mode != MODE_REVEAL_ALLOWED && claim_mode != MODE_PRIVATE_ONLY {
         return Err(fail(EscrowError::ClaimModeNotAllowed));
     }
     if !below_modulus(&commitment) {
@@ -568,6 +590,78 @@ fn settle(
     payee.set_lamports(payee.lamports() + escrow.lamports());
     escrow.set_lamports(0);
     escrow.close()
+}
+
+/// Private Claim data: proof A (negated), B, C, then the Final Block Tree root the proof is against.
+const PRIVATE_CLAIM_LEN: usize = 64 + 128 + 64 + 32;
+
+/// Pays the Payer for a Groth16 proof that the committed transaction is in a final block inside the
+/// Escrow's height window, under the same gates as a Reveal Claim: open or refund requested, Bond
+/// deposited, relay running, root in the relay's recent history. The transaction ID, salt and block never
+/// appear on Solana. The public inputs are the root the claimant names and three values the program reads
+/// from its own state (commitment, lowest allowed height, expiry height), so a proof for a block outside
+/// the window that a Reveal Claim accepts cannot verify.
+fn private_claim(program_id: &Address, accounts: &[AccountView], args: &[u8]) -> ProgramResult {
+    let [escrow, relay, vault, payout_token, payee, token_program] = accounts else {
+        return Err(ProgramError::NotEnoughAccountKeys);
+    };
+    if args.len() != PRIVATE_CLAIM_LEN {
+        return Err(ProgramError::InvalidInstructionData);
+    }
+    let mut proof_a = [0u8; 64];
+    proof_a.copy_from_slice(&args[..64]);
+    let mut proof_b = [0u8; 128];
+    proof_b.copy_from_slice(&args[64..192]);
+    let mut proof_c = [0u8; 64];
+    proof_c.copy_from_slice(&args[192..256]);
+    let root = array32(args, 256);
+
+    check_program(token_program, &TOKEN)?;
+    check_escrow(program_id, escrow)?;
+    let (commitment, created_tip, expiry_height, payout, mint) = {
+        let e = escrow.try_borrow()?;
+        if e[E_STATE] != STATE_OPEN && e[E_STATE] != STATE_REFUND_REQUESTED {
+            return Err(fail(EscrowError::NotOpen));
+        }
+        if u64_at(&e, E_BOND_DEPOSITED) < u64_at(&e, E_BOND_REQUIRED) {
+            return Err(fail(EscrowError::BondNotDeposited));
+        }
+        if array32(&e, E_RELAY) != *relay.address().as_ref()
+            || array32(&e, E_VAULT) != *vault.address().as_ref()
+            || array32(&e, E_PAYEE) != *payee.address().as_ref()
+        {
+            return Err(fail(EscrowError::WrongAccount));
+        }
+        (
+            array32(&e, E_COMMITMENT),
+            u32_at(&e, E_CREATED_TIP),
+            u32_at(&e, E_EXPIRY_HEIGHT),
+            array32(&e, E_PAYOUT),
+            array32(&e, E_MINT),
+        )
+    };
+
+    let lower = {
+        let relay_data = relay.try_borrow()?;
+        let view = relay_view(relay, &relay_data)?;
+        if !view.is_known_root(&root) {
+            return Err(fail(EscrowError::UnknownRoot));
+        }
+        claim_window_lower(created_tip, view.finality_depth())
+    };
+
+    let mut public_inputs = [[0u8; 32]; verifying_key::PUBLIC_INPUTS];
+    public_inputs[0] = root;
+    public_inputs[1] = commitment;
+    public_inputs[2][28..].copy_from_slice(&lower.to_be_bytes());
+    public_inputs[3][28..].copy_from_slice(&expiry_height.to_be_bytes());
+    verify_proof(&proof_a, &proof_b, &proof_c, &public_inputs)?;
+
+    let paid = read_token(payout_token, false)?;
+    if paid.mint != mint || paid.owner != payout {
+        return Err(fail(EscrowError::BadTokenAccount));
+    }
+    settle(escrow, vault, payout_token, payee)
 }
 
 /// An Escrow account of this program, writable, in the layout this version knows.

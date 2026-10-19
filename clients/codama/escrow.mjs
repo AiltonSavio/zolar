@@ -67,7 +67,7 @@ const escrowAccount = accountNode({
     field('createdAt', i64, ['Solana unix time of creation.']),
     field('createdTip', u32, ['Relay tip height at creation; a Claim must prove a block above it.']),
     field('expiryHeight', u32, ['Zcash height by which the payment must be mined.']),
-    field('claimMode', u8, ['0 a Reveal Claim may settle; 1 only a Private Claim may (ticket 10).']),
+    field('claimMode', u8, ['0 a Reveal Claim or a Private Claim may settle; 1 only a Private Claim may.']),
     field('refundRequestedAt', i64, ['Solana unix time of RequestRefund; 0 while state is 0.']),
     field('reserved', bytes(55)),
   ]),
@@ -132,7 +132,7 @@ const instructions = [
       instructionArgumentNode({ name: 'amount', type: u64 }),
       instructionArgumentNode({ name: 'bondRequired', type: u64 }),
       instructionArgumentNode({ name: 'expiryHeight', type: u32 }),
-      instructionArgumentNode({ name: 'claimMode', type: u8, docs: ['0: a Reveal Claim may settle. Other values are reserved for the Private Claim (ticket 10).'] }),
+      instructionArgumentNode({ name: 'claimMode', type: u8, docs: ['0: a Reveal Claim or a Private Claim may settle. 1: only a Private Claim may, so the transaction ID is never published.'] }),
     ],
   }),
   instructionNode({
@@ -204,6 +204,29 @@ const instructions = [
     ],
     arguments: [disc(5)],
   }),
+  instructionNode({
+    name: 'privateClaim',
+    docs: [
+      'Releases the Escrow to its Payer wallet against a Groth16 proof (circuits/src/private_claim.circom) that the committed transaction is in a final block inside the Escrow\'s height window. The transaction ID, salt and block never appear on Solana. Anyone may submit it; the tokens go to `payout` whoever signs. Settles in the same states as a Reveal Claim and needs the Bond deposited.',
+      'The public inputs are root (one of the relay\'s recent roots, named here), the Escrow\'s commitment, the lowest allowed height (created tip + 1 - Finality Depth) and the Escrow\'s expiry height, the last three read by the program.',
+    ],
+    discriminators: [fieldDiscriminatorNode('discriminator')],
+    accounts: [
+      instructionAccountNode({ name: 'escrow', isWritable: true, isSigner: false }),
+      instructionAccountNode({ name: 'relay', isWritable: false, isSigner: false }),
+      instructionAccountNode({ name: 'vault', isWritable: true, isSigner: false }),
+      instructionAccountNode({ name: 'payoutToken', isWritable: true, isSigner: false }),
+      instructionAccountNode({ name: 'payee', isWritable: true, isSigner: false }),
+      program('tokenProgram', TOKEN_PROGRAM),
+    ],
+    arguments: [
+      disc(4),
+      instructionArgumentNode({ name: 'proofA', type: bytes(64), docs: ['Proof point A already negated (y -> q - y), big-endian x || y.'] }),
+      instructionArgumentNode({ name: 'proofB', type: bytes(128), docs: ['x_c1 || x_c0 || y_c1 || y_c0, each 32 bytes big-endian.'] }),
+      instructionArgumentNode({ name: 'proofC', type: bytes(64) }),
+      instructionArgumentNode({ name: 'root', type: bytes(32), docs: ['A Final Block Tree root in the relay\'s recent history.'] }),
+    ],
+  }),
 ];
 
 const errors = [
@@ -228,6 +251,7 @@ const errors = [
   ['refundNotRequested', 'No refund was requested'],
   ['claimWindowOpen', 'The claim window since the refund request has not passed'],
   ['notPayer', 'The Bond must be signed and paid by the Payer wallet'],
+  ['invalidProof', 'The Groth16 proof does not verify against the Escrow\'s public inputs'],
 ].map(([name, message], i) => errorNode({ name, code: i + 1, message }));
 
 export const root = rootNode(

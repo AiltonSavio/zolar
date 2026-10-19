@@ -37,7 +37,7 @@ createdAt: bigint;
 createdTip: number; 
 /** Zcash height by which the payment must be mined. */
 expiryHeight: number; 
-/** 0 a Reveal Claim may settle; 1 only a Private Claim may (ticket 10). */
+/** 0 a Reveal Claim or a Private Claim may settle; 1 only a Private Claim may. */
 claimMode: number; 
 /** Solana unix time of RequestRefund; 0 while state is 0. */
 refundRequestedAt: bigint; reserved: ReadonlyUint8Array;  };
@@ -65,7 +65,7 @@ createdAt: number | bigint;
 createdTip: number; 
 /** Zcash height by which the payment must be mined. */
 expiryHeight: number; 
-/** 0 a Reveal Claim may settle; 1 only a Private Claim may (ticket 10). */
+/** 0 a Reveal Claim or a Private Claim may settle; 1 only a Private Claim may. */
 claimMode: number; 
 /** Solana unix time of RequestRefund; 0 while state is 0. */
 refundRequestedAt: number | bigint; reserved: ReadonlyUint8Array;  };

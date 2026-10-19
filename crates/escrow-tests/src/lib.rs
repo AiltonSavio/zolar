@@ -18,7 +18,11 @@ use solana_instruction::{error::InstructionError, Instruction};
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 use solana_transaction_error::TransactionError;
-use zolar_claim::{block_leaf, payment_commitment, tx_merkle_path, tx_merkle_root, FinalBlockTree};
+use zolar_claim::{
+    block_leaf, payment_commitment,
+    private_claim::{public_from_snarkjs, ProofBytes},
+    tx_merkle_path, tx_merkle_root, FinalBlockTree,
+};
 
 pub use relay_tests::{set_compute_limit, CU_CAP};
 
@@ -246,6 +250,16 @@ impl World {
             s[0] = 1;
             s
         };
+        self.deal_with_salt(txids, index, salt, expiry)
+    }
+
+    pub fn deal_with_salt(
+        &self,
+        txids: Vec<[u8; 32]>,
+        index: usize,
+        salt: [u8; 32],
+        expiry: u32,
+    ) -> Deal {
         let commitment = payment_commitment(&txids[index], &salt).unwrap();
         let (escrow, _) = Escrow::find_pda(&self.payee.pubkey(), commitment);
         Deal {
@@ -289,6 +303,17 @@ impl World {
             .expiry_height(deal.expiry)
             .claim_mode(claim_mode)
             .instruction()
+    }
+
+    /// Creates the Escrow with the given claim mode.
+    pub fn create_with_mode(&mut self, deal: &Deal, claim_mode: u8) -> u64 {
+        self.h
+            .svm
+            .set_account(deal.vault, token_account(&self.mint, &deal.escrow, 0))
+            .unwrap();
+        let ix = self.create_ix_with(deal, deal.amount, 0, claim_mode);
+        let payee = self.payee.insecure_clone();
+        self.h.ok(&[set_compute_limit(CU_CAP), ix], &[&payee]) - 150
     }
 
     pub fn create(&mut self, deal: &Deal) -> u64 {
@@ -361,6 +386,33 @@ impl World {
             .root(root)
             .tree_path(tree_path.into())
             .tx_path(tx_merkle_path(&deal.txids, tx_index).into())
+            .instruction()
+    }
+
+    /// Makes `root` the relay's newest root, as if the Final Block Tree had that root now. The Private
+    /// Claim fixtures are proofs against a fixed tree; the relay's own roots are covered by the finality
+    /// tests.
+    pub fn forge_latest_root(&mut self, root: [u8; 32]) {
+        let mut account = self.h.svm.get_account(&self.relay).unwrap();
+        let count = RelayView::parse(&account.data).unwrap().leaf_count() as usize;
+        let at =
+            header_relay_interface::R_ROOTS + (count % header_relay_interface::ROOT_HISTORY) * 32;
+        account.data[at..at + 32].copy_from_slice(&root);
+        self.h.svm.set_account(self.relay, account).unwrap();
+    }
+
+    /// The Private Claim for `deal` with the given proof and root.
+    pub fn private_claim_ix(&self, deal: &Deal, proof: &ProofBytes, root: [u8; 32]) -> Instruction {
+        PrivateClaimBuilder::new()
+            .escrow(deal.escrow)
+            .relay(self.relay)
+            .vault(deal.vault)
+            .payout_token(self.payer_token)
+            .payee(self.payee.pubkey())
+            .proof_a(proof.a)
+            .proof_b(proof.b)
+            .proof_c(proof.c)
+            .root(root)
             .instruction()
     }
 
@@ -437,4 +489,57 @@ pub fn txids(n: u8) -> Vec<[u8; 32]> {
             t
         })
         .collect()
+}
+
+/// A real Private Claim: the payment of the ticket 08 devnet swap (fee9e219..., transaction 3 of the
+/// 4 of block 4,517,478) proved against a Final Block Tree of 6 blocks, with the proof that
+/// `circuits/scripts/prove.sh` made from `circuits/fixtures/swap2-block.json`.
+pub struct PrivateFixture {
+    pub txids: Vec<[u8; 32]>,
+    pub index: usize,
+    pub salt: [u8; 32],
+    pub proof: ProofBytes,
+    /// root, commitment, lower, expiry as the circuit printed them.
+    pub public: Vec<[u8; 32]>,
+}
+
+impl PrivateFixture {
+    pub fn load() -> Self {
+        let block: serde_json::Value =
+            serde_json::from_str(include_str!("../../../circuits/fixtures/swap2-block.json"))
+                .unwrap();
+        let txids = block["txids_display"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                let mut id: [u8; 32] = hex::decode(t.as_str().unwrap())
+                    .unwrap()
+                    .try_into()
+                    .unwrap();
+                id.reverse();
+                id
+            })
+            .collect();
+        Self {
+            txids,
+            index: block["index"].as_u64().unwrap() as usize,
+            salt: hex::decode(block["salt"].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap(),
+            proof: ProofBytes::from_snarkjs(include_str!(
+                "../../../circuits/fixtures/swap2.proof.json"
+            ))
+            .unwrap(),
+            public: public_from_snarkjs(include_str!(
+                "../../../circuits/fixtures/swap2.public.json"
+            ))
+            .unwrap(),
+        }
+    }
+
+    pub fn root(&self) -> [u8; 32] {
+        self.public[0]
+    }
 }

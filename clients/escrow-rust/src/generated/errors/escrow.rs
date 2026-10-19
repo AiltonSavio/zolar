@@ -75,6 +75,9 @@ pub enum EscrowError {
     /// 21 - The Bond must be signed and paid by the Payer wallet
     #[error("The Bond must be signed and paid by the Payer wallet")]
     NotPayer = 0x15,
+    /// 22 - The Groth16 proof does not verify against the Escrow's public inputs
+    #[error("The Groth16 proof does not verify against the Escrow's public inputs")]
+    InvalidProof = 0x16,
 }
 
 impl From<EscrowError> for solana_program_error::ProgramError {
