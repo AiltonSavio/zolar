@@ -59,5 +59,13 @@ A Claim made with a zero-knowledge proof, so the transaction ID is never reveale
 _Avoid_: ZK claim, shielded claim
 
 **Bond**:
-Optional tokens the Payer locks alongside an Escrow, paid to the Payee if the Payer never completes.
+Optional tokens the Payer locks alongside an Escrow, returned on a Claim and paid to the Payee if the Payer never completes.
 _Avoid_: Collateral, deposit, premium
+
+**Refund**:
+The Payee taking an unclaimed Escrow and its Bond back, in two steps: a request once the relay tip is above the expiry height plus Finality Depth (or 24 hours after creation), then the Refund itself after the Claim window.
+_Avoid_: Withdrawal, cancel
+
+**Claim window**:
+The 15 minutes of Solana time between a refund request and the Refund, in which a Claim still settles, so a Payer whose payment finalises late is not raced.
+_Avoid_: Grace period, timeout

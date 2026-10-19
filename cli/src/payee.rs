@@ -189,6 +189,29 @@ fn unix_now() -> Result<i64> {
         .as_secs() as i64)
 }
 
+/// Sends the transaction. With `wait`, a refusal because the Escrow is not refundable yet (the local
+/// clock runs ahead of Solana's) is not an error: `None` means look again.
+fn send_or_wait(
+    rpc: &mut HttpRpc,
+    instructions: &[solana_instruction::Instruction],
+    payee: &solana_keypair::Keypair,
+    wait: bool,
+) -> Result<Option<String>> {
+    match send(rpc, instructions, payee) {
+        Ok(signature) => Ok(Some(signature)),
+        Err(e)
+            if wait
+                && (e.to_string().contains("ClaimWindowOpen")
+                    || e.to_string().contains("RefundNotYet")) =>
+        {
+            println!("Solana's clock says not yet: {e}");
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Takes an unclaimed Escrow back in the two steps the program requires: RequestRefund once the
 /// relay tip is above the expiry height plus Finality Depth (or 24 hours after creation), then Refund
 /// after the claim window. The whole vault, Bond included, returns to the Payee.
@@ -223,7 +246,9 @@ pub fn refund(a: &RefundArgs) -> Result<Refunded> {
                     .escrow(a.escrow)
                     .relay(escrow.relay)
                     .instruction();
-                let signature = send(&mut rpc, &[ix], &payee)?;
+                let Some(signature) = send_or_wait(&mut rpc, &[ix], &payee, a.wait)? else {
+                    continue;
+                };
                 println!(
                     "refund requested    : {signature} (a Payer may still claim for {} s)",
                     crate::solana::CLAIM_WINDOW_SECS
@@ -233,6 +258,8 @@ pub fn refund(a: &RefundArgs) -> Result<Refunded> {
             RefundStep::Refund => {
                 let destination = associated_token_account(&escrow.payee, &escrow.mint);
                 let held = parse_token_account(&read_account(&mut rpc, &escrow.vault)?)?.amount;
+                // The Payee may have closed its token account after locking everything.
+                let create = create_ata_idempotent(&payee.pubkey(), &escrow.payee, &escrow.mint);
                 let ix = RefundBuilder::new()
                     .escrow(a.escrow)
                     .relay(escrow.relay)
@@ -240,7 +267,9 @@ pub fn refund(a: &RefundArgs) -> Result<Refunded> {
                     .payee_token(destination)
                     .payee(escrow.payee)
                     .instruction();
-                let signature = send(&mut rpc, &[ix], &payee)?;
+                let Some(signature) = send_or_wait(&mut rpc, &[create, ix], &payee, a.wait)? else {
+                    continue;
+                };
                 println!("refunded            : {signature}");
                 println!(
                     "returned to {destination}: {held} tokens ({} locked, {} Bond)",

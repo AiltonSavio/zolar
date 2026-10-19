@@ -247,7 +247,7 @@ fn the_backstop_counts_from_creation_not_from_the_start_of_the_test() {
 }
 
 #[test]
-fn a_payer_whose_payment_finalises_in_the_window_still_claims_and_gets_the_bond_back() {
+fn a_payer_claims_inside_the_window_after_a_height_request_and_gets_the_bond_back() {
     let (mut w, deal) = escrow_with_bond(BOND);
     w.deposit_bond(&deal);
     let block = w.mine_block_with(&deal.txids);
@@ -270,6 +270,33 @@ fn a_payer_whose_payment_finalises_in_the_window_still_claims_and_gets_the_bond_
 
     w.advance_time(10);
     assert_eq!(w.refund_err(&deal), WRONG_ACCOUNT, "nothing left to refund");
+}
+
+#[test]
+fn a_relay_that_catches_up_during_the_window_after_a_backstop_request_lets_the_payer_claim() {
+    let (mut w, deal) = escrow_with_bond(BOND);
+    w.deposit_bond(&deal);
+    let block = w.mine_block_with(&deal.txids);
+    assert!(
+        w.tip() < block.height + FINALITY_DEPTH as u32,
+        "not final yet"
+    );
+
+    // The relay stalls for a day; the Payee requests with the backstop.
+    w.advance_time(BACKSTOP_SECS);
+    let request = w.request_refund_ix(&deal);
+    w.claim(request);
+
+    // Headers arrive inside the window, the block becomes final and the Payer claims.
+    w.advance_time(CLAIM_WINDOW_SECS / 2);
+    w.finalize(block.height);
+    let claim = w.claim_ix(&deal, block.height, None);
+    w.claim(claim);
+    assert_eq!(
+        token_balance(&w.h, &w.payer_token),
+        Some(deal.amount + BOND)
+    );
+    assert!(gone(&w, &deal));
 }
 
 #[test]

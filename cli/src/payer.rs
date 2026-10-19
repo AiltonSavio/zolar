@@ -133,6 +133,25 @@ pub fn check_terms(
     Ok(())
 }
 
+/// Waits until the Bond is in a finalized Escrow: once a Zcash payment is out, a rolled back deposit
+/// could not be repeated after a refund request.
+fn bond_is_finalized(chains: &Chains, escrow_address: Address, required: u64) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        let data =
+            finalized_account_within(&chains.rpc_url, &escrow_address, Duration::from_secs(120))?;
+        if read_escrow(&data)?.bond_deposited >= required {
+            println!("the Bond is finalized on Solana");
+            return Ok(());
+        }
+        ensure!(
+            started.elapsed() < Duration::from_secs(120),
+            "the Bond is not finalized on Solana after 2 minutes; do not pay yet"
+        );
+        sleep(Duration::from_secs(5));
+    }
+}
+
 /// Everything a Payer verifies before signing. Read-only.
 pub fn check_escrow(c: &Check) -> Result<Checked> {
     let mut rpc = HttpRpc::new(&c.chains.rpc_url);
@@ -245,7 +264,7 @@ pub fn deposit_bond(chains: &Chains, keypair: &Path, escrow_address: Address) ->
     }
     if escrow.bond_deposited >= escrow.bond_required {
         println!("the Bond of {} is already locked", escrow.bond_deposited);
-        return Ok(());
+        return bond_is_finalized(chains, escrow_address, escrow.bond_required);
     }
     let source = associated_token_account(&payer.pubkey(), &escrow.mint);
     let held = parse_token_account(&read_account(&mut rpc, &source)?)
@@ -267,7 +286,7 @@ pub fn deposit_bond(chains: &Chains, keypair: &Path, escrow_address: Address) ->
         "Bond locked         : {signature} ({} tokens)",
         escrow.bond_required
     );
-    Ok(())
+    bond_is_finalized(chains, escrow_address, escrow.bond_required)
 }
 
 /// Proves, signs and broadcasts the checked PCZT, then waits until the explorer shows it mined.

@@ -196,15 +196,18 @@ pub fn refund_step(
     now: i64,
 ) -> RefundStep {
     let backstop_at = escrow.created_at.saturating_add(BACKSTOP_SECS);
-    let needed = escrow.expiry_height.saturating_add(finality_depth as u32) + 1;
+    let passes = escrow.expiry_height.saturating_add(finality_depth as u32);
     let allowed = if now >= backstop_at {
         None
     } else if halted {
         Some(RefundStep::Halted {
             secs: backstop_at - now,
         })
-    } else if tip < needed {
-        Some(RefundStep::WaitForTip { tip, needed })
+    } else if tip <= passes {
+        Some(RefundStep::WaitForTip {
+            tip,
+            needed: passes.saturating_add(1),
+        })
     } else {
         None
     };
@@ -266,6 +269,19 @@ mod tests {
             }
         );
         assert_eq!(refund_step(&e, 111, 10, false, 2_000), RefundStep::Request);
+        // The boundary does not overflow near the largest height; the backstop still opens it.
+        let high = Escrow {
+            expiry_height: u32::MAX - 3,
+            ..e.clone()
+        };
+        assert!(matches!(
+            refund_step(&high, u32::MAX, 10, false, 2_000),
+            RefundStep::WaitForTip { .. }
+        ));
+        assert_eq!(
+            refund_step(&high, 0, 10, false, 1_000 + BACKSTOP_SECS),
+            RefundStep::Request
+        );
         assert_eq!(
             refund_step(&e, 500, 10, true, 2_000),
             RefundStep::Halted { secs: 85_400 }
