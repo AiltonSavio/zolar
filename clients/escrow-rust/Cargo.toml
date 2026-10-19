@@ -1,0 +1,21 @@
+[package]
+name = "escrow-client"
+version = "0.1.0"
+edition = "2021"
+description = "Generated Rust client for the Zolar Escrow program (Codama)"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+borsh = "1"
+num-derive = "0.4"
+num-traits = "0.2"
+solana-address = { version = "2", features = ["borsh", "curve25519"] }
+solana-account-info = "3"
+solana-cpi = "3"
+solana-instruction = "3"
+solana-program-error = "3"
+spl-collections = { version = "0.1", features = ["borsh"] }
+thiserror = "1"
+
+[lints.rust]
+unexpected_cfgs = { level = "allow" }

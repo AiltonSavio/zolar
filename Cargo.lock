@@ -1097,6 +1097,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
+name = "escrow-client"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "num-derive",
+ "num-traits",
+ "solana-account-info",
+ "solana-address 2.9.0",
+ "solana-cpi",
+ "solana-instruction 3.5.1",
+ "solana-program-error",
+ "spl-collections",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "escrow-tests"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "escrow-client",
+ "header-relay-client",
+ "header-relay-interface",
+ "litesvm",
+ "relay-tests",
+ "sha2 0.10.9",
+ "solana-account",
+ "solana-address 2.9.0",
+ "solana-instruction 3.5.1",
+ "solana-keypair",
+ "solana-message",
+ "solana-signer",
+ "solana-transaction",
+ "solana-transaction-error",
+ "zolar-claim",
+]
+
+[[package]]
 name = "feature-probe"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3902,6 +3940,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "spl-collections"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c92cbf30dd74a1aaedc93d1c4f8c08ed8b520103d27cdd8e646606a253839c86"
+dependencies = [
+ "borsh",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4555,6 +4602,18 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zolar-claim"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254 0.5.0",
+ "hex",
+ "light-poseidon 0.4.1",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "zolar-relayer"

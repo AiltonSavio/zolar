@@ -1,0 +1,25 @@
+[package]
+name = "escrow-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "LiteSVM harness and tests for the Escrow program, driven through the generated client"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+escrow-client = { path = "../../clients/escrow-rust" }
+header-relay-client = { path = "../../clients/rust" }
+header-relay-interface = { path = "../header-relay-interface" }
+relay-tests = { path = "../relay-tests" }
+zolar-claim = { path = "../zolar-claim" }
+litesvm = "0.11"
+solana-address = "2"
+solana-instruction = "3"
+solana-keypair = "3"
+solana-message = "3"
+solana-signer = "3"
+solana-transaction = "3"
+solana-transaction-error = "3"
+borsh = "1"
+solana-account = "3"
+sha2 = "0.10"

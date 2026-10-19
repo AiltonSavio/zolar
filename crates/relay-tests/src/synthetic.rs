@@ -124,6 +124,20 @@ impl Branch {
     /// The next block of this branch, `gap` seconds after its parent, made unique by `tag`.
     pub fn extend(&mut self, gap: u32, tag: u32) -> Synth {
         let height = self.tip_height + 1;
+        let mut merkle_root = [0u8; 32];
+        merkle_root[..4].copy_from_slice(&tag.to_le_bytes());
+        merkle_root[4..8].copy_from_slice(&height.to_le_bytes());
+        self.extend_with_root(gap, header_bytes_hash(&merkle_root))
+    }
+
+    /// Like `extend` with the normal spacing and the given transaction Merkle root.
+    pub fn next_with_root(&mut self, merkle_root: [u8; 32]) -> Synth {
+        self.extend_with_root(SPACING, merkle_root)
+    }
+
+    /// The next block of this branch, `gap` seconds after its parent, committing to `merkle_root`.
+    pub fn extend_with_root(&mut self, gap: u32, merkle_root: [u8; 32]) -> Synth {
+        let height = self.tip_height + 1;
         let time = self.times.last().unwrap() + gap;
         let window = self.rules.window(height);
         let newest_first =
@@ -136,10 +150,6 @@ impl Branch {
             &newest_first(&self.bits, window),
         )
         .expect("context is long enough");
-        let mut merkle_root = [0u8; 32];
-        merkle_root[..4].copy_from_slice(&tag.to_le_bytes());
-        merkle_root[4..8].copy_from_slice(&height.to_le_bytes());
-        merkle_root = header_bytes_hash(&merkle_root);
         let raw = mine(self.tip_hash, merkle_root, time, bits);
         let block = Synth {
             hash: header_bytes_hash(&raw),

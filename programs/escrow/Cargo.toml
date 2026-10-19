@@ -1,0 +1,25 @@
+[package]
+name = "escrow"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+pinocchio = { version = "=0.10.2", default-features = false, features = ["copy", "cpi"] }
+header-relay-interface = { path = "../../crates/header-relay-interface" }
+
+[features]
+no-entrypoint = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))', 'cfg(target_arch, values("bpf"))'] }
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
