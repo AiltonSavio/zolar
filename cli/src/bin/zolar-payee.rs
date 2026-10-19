@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use zolar_cli::{
-    DEVNET_RELAY, DEVNET_RPC, TESTNET_EXPLORER,
+    DEVNET_RPC, Network, default_explorer, default_relay,
     payee::{CreateEscrow, RefundArgs, create_escrow, refund},
     solana::parse_address,
 };
@@ -13,7 +13,7 @@ use zolar_cli::{
 #[derive(Parser)]
 #[command(
     name = "zolar-payee",
-    about = "Payee side of a Zolar swap (Zcash testnet, Solana devnet)"
+    about = "Payee side of a Zolar swap (Zcash testnet or mainnet, Solana devnet)"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -28,7 +28,7 @@ enum Command {
         /// The unsigned PCZT the Payer built.
         #[arg(long)]
         pczt: PathBuf,
-        /// File holding the Payee's unified full viewing key (testnet).
+        /// File holding the Payee's unified full viewing key (of the chosen network).
         #[arg(long)]
         ufvk_file: PathBuf,
         /// The memo the Payer must have put in the payment: a fresh challenge for this trade.
@@ -58,10 +58,15 @@ enum Command {
         bond: u64,
         #[arg(long, env = "ZOLAR_RPC_URL", default_value = DEVNET_RPC)]
         rpc_url: String,
-        #[arg(long, env = "ZOLAR_RELAY", default_value = DEVNET_RELAY)]
-        relay: String,
-        #[arg(long, env = "ZOLAR_EXPLORER", default_value = TESTNET_EXPLORER)]
-        explorer: String,
+        /// The Header Relay (default: the devnet relay of the chosen Zcash network).
+        #[arg(long, env = "ZOLAR_RELAY")]
+        relay: Option<String>,
+        /// The block explorer (default: the one of the chosen Zcash network).
+        #[arg(long, env = "ZOLAR_EXPLORER")]
+        explorer: Option<String>,
+        /// The Zcash network the payment is on: testnet or mainnet.
+        #[arg(long, env = "ZOLAR_NETWORK", default_value = "testnet")]
+        network: Network,
     },
     /// Take an unclaimed Escrow back, Bond included: request the refund once the relay tip is above
     /// the expiry height plus Finality Depth (or 24 hours after creation), then refund after the
@@ -96,10 +101,13 @@ fn main() -> Result<()> {
             rpc_url,
             relay,
             explorer,
+            network,
         } => {
+            let relay = relay.unwrap_or_else(|| default_relay(network).to_string());
             create_escrow(&CreateEscrow {
+                network,
                 rpc_url,
-                explorer_url: explorer,
+                explorer_url: explorer.unwrap_or_else(|| default_explorer(network).to_string()),
                 keypair,
                 relay: parse_address(&relay)?,
                 pczt,

@@ -1,4 +1,4 @@
-//! Zcash testnet block explorer (zecblock) used for the data the Relay does not hold: whether a
+//! Zcash block explorer (zecblock, the testnet or mainnet host) used for the data the Relay does not hold: whether a
 //! transaction was mined and in which block, and the transaction IDs of a block.
 //!
 //! The explorer is not trusted: [`crate::blocks::verified_block_txids`] recomputes the block's Merkle

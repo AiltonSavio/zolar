@@ -15,15 +15,26 @@ use solana_signer::Signer;
 use zolar_relayer::{
     chain::RelayClient,
     follower::{ChainError, Event, Follower, HeaderSource, Step},
-    p2p::{self, sha256d, RawHeader},
+    p2p::{sha256d, Network, RawHeader},
     peers::PeerPool,
     rpc::HttpRpc,
     setup::{checkpoint_from, create_relay, CONTEXT},
 };
 
-/// Where `init` starts scanning when no start is given: testnet block 4,495,260 (NU7, hash in explorer order).
-const DEFAULT_START_HEIGHT: u32 = 4_495_260;
-const DEFAULT_START_HASH: &str = "00000005c6568f0bc6f3ce796a6daf312edaeb01a846a387680ba28703f35ac5";
+/// Where `init` starts scanning when no start is given (hash in explorer order): testnet block
+/// 4,495,260 (NU7) and mainnet block 3,522,600 (last of the ticket 05 fixture).
+fn default_start(network: Network) -> (u32, &'static str) {
+    match network {
+        Network::Testnet => (
+            4_495_260,
+            "00000005c6568f0bc6f3ce796a6daf312edaeb01a846a387680ba28703f35ac5",
+        ),
+        Network::Mainnet => (
+            3_522_600,
+            "00000000002e353a4e70cc01ff11d38f9a2c870e34fea4350e14750bab4b9b68",
+        ),
+    }
+}
 const STATUS_EVERY: Duration = Duration::from_secs(600);
 
 fn var(name: &str) -> Result<String, String> {
@@ -42,12 +53,16 @@ fn payer() -> Result<Keypair, String> {
     read_keypair_file(&path).map_err(|e| format!("cannot read the key file at {path}: {e}"))
 }
 
-fn peers() -> PeerPool {
+fn network() -> Result<Network, String> {
+    var_or("ZOLAR_NETWORK", Network::Testnet)
+}
+
+fn peers(network: Network) -> PeerPool {
     let hosts = match env::var("ZOLAR_PEERS") {
         Ok(list) => list.split(',').map(|h| h.trim().to_string()).collect(),
-        Err(_) => p2p::SEEDERS.iter().map(|s| s.to_string()).collect(),
+        Err(_) => network.seeders().iter().map(|s| s.to_string()).collect(),
     };
-    PeerPool::new(hosts)
+    PeerPool::new(hosts, network)
 }
 
 fn display(hash: &[u8; 32]) -> String {
@@ -114,13 +129,14 @@ fn run() -> Result<(), String> {
     let relay = Address::from_str(&var("ZOLAR_RELAY")?).map_err(|e| format!("ZOLAR_RELAY: {e}"))?;
     let poll = Duration::from_secs(var_or("ZOLAR_POLL_SECS", 10u64)?);
     let payer_address = payer.pubkey();
+    let network = network()?;
     let status_rpc = HttpRpc::new(&rpc_url);
 
     log(format!(
-        "relayer start relay={relay} payer={payer_address} rpc={rpc_url}"
+        "relayer start network={network:?} relay={relay} payer={payer_address} rpc={rpc_url}"
     ));
     let chain = RelayClient::new(HttpRpc::new(&rpc_url), payer, relay);
-    let mut follower = Follower::new(chain, peers(), print_event);
+    let mut follower = Follower::new(chain, peers(network), print_event);
     let mut failures = 0u32;
     let mut last_status = Instant::now() - STATUS_EVERY;
     loop {
@@ -163,11 +179,11 @@ fn newest_headers(
             Ok(batch) => batch,
             Err(e) => {
                 failures += 1;
-                if failures > 10 {
+                if failures > 400 {
                     return Err(format!("no peer answered: {e}"));
                 }
                 log(format!("warn no peer answered ({e}); trying again"));
-                sleep(Duration::from_secs(2));
+                sleep(Duration::from_secs(3));
                 continue;
             }
         };
@@ -208,15 +224,17 @@ fn init() -> Result<(), String> {
     let finality_depth: u16 = var_or("ZOLAR_FINALITY_DEPTH", 10)?;
     let lag: usize = var_or("ZOLAR_CHECKPOINT_LAG", 20)?;
     let nonce: u64 = var_or("ZOLAR_RELAY_NONCE", now())?;
-    let start_height: u32 = var_or("ZOLAR_START_HEIGHT", DEFAULT_START_HEIGHT)?;
-    let start_hash = var_or("ZOLAR_START_HASH", DEFAULT_START_HASH.to_string())?;
+    let network = network()?;
+    let (default_height, default_hash) = default_start(network);
+    let start_height: u32 = var_or("ZOLAR_START_HEIGHT", default_height)?;
+    let start_hash = var_or("ZOLAR_START_HASH", default_hash.to_string())?;
     let mut start: [u8; 32] = hex::decode(&start_hash)
         .ok()
         .and_then(|b| b.try_into().ok())
         .ok_or("ZOLAR_START_HASH must be 64 hex characters")?;
     start.reverse();
 
-    let mut pool = peers();
+    let mut pool = peers(network);
     let recent = newest_headers(&mut pool, start_height, start, CONTEXT + lag + 1)?;
     let tip = recent.last().map(|(h, _)| *h).unwrap();
     let end = recent.len() - lag;
@@ -224,9 +242,9 @@ fn init() -> Result<(), String> {
         return Err(format!("only {} headers found", recent.len()));
     }
     let window: Vec<RawHeader> = recent[end - CONTEXT..end].iter().map(|(_, h)| *h).collect();
-    let checkpoint = checkpoint_from(&window, recent[end - 1].0, finality_depth, nonce)?;
+    let checkpoint = checkpoint_from(&window, recent[end - 1].0, finality_depth, nonce, network)?;
     log(format!(
-        "live tip height={tip}; checkpoint height={} hash={} finality_depth={finality_depth} nonce={nonce}",
+        "{network:?} live tip height={tip}; checkpoint height={} hash={} finality_depth={finality_depth} nonce={nonce}",
         checkpoint.height,
         display(&checkpoint.hash)
     ));

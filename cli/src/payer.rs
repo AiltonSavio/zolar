@@ -36,6 +36,7 @@ pub struct Chains {
     pub explorer_url: String,
     pub relay: Address,
     pub peers: Vec<String>,
+    pub network: p2p::Network,
 }
 
 /// Builds the unsigned PCZT: the Payee's address, a value, the challenge memo, and an expiry
@@ -345,7 +346,7 @@ pub fn rebuild_tree(chains: &Chains, relay: &RelayState) -> Result<Rebuilt> {
     let view = relay.view()?;
     let checkpoint = relay.account()?.checkpoint;
     let size = view.leaf_count() as usize;
-    let headers = fetch_headers(checkpoint.hash, size, &chains.peers)?;
+    let headers = fetch_headers(checkpoint.hash, size, &chains.peers, chains.network)?;
     let leaves = headers
         .iter()
         .enumerate()

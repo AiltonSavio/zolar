@@ -9,12 +9,13 @@ use escrow_client::{
 };
 use solana_address::Address;
 use solana_signer::Signer;
-use zolar_pczt::{Network, inspect};
+use zolar_pczt::inspect;
 use zolar_relayer::rpc::HttpRpc;
 
 use crate::{
+    Network, block_seconds,
     explorer::Explorer,
-    internal_txid, random_salt,
+    internal_txid, pczt_network, random_salt,
     solana::{
         RefundStep, associated_token_account, create_ata_idempotent, load_keypair,
         parse_token_account, read_account, read_escrow, read_relay, refund_step, send,
@@ -25,6 +26,8 @@ use crate::{
 const MAX_EXPIRY_AHEAD: u32 = 20;
 
 pub struct CreateEscrow {
+    /// The Zcash network of the payment (decides how the viewing key is read).
+    pub network: Network,
     pub rpc_url: String,
     pub explorer_url: String,
     pub keypair: PathBuf,
@@ -58,7 +61,7 @@ pub fn create_escrow(a: &CreateEscrow) -> Result<Created> {
     let pczt = std::fs::read(&a.pczt).with_context(|| format!("reading {}", a.pczt.display()))?;
     let ufvk = std::fs::read_to_string(&a.ufvk_file)
         .with_context(|| format!("reading {}", a.ufvk_file.display()))?;
-    let report = inspect(&pczt, ufvk.trim(), Network::Testnet)?;
+    let report = inspect(&pczt, ufvk.trim(), pczt_network(a.network))?;
 
     println!("PCZT transaction ID : {}", report.txid);
     println!("transaction version : {}", report.tx_version);
@@ -102,7 +105,7 @@ pub fn create_escrow(a: &CreateEscrow) -> Result<Created> {
     println!(
         "the Payer has until block {} (about {} s after the relay tip)",
         report.expiry_height,
-        (report.expiry_height - tip) * 25
+        (report.expiry_height - tip) * block_seconds(a.network)
     );
 
     let explorer = Explorer::new(&a.explorer_url);
