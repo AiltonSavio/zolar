@@ -1,21 +1,28 @@
 #!/usr/bin/env python3
 """Export consecutive raw Zcash testnet block headers from public P2P peers (getheaders).
 
-Usage: scripts/export-testnet-p2p.py <locator-height> <locator-hash> <count> <out-file> [peer-host ...]
+Usage: scripts/export-testnet-p2p.py [--mainnet] <locator-height> <locator-hash> <count> <out-file> [peer-host ...]
 
 <locator-hash> is the block hash as explorers print it (big-endian hex) of a block on the chain you
 want; the export starts at <locator-height>+1 and writes <count> headers, one `<height> <hex>` line
 each (hex = 1,487 bytes: 140 header + `fd4005` + 1,344-byte Equihash solution). Every header is checked
 to link to the previous one by SHA-256d, so a peer cannot hand over a different chain unnoticed.
 One connection is reused for all requests; peers drop clients that reconnect repeatedly.
+With --mainnet it speaks to Zcash mainnet peers (port 8233, mainnet seeders) and accepts pre-NU7 peers;
+see scripts/export-mainnet-headers.sh for the full mainnet export and cross-check.
 Default peers are the testnet DNS seeders; only peers that speak protocol >= 170180 (NU7) are useful.
 """
 import hashlib, random, socket, struct, sys, time
 
 MAGIC = bytes.fromhex("fa1af9bf")
+PORT = 18233
 PROTOCOL = 170180
+MIN_PEER_PROTOCOL = PROTOCOL
 HEADER_LEN = 1487
 SEEDERS = ["testnet.seeder.zfnd.org", "seeder.testnet.zec.rocks", "dnsseed.testnet.z.cash"]
+MAINNET_SEEDERS = ["mainnet.seeder.zfnd.org", "seeder.mainnet.zec.rocks", "dnsseed.z.cash"]
+MAINNET_MAGIC = bytes.fromhex("24e92764")
+MAINNET_MIN_PEER_PROTOCOL = 170100  # Canopy+; mainnet has no NU7 yet
 
 
 def sha256d(b):
@@ -50,7 +57,7 @@ def recv_message(s):
 
 
 def connect(host):
-    s = socket.create_connection((host, 18233), timeout=15)
+    s = socket.create_connection((host, PORT), timeout=15)
     s.settimeout(30)
     ua = b"/zolar-fixture-export:0.1/"
     s.sendall(message("version", struct.pack("<iQq", PROTOCOL, 0, int(time.time())) + netaddr() + netaddr()
@@ -63,8 +70,8 @@ def connect(host):
             s.sendall(message("verack", b""))
         elif cmd == "verack":
             verack = True
-    if peer_version < PROTOCOL:
-        raise RuntimeError(f"{host} speaks {peer_version}, older than NU7 ({PROTOCOL})")
+    if peer_version < MIN_PEER_PROTOCOL:
+        raise RuntimeError(f"{host} speaks {peer_version}, older than {MIN_PEER_PROTOCOL}")
     return s
 
 
@@ -81,12 +88,16 @@ def getheaders(s, locator_internal):
 
 
 def main():
+    global MAGIC, PORT, MIN_PEER_PROTOCOL, SEEDERS
+    if sys.argv[1] == "--mainnet":
+        del sys.argv[1]
+        MAGIC, PORT, MIN_PEER_PROTOCOL, SEEDERS = MAINNET_MAGIC, 8233, MAINNET_MIN_PEER_PROTOCOL, MAINNET_SEEDERS
     height, locator_hash, count, out = int(sys.argv[1]), sys.argv[2], int(sys.argv[3]), sys.argv[4]
     peers = sys.argv[5:] or SEEDERS
     candidates = []
     for p in peers:
         try:
-            candidates += [ai[4][0] for ai in socket.getaddrinfo(p, 18233, socket.AF_INET, socket.SOCK_STREAM)]
+            candidates += [ai[4][0] for ai in socket.getaddrinfo(p, PORT, socket.AF_INET, socket.SOCK_STREAM)]
         except socket.gaierror:
             candidates.append(p)
     random.shuffle(candidates)

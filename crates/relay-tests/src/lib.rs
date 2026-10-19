@@ -1,5 +1,7 @@
 #![allow(clippy::result_large_err)]
 
+pub mod mainnet;
+
 use std::{path::PathBuf, process::Command, sync::Once};
 
 use borsh::BorshSerialize;
