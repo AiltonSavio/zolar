@@ -18,7 +18,7 @@ use zolar_relayer::{
     p2p::{sha256d, Network, RawHeader},
     peers::PeerPool,
     rpc::HttpRpc,
-    setup::{checkpoint_from, create_relay, CONTEXT},
+    setup::{checkpoint_from, create_relay, looks_current, CONTEXT},
 };
 
 /// Where `init` starts scanning when no start is given (hash in explorer order): testnet block
@@ -174,6 +174,7 @@ fn newest_headers(
     let mut recent: Vec<(u32, RawHeader)> = Vec::new();
     let mut unlinked = 0;
     let mut failures = 0;
+    let mut quiet = 0;
     loop {
         let batch = match pool.headers_after(&[hash]) {
             Ok(batch) => batch,
@@ -190,6 +191,14 @@ fn newest_headers(
         let Some(first) = batch.headers.first() else {
             if recent.is_empty() {
                 return Err("the start block has no successors on this peer".into());
+            }
+            // Peers answer "nothing newer" with silence, so an empty answer is the tip only if the
+            // last header is recent; otherwise ask again (another peer, or the same one later).
+            if !recent.last().is_some_and(|(_, h)| looks_current(h, now())) && quiet < 20 {
+                quiet += 1;
+                log("warn the last header is old but the peer has nothing newer; asking again");
+                sleep(Duration::from_secs(3));
+                continue;
             }
             return Ok(recent);
         };

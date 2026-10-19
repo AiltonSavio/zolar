@@ -30,6 +30,8 @@ use crate::{
 };
 
 const POLL: Duration = Duration::from_secs(10);
+/// Mainnet needs Finality Depth 20 blocks at about 75 to 90 s each, before any slow block.
+const FINALITY_WAIT: Duration = Duration::from_secs(90 * 60);
 
 pub struct Chains {
     pub rpc_url: String,
@@ -407,8 +409,9 @@ pub fn reveal_claim(c: &Claim) -> Result<String> {
             view.finalized_height()
         );
         ensure!(
-            started.elapsed() < Duration::from_secs(30 * 60),
-            "the block did not become final in 30 minutes"
+            started.elapsed() < FINALITY_WAIT,
+            "the block did not become final in {} minutes",
+            FINALITY_WAIT.as_secs() / 60
         );
         sleep(POLL);
     };

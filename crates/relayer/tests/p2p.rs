@@ -251,3 +251,20 @@ fn a_peer_that_hangs_up_after_getheaders_is_an_error() {
         .getheaders(&[internal(MAINNET_LOCATOR_3522200)])
         .is_err());
 }
+
+#[test]
+fn a_peer_that_stalls_inside_a_message_is_an_error_not_silence() {
+    // Ten bytes of a message header, then nothing: the stream is out of frame and must be dropped.
+    let mut hello = silent_peer(std::io::ErrorKind::WouldBlock)
+        .hello
+        .into_inner();
+    hello.extend_from_slice(&MAINNET_TRANSCRIPT[..10]);
+    let stream = Silent {
+        hello: Cursor::new(hello),
+        kind: std::io::ErrorKind::WouldBlock,
+    };
+    let mut peer = Peer::handshake(stream, Network::Mainnet).unwrap();
+    assert!(peer
+        .getheaders(&[internal(MAINNET_LOCATOR_3522200)])
+        .is_err());
+}

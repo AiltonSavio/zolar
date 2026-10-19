@@ -103,6 +103,9 @@ pub type RawHeader = [u8; HEADER_LEN];
 #[derive(Debug)]
 pub enum P2pError {
     Io(io::Error),
+    /// The read timed out before a single byte of the next message arrived: the peer is quiet,
+    /// and the stream is still on a message boundary.
+    Idle,
     Protocol(String),
 }
 
@@ -110,6 +113,7 @@ impl fmt::Display for P2pError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(e) => write!(f, "i/o: {e}"),
+            Self::Idle => write!(f, "no message before the read timeout"),
             Self::Protocol(m) => write!(f, "protocol: {m}"),
         }
     }
@@ -166,7 +170,24 @@ pub fn encode_message(network: Network, command: &str, payload: &[u8]) -> Vec<u8
 
 pub fn read_message(network: Network, r: &mut impl Read) -> Result<(String, Vec<u8>), P2pError> {
     let mut head = [0u8; 24];
-    r.read_exact(&mut head)?;
+    let mut filled = 0;
+    while filled < head.len() {
+        match r.read(&mut head[filled..]) {
+            Ok(0) => return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into()),
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e)
+                if filled == 0
+                    && matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+            {
+                return Err(P2pError::Idle);
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
     if head[..4] != network.magic() {
         return protocol("wrong network magic");
     }
@@ -307,14 +328,8 @@ impl<S: Read + Write> Peer<S> {
                 Ok(message) => message,
                 // Zebra peers on mainnet stay silent when no block follows the locator: that is
                 // "nothing newer", not a dead peer (a dead peer resets or closes the connection).
-                Err(P2pError::Io(e))
-                    if matches!(
-                        e.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    return Ok(Vec::new());
-                }
+                // Only a quiet message boundary counts; a stall inside a message is an error.
+                Err(P2pError::Idle) => return Ok(Vec::new()),
                 Err(e) => return Err(e),
             };
             match command.as_str() {

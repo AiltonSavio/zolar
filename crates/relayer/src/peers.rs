@@ -104,7 +104,7 @@ impl PeerPool {
             .filter(|a| {
                 !self.resting.contains_key(a)
                     && !self.banned.contains_key(a)
-                    && self.live.iter().all(|l| l.addr != *a)
+                    && self.live.iter().all(|l| l.addr != *a || self.is_stale(l))
             })
             .collect()
     }

@@ -15,7 +15,7 @@ use zolar_relayer::{
     chain::{Cluster, RelayClient},
     follower::{Follower, RelayChain, Step},
     p2p::{Network, RawHeader},
-    setup::{checkpoint_digest, checkpoint_from, create_relay, CONTEXT},
+    setup::{checkpoint_digest, checkpoint_from, create_relay, looks_current, CONTEXT},
 };
 
 fn rows() -> Vec<(u32, Vec<u8>)> {
@@ -182,4 +182,14 @@ fn a_mainnet_relay_created_by_the_relayer_accepts_real_mainnet_headers() {
     );
     assert_eq!(follower.step().unwrap(), Step::Progress { accepted: 2 });
     assert_eq!(follower.chain_mut().tip().unwrap().height, all[end + 1].0);
+}
+
+#[test]
+fn a_header_is_current_only_if_it_is_less_than_an_hour_old() {
+    let all = fixture_rows(MAINNET_FIXTURE);
+    let header: RawHeader = all[10].1.clone().try_into().unwrap();
+    let mined = zcash_header::header::time(&header) as u64;
+    assert!(looks_current(&header, mined + 60));
+    assert!(looks_current(&header, mined + 3_599));
+    assert!(!looks_current(&header, mined + 3_601));
 }

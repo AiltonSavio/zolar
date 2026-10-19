@@ -117,3 +117,9 @@ pub fn create_relay(
     }
     Ok((relay, signatures))
 }
+
+/// Whether a header was mined within the last hour of `now` (Unix seconds). A scan that meets a
+/// silent peer uses it to tell "the tip" from "a peer that stopped answering behind the tip".
+pub fn looks_current(header: &RawHeader, now: u64) -> bool {
+    now.saturating_sub(u64::from(header::time(header))) < 3_600
+}

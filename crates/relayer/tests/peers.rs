@@ -117,3 +117,41 @@ fn a_working_peer_is_kept_when_no_replacement_can_be_found() {
     assert_eq!(pool.headers_after(&[locator()]).unwrap().headers.len(), 160);
     assert_eq!(pool.headers_after(&[locator()]).unwrap().headers.len(), 160);
 }
+
+/// Every connection gets the handshake and an answer to its FIRST `getheaders`, then silence.
+fn serve_one_answer_per_connection() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let (hello, reply) = split_transcript();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let (hello, reply) = (hello.clone(), reply.clone());
+            thread::spawn(move || {
+                stream.write_all(&hello).unwrap();
+                let mut answered = false;
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = stream.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    if !answered && buf[..n].windows(10).any(|w| w == b"getheaders") {
+                        answered = true;
+                        stream.write_all(&reply).unwrap();
+                    }
+                }
+            });
+        }
+    });
+    address
+}
+
+#[test]
+fn a_lone_peer_that_went_silent_is_replaced_by_a_new_connection_to_it() {
+    let mut pool = PeerPool::new(vec![serve_one_answer_per_connection()], Network::Mainnet)
+        .rotating_after(Duration::from_millis(50));
+    assert_eq!(pool.headers_after(&[locator()]).unwrap().headers.len(), 160);
+    thread::sleep(Duration::from_millis(100));
+    // The old connection would stay silent now; the rotation reconnects to the same address.
+    assert_eq!(pool.headers_after(&[locator()]).unwrap().headers.len(), 160);
+}
