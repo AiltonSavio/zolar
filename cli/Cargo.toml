@@ -23,6 +23,7 @@ escrow-client = { path = "../clients/escrow-rust" }
 header-relay-client = { path = "../clients/rust" }
 header-relay-interface = { path = "../crates/header-relay-interface" }
 anyhow = "1"
+base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4"
 rand = "0.8"

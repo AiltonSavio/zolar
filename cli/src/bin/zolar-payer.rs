@@ -62,6 +62,19 @@ impl Zcash {
     }
 }
 
+#[derive(Args)]
+struct Terms {
+    /// The token mint the Payer agreed to be paid in. Required: the Escrow's own mint is not trusted.
+    #[arg(long)]
+    mint: String,
+    /// The least tokens (smallest unit of the mint) the Payer agreed to be paid.
+    #[arg(long)]
+    min_amount: u64,
+    /// Seconds to wait for the Escrow to be finalized on Solana before paying.
+    #[arg(long, default_value_t = 120)]
+    finalized_wait_secs: u64,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Build the unsigned PCZT for the Payee to inspect.
@@ -87,6 +100,8 @@ enum Command {
     VerifyTree,
     /// Read-only: verify the Escrow matches this PCZT and salt.
     Check {
+        #[command(flatten)]
+        terms: Terms,
         #[arg(long)]
         escrow: String,
         #[arg(long)]
@@ -100,6 +115,8 @@ enum Command {
     Pay {
         #[command(flatten)]
         zcash: Zcash,
+        #[command(flatten)]
+        terms: Terms,
         #[arg(long)]
         escrow: String,
         #[arg(long)]
@@ -165,6 +182,7 @@ fn main() -> Result<()> {
             payer::rebuild_tree(&chains, &relay)?;
         }
         Command::Check {
+            terms,
             escrow,
             pczt,
             salt_file,
@@ -177,10 +195,14 @@ fn main() -> Result<()> {
                 pczt: &pczt,
                 salt: read_salt(&salt_file)?,
                 accept_freeze_authority,
+                expected_mint: parse_address(&terms.mint)?,
+                min_amount: terms.min_amount,
+                finalized_wait: std::time::Duration::from_secs(terms.finalized_wait_secs),
             })?;
         }
         Command::Pay {
             zcash,
+            terms,
             escrow,
             pczt,
             salt_file,
@@ -194,6 +216,9 @@ fn main() -> Result<()> {
                 pczt: &pczt,
                 salt: read_salt(&salt_file)?,
                 accept_freeze_authority,
+                expected_mint: parse_address(&terms.mint)?,
+                min_amount: terms.min_amount,
+                finalized_wait: std::time::Duration::from_secs(terms.finalized_wait_secs),
             })?;
             let height = payer::pay(&chains, &zcash.tool(), &checked, &pczt, &work_dir)?;
             println!("payment {} mined in block {height}", checked.txid);

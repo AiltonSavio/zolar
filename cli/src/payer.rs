@@ -19,6 +19,7 @@ use crate::{
     devtool::Devtool,
     explorer::Explorer,
     internal_txid,
+    rpc::finalized_account_within,
     solana::{
         RelayState, associated_token_account, create_ata_idempotent, load_keypair,
         mint_freeze_authority, parse_token_account, read_account, read_escrow, read_relay, send,
@@ -78,13 +79,56 @@ pub struct Check<'a> {
     pub pczt: &'a Path,
     pub salt: [u8; 32],
     pub accept_freeze_authority: bool,
+    /// The token the Payer agreed to be paid in. The Payee's Escrow must hold exactly this mint.
+    pub expected_mint: Address,
+    /// The least tokens (smallest unit) the Payer agreed to be paid.
+    pub min_amount: u64,
+    /// How long to wait for the Escrow to be finalized on Solana.
+    pub finalized_wait: Duration,
+}
+
+/// The terms of the trade as the Payer agreed them, against what the Payee locked.
+pub fn check_terms(
+    escrow: &Escrow,
+    payer_wallet: &Address,
+    relay: &Address,
+    expected_mint: &Address,
+    min_amount: u64,
+) -> Result<()> {
+    ensure!(escrow.state == 0, "the Escrow is not open");
+    ensure!(
+        &escrow.relay == relay,
+        "the Escrow trusts relay {}, not the expected {relay}",
+        escrow.relay
+    );
+    ensure!(
+        &escrow.payout == payer_wallet,
+        "the Escrow pays {}, not this Payer wallet {payer_wallet}",
+        escrow.payout
+    );
+    ensure!(
+        &escrow.mint == expected_mint,
+        "the Escrow holds mint {}, not the agreed {expected_mint}",
+        escrow.mint
+    );
+    ensure!(
+        escrow.amount >= min_amount,
+        "the Escrow locks {} tokens, fewer than the agreed {min_amount}",
+        escrow.amount
+    );
+    ensure!(
+        escrow.bond_required == 0,
+        "the Escrow asks for a Bond; this version cannot lock one"
+    );
+    Ok(())
 }
 
 /// Everything a Payer verifies before signing. Read-only.
 pub fn check_escrow(c: &Check) -> Result<Checked> {
     let mut rpc = HttpRpc::new(&c.chains.rpc_url);
     let s = summary(&std::fs::read(c.pczt)?)?;
-    let data = read_account(&mut rpc, &c.escrow_address)?;
+    let url = &c.chains.rpc_url;
+    let data = finalized_account_within(url, &c.escrow_address, c.finalized_wait)?;
     let escrow = read_escrow(&data)?;
 
     // Only the Escrow program can create the account at this address, so its contents are its own.
@@ -93,19 +137,13 @@ pub fn check_escrow(c: &Check) -> Result<Checked> {
         "{} is not an Escrow account of the Escrow program",
         c.escrow_address
     );
-    ensure!(escrow.state == 0, "the Escrow is not open");
-    ensure!(
-        escrow.relay == c.chains.relay,
-        "the Escrow trusts relay {}, not the expected {}",
-        escrow.relay,
-        c.chains.relay
-    );
-    ensure!(
-        escrow.payout == c.payer_wallet,
-        "the Escrow pays {}, not this Payer wallet {}",
-        escrow.payout,
-        c.payer_wallet
-    );
+    check_terms(
+        &escrow,
+        &c.payer_wallet,
+        &c.chains.relay,
+        &c.expected_mint,
+        c.min_amount,
+    )?;
     let commitment = zolar_claim::payment_commitment(&internal_txid(&s.txid)?, &c.salt)?;
     ensure!(
         commitment == escrow.commitment,
@@ -117,12 +155,12 @@ pub fn check_escrow(c: &Check) -> Result<Checked> {
         escrow.expiry_height,
         s.expiry_height
     );
-    ensure!(
-        escrow.bond_required == 0,
-        "the Escrow asks for a Bond; this version cannot lock one"
-    );
 
-    let vault = parse_token_account(&read_account(&mut rpc, &escrow.vault)?)?;
+    let vault = parse_token_account(&finalized_account_within(
+        url,
+        &escrow.vault,
+        c.finalized_wait,
+    )?)?;
     ensure!(
         vault.owner == c.escrow_address && vault.mint == escrow.mint,
         "the vault is not a token account of the Escrow for its mint"
@@ -132,7 +170,7 @@ pub fn check_escrow(c: &Check) -> Result<Checked> {
         "the vault does not hold the tokens or has a delegate or close authority"
     );
 
-    let mint = read_account(&mut rpc, &escrow.mint)?;
+    let mint = finalized_account_within(url, &escrow.mint, c.finalized_wait)?;
     match mint_freeze_authority(&mint)? {
         Some(authority) if !c.accept_freeze_authority => bail!(
             "the mint has a freeze authority ({authority}); it could freeze the vault after you pay. \
@@ -353,4 +391,51 @@ pub fn reveal_claim(c: &Claim) -> Result<String> {
     let signature = send(&mut rpc, &[claim], &payer)?;
     println!("Reveal Claim        : {signature}");
     Ok(signature)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn escrow() -> Escrow {
+        Escrow {
+            state: 0,
+            payee: Address::new_from_array([1; 32]),
+            payout: Address::new_from_array([2; 32]),
+            mint: Address::new_from_array([3; 32]),
+            relay: Address::new_from_array([4; 32]),
+            amount: 5_000_000,
+            ..Escrow::from_bytes(&sample()).unwrap()
+        }
+    }
+
+    fn sample() -> Vec<u8> {
+        let mut d = vec![0u8; 300];
+        d[0] = 1;
+        d[1] = 1;
+        d
+    }
+
+    #[test]
+    fn the_payer_pays_only_into_the_agreed_mint_and_amount() {
+        let e = escrow();
+        let (payer, relay, mint) = (e.payout, e.relay, e.mint);
+        check_terms(&e, &payer, &relay, &mint, 5_000_000).unwrap();
+        check_terms(&e, &payer, &relay, &mint, 1).unwrap();
+        // A worthless token locked against the right payout and relay.
+        let other = Address::new_from_array([9; 32]);
+        assert!(check_terms(&e, &payer, &relay, &other, 1).is_err());
+        // Underfunded.
+        assert!(check_terms(&e, &payer, &relay, &mint, 5_000_001).is_err());
+        // Another payout wallet, another relay, a required Bond, a closed Escrow.
+        assert!(check_terms(&e, &other, &relay, &mint, 1).is_err());
+        assert!(check_terms(&e, &payer, &other, &mint, 1).is_err());
+        let with_bond = Escrow {
+            bond_required: 1,
+            ..e.clone()
+        };
+        assert!(check_terms(&with_bond, &payer, &relay, &mint, 1).is_err());
+        let closed = Escrow { state: 1, ..e };
+        assert!(check_terms(&closed, &payer, &relay, &mint, 1).is_err());
+    }
 }

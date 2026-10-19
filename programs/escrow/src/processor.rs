@@ -145,26 +145,26 @@ const T_CLOSE_TAG: usize = 129;
 const T_LEN: usize = 165;
 const T_INITIALIZED: u8 = 1;
 
-/// Fields of a token account the Escrow cares about; `None` unless it is an initialised, unfrozen
-/// classic SPL Token account with no delegate, no close authority and not wrapped SOL.
+/// Fields of a token account the Escrow cares about.
 struct Token {
     mint: [u8; 32],
     owner: [u8; 32],
     amount: u64,
 }
 
-fn read_token(account: &AccountView) -> Result<Token, ProgramError> {
+/// An initialised, unfrozen classic SPL Token account. With `strict`, also one with no delegate, no
+/// close authority and not wrapped SOL: what a vault must be, because a delegate could move its tokens
+/// and a close authority could close it. A destination only has to be able to receive.
+fn read_token(account: &AccountView, strict: bool) -> Result<Token, ProgramError> {
     if !account.owned_by(&TOKEN) {
         return Err(fail(EscrowError::BadTokenAccount));
     }
     let d = account.try_borrow()?;
     let tag = |at: usize| d[at] | d[at + 1] | d[at + 2] | d[at + 3];
-    if d.len() != T_LEN
-        || d[T_STATE] != T_INITIALIZED
-        || tag(T_DELEGATE_TAG) != 0
-        || tag(T_NATIVE_TAG) != 0
-        || tag(T_CLOSE_TAG) != 0
-    {
+    if d.len() != T_LEN || d[T_STATE] != T_INITIALIZED {
+        return Err(fail(EscrowError::BadTokenAccount));
+    }
+    if strict && (tag(T_DELEGATE_TAG) != 0 || tag(T_NATIVE_TAG) != 0 || tag(T_CLOSE_TAG) != 0) {
         return Err(fail(EscrowError::BadTokenAccount));
     }
     Ok(Token {
@@ -360,14 +360,15 @@ fn create_escrow(program_id: &Address, accounts: &[AccountView], args: &[u8]) ->
         return Err(fail(EscrowError::BadExpiry));
     }
 
-    let source = read_token(payee_token)?;
+    let source = read_token(payee_token, false)?;
     if source.owner != *payee.address().as_ref() || source.amount < amount {
         return Err(fail(EscrowError::BadTokenAccount));
     }
-    let locked = read_token(vault)?;
+    let locked = read_token(vault, true)?;
     if locked.mint != source.mint
         || locked.owner != *escrow.address().as_ref()
         || vault.address() == payee_token.address()
+        || vault.address() == payee.address()
     {
         return Err(fail(EscrowError::BadTokenAccount));
     }
@@ -528,7 +529,7 @@ fn reveal_claim(program_id: &Address, accounts: &[AccountView], args: &[u8]) -> 
     drop(relay_data);
 
     // Pay the Payer wallet named at creation, whoever submitted the Claim.
-    let paid = read_token(payout_token)?;
+    let paid = read_token(payout_token, false)?;
     if paid.mint != mint || paid.owner != stored_payout {
         return Err(fail(EscrowError::BadTokenAccount));
     }

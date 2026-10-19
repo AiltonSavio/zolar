@@ -5,6 +5,7 @@ use escrow_tests::*;
 use header_relay_interface::RelayView;
 use relay_tests::synthetic::CHECKPOINT_HEIGHT;
 use solana_signer::Signer;
+use zolar_claim::tx_merkle_root;
 
 // Error codes of clients/codama/escrow.mjs.
 const WRONG_ACCOUNT: u32 = 1;
@@ -163,15 +164,38 @@ fn a_wrong_salt_transaction_or_path_is_rejected() {
 }
 
 #[test]
-fn a_root_the_relay_never_had_is_rejected() {
+fn a_self_consistent_forged_tree_is_rejected_because_its_root_is_not_the_relays() {
     let (mut w, deal, height) = paid();
     let (tree, size) = w.tree();
     let index = (height - CHECKPOINT_HEIGHT - 1) as usize;
-    let mut root = tree.root(size);
-    root[31] ^= 1;
-    let path = tree.compress(tree.path(index, size));
-    let ix = w.claim_ix_raw(&deal, height, root, path, deal.index);
+    let leaf = zolar_claim::block_leaf(height, &tx_merkle_root(&deal.txids)).unwrap();
+    // Arbitrary siblings: the path folds to some root of the forger's own making, so the Poseidon
+    // check passes and only the membership in the relay's root history can stop it.
+    let forged: Vec<[u8; 32]> = (0..20u8).map(|i| [i + 1; 32]).collect();
+    let root = zolar_claim::FinalBlockTree::fold(&leaf, index, &forged);
+    assert_ne!(root, tree.root(size));
+    let before = token_balance(&w.h, &deal.vault);
+    let ix = w.claim_ix_raw(&deal, height, root, forged, deal.index);
     assert_eq!(w.claim_err(ix), UNKNOWN_ROOT);
+    assert_eq!(token_balance(&w.h, &deal.vault), before);
+    assert_eq!(token_balance(&w.h, &w.payer_token), Some(0));
+}
+
+#[test]
+fn a_root_older_than_the_relays_history_is_rejected() {
+    let (mut w, deal, height) = paid();
+    let old_size = w.tree().1;
+    let honest = w.claim_ix(&deal, height, Some(old_size));
+    w.mine(130); // the relay keeps the last 128 roots
+    let (_, size) = w.tree();
+    assert!(size - old_size >= 128);
+    // The same claim that was valid is refused: the root aged out.
+    let err = w.claim_err(honest);
+    assert_eq!(err, UNKNOWN_ROOT);
+    // Against a current root it works.
+    let ix = w.claim_ix(&deal, height, None);
+    w.claim(ix);
+    assert_eq!(token_balance(&w.h, &w.payer_token), Some(deal.amount));
 }
 
 #[test]
@@ -468,4 +492,59 @@ fn compute_units_per_instruction() {
         w.tree().1
     );
     assert!(create < 40_000 && small < 60_000 && large < 60_000);
+}
+
+#[test]
+fn a_payout_account_with_a_delegate_or_close_authority_still_receives_the_claim() {
+    for offset in [72usize, 129] {
+        let (mut w, deal, height) = paid();
+        let mut dest = w.h.svm.get_account(&w.payer_token).unwrap();
+        dest.data[offset] = 1;
+        dest.data[offset + 4..offset + 36].fill(9);
+        w.h.svm.set_account(w.payer_token, dest).unwrap();
+        let ix = w.claim_ix(&deal, height, None);
+        w.claim(ix);
+        assert_eq!(
+            token_balance(&w.h, &w.payer_token),
+            Some(deal.amount),
+            "field at {offset}"
+        );
+    }
+}
+
+#[test]
+fn a_frozen_or_foreign_payout_account_is_refused() {
+    let (mut w, deal, height) = paid();
+    let mut frozen = w.h.svm.get_account(&w.payer_token).unwrap();
+    frozen.data[108] = 2;
+    w.h.svm.set_account(w.payer_token, frozen).unwrap();
+    let ix = w.claim_ix(&deal, height, None);
+    assert_eq!(w.claim_err(ix), BAD_TOKEN_ACCOUNT);
+}
+
+#[test]
+fn the_payee_account_cannot_be_the_vault() {
+    // A token account that signs as the Payee and is also named as the vault would make the final
+    // CloseAccount close an account into itself and strand the tokens.
+    let mut w = World::new(FINALITY_DEPTH);
+    let tip = w.tip();
+    let mut deal = w.deal(txids(2), 0, 14, tip + 5);
+    deal.vault = w.payee.pubkey();
+    let mint = w.mint;
+    let mut as_vault = token_account(&mint, &deal.escrow, 0);
+    as_vault.lamports = 10_000_000_000;
+    w.h.svm.set_account(deal.vault, as_vault).unwrap();
+    // Rent already in the Escrow address, so no system transfer is needed from the token account.
+    w.h.svm
+        .set_account(
+            deal.escrow,
+            solana_account::Account {
+                lamports: 5_000_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let ix = w.create_ix_with(&deal, deal.amount, 0, 0);
+    let payee = w.payee.insecure_clone();
+    assert_eq!(w.h.custom_err(&[ix], &[&payee]), BAD_TOKEN_ACCOUNT);
 }
