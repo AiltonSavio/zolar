@@ -415,14 +415,14 @@ fn locate_payment(
             let hashes: Vec<[u8; 32]> = (first..=last)
                 .map(|h| header_hash(&rebuilt.headers[leaf_of(h)]))
                 .collect();
-            let found = find_payment(&hashes, txid, |hash| {
+            let scan = find_payment(&hashes, txid, |hash| {
                 fetch_block_txids(*hash, &chains.peers, chains.network)
-            })?;
+            });
             if let Some(Found {
                 candidate,
                 txids,
                 tx_index,
-            }) = found
+            }) = scan.found
             {
                 let height = first + candidate as u32;
                 let (size, rebuilt) = cached.take().expect("just set");
@@ -441,7 +441,10 @@ fn locate_payment(
                     tx_index,
                 });
             }
-            next_height = Some(last + 1);
+            next_height = Some(first + scan.scanned as u32);
+            if let Some(why) = scan.failure {
+                println!("could not read the next block from Zcash peers ({why}); will retry");
+            }
         }
         ensure!(
             next_height.is_none_or(|n| n <= escrow.expiry_height),

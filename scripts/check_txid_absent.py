@@ -190,8 +190,12 @@ def main(argv=None):
             if hits:
                 found = True
                 print(f"FOUND  {signature}  ({size})")
+                pieces = [h for h in hits if "-byte piece" in h]
                 for h in hits:
-                    print(f"         {h}")
+                    if "-byte piece" not in h:
+                        print(f"         {h}")
+                if pieces:
+                    print(f"         {len(pieces)} matches of {PIECE}-byte pieces of the ID")
             else:
                 print(f"clean  {signature}  ({size})")
         print(

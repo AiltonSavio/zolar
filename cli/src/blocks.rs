@@ -14,6 +14,7 @@
 use std::net::SocketAddr;
 
 use anyhow::{Result, bail, ensure};
+use rand::seq::SliceRandom;
 use zcash_primitives::transaction::Transaction;
 use zcash_protocol::consensus::BranchId;
 use zolar_relayer::p2p::{self, Network, Peer, RawHeader};
@@ -149,7 +150,9 @@ pub fn fetch_block_txids(
     addresses.sort();
     addresses.dedup();
     ensure!(!addresses.is_empty(), "no Zcash {network:?} peers found");
-    for addr in addresses.iter().take(12) {
+    // A random order spreads the load, and many peers refuse blocks or are gone.
+    addresses.shuffle(&mut rand::thread_rng());
+    for addr in addresses.iter().take(40) {
         let Ok(mut peer) = Peer::connect(*addr, network) else {
             continue;
         };
@@ -182,25 +185,53 @@ pub struct Found {
     pub tx_index: usize,
 }
 
+/// What a look through some blocks found.
+#[derive(Debug)]
+pub struct Scan {
+    pub found: Option<Found>,
+    /// How many of the blocks, from the first, were read and do not hold the payment (or do, when found).
+    pub scanned: usize,
+    /// Why the look stopped early: a block that no peer would give. Try again later.
+    pub failure: Option<String>,
+}
+
 /// Looks for `txid` in the blocks with the given hashes, in order, using `fetch` to get each block's
-/// transaction IDs. The Payer finds its own payment this way, locally, without telling an explorer
-/// which transaction or which height it cares about.
+/// transaction IDs, and stops at the first block `fetch` cannot give. The Payer finds its own payment
+/// this way, locally, without telling an explorer which transaction or which height it cares about.
 pub fn find_payment(
     hashes: &[[u8; 32]],
     txid: &[u8; 32],
     mut fetch: impl FnMut(&[u8; 32]) -> Result<Vec<[u8; 32]>>,
-) -> Result<Option<Found>> {
+) -> Scan {
     for (candidate, hash) in hashes.iter().enumerate() {
-        let txids = fetch(hash)?;
-        if let Some(tx_index) = txids.iter().position(|t| t == txid) {
-            return Ok(Some(Found {
-                candidate,
-                txids,
-                tx_index,
-            }));
+        match fetch(hash) {
+            Ok(txids) => {
+                if let Some(tx_index) = txids.iter().position(|t| t == txid) {
+                    return Scan {
+                        found: Some(Found {
+                            candidate,
+                            txids,
+                            tx_index,
+                        }),
+                        scanned: candidate + 1,
+                        failure: None,
+                    };
+                }
+            }
+            Err(e) => {
+                return Scan {
+                    found: None,
+                    scanned: candidate,
+                    failure: Some(e.to_string()),
+                };
+            }
         }
     }
-    Ok(None)
+    Scan {
+        found: None,
+        scanned: hashes.len(),
+        failure: None,
+    }
 }
 
 #[cfg(test)]
@@ -279,8 +310,23 @@ mod tests {
         .unwrap();
         assert_eq!((found.candidate, found.tx_index), (1, 3));
         assert_eq!(asked, vec![1, 2], "stops at the block that holds it");
-        let none = find_payment(&hashes, &[5; 32], |_| Ok(vec![[9; 32]])).unwrap();
-        assert!(none.is_none());
+        let none = find_payment(&hashes, &[5; 32], |_| Ok(vec![[9; 32]]));
+        assert!(none.found.is_none() && none.failure.is_none());
+        assert_eq!(none.scanned, 3);
+    }
+
+    #[test]
+    fn a_block_no_peer_gives_stops_the_look_and_keeps_what_was_read() {
+        let hashes = [[1u8; 32], [2u8; 32], [3u8; 32]];
+        let scan = find_payment(&hashes, &[5; 32], |h| {
+            if h[0] == 2 {
+                bail!("no peer has it")
+            }
+            Ok(vec![[9; 32]])
+        });
+        assert!(scan.found.is_none());
+        assert_eq!(scan.scanned, 1, "the first block is not read again");
+        assert!(scan.failure.unwrap().contains("no peer"));
     }
 
     #[test]
