@@ -12,7 +12,7 @@ use solana_address::Address;
 use solana_signer::Signer;
 use zolar_claim::{FinalBlockTree, block_leaf, tx_merkle_path};
 use zolar_pczt::summary;
-use zolar_relayer::rpc::HttpRpc;
+use zolar_relayer::{chain::Cluster, p2p, rpc::HttpRpc};
 
 use crate::{
     blocks::{fetch_headers, merkle_root, verified_block_txids},
@@ -20,8 +20,8 @@ use crate::{
     explorer::Explorer,
     internal_txid,
     solana::{
-        associated_token_account, create_ata_idempotent, load_keypair, mint_freeze_authority,
-        parse_token_account, read_account, read_escrow, read_relay, send,
+        RelayState, associated_token_account, create_ata_idempotent, load_keypair,
+        mint_freeze_authority, parse_token_account, read_account, read_escrow, read_relay, send,
     },
 };
 
@@ -218,6 +218,48 @@ pub fn wait_until_mined(chains: &Chains, txid: &str) -> Result<u32> {
     }
 }
 
+/// The Final Block Tree rebuilt from Zcash P2P headers, proven equal to the relay's.
+pub struct Rebuilt {
+    pub headers: Vec<p2p::RawHeader>,
+    pub tree: FinalBlockTree,
+    pub root: [u8; 32],
+}
+
+/// Rebuilds the relay's Final Block Tree from the headers of the blocks it holds as final and checks
+/// the root against the relay's own. A mismatch means the peers' chain is not the relay's.
+pub fn rebuild_tree(chains: &Chains, relay: &RelayState) -> Result<Rebuilt> {
+    let view = relay.view()?;
+    let checkpoint = relay.account()?.checkpoint;
+    let size = view.leaf_count() as usize;
+    let headers = fetch_headers(checkpoint.hash, size, &chains.peers)?;
+    let leaves = headers
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            Ok(block_leaf(
+                checkpoint.height + 1 + i as u32,
+                &merkle_root(h),
+            )?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let tree = FinalBlockTree::new(leaves);
+    let root = tree.root(size);
+    ensure!(
+        view.root_at(size as u32) == Some(root),
+        "the tree rebuilt from Zcash P2P headers does not equal the relay's root: the peers' chain \
+         differs from the relay's"
+    );
+    println!(
+        "rebuilt {size} leaves from P2P headers; the root {} equals the relay's",
+        hex::encode(root)
+    );
+    Ok(Rebuilt {
+        headers,
+        tree,
+        root,
+    })
+}
+
 pub struct Claim<'a> {
     pub chains: &'a Chains,
     pub keypair: PathBuf,
@@ -261,26 +303,11 @@ pub fn reveal_claim(c: &Claim) -> Result<String> {
     let index = (c.block_height - checkpoint.height - 1) as usize;
     ensure!(index < size, "the block is not in the tree yet");
     println!("final block tree: {size} leaves, the block is leaf {index}");
-
-    let headers = fetch_headers(checkpoint.hash, size, &c.chains.peers)?;
-    let leaves = headers
-        .iter()
-        .enumerate()
-        .map(|(i, h)| {
-            Ok(block_leaf(
-                checkpoint.height + 1 + i as u32,
-                &merkle_root(h),
-            )?)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let tree = FinalBlockTree::new(leaves);
-    let root = tree.root(size);
-    ensure!(
-        view.root_at(size as u32) == Some(root),
-        "the tree rebuilt from Zcash P2P headers does not equal the relay's root: the peers' chain \
-         differs from the relay's"
-    );
-    println!("rebuilt root equals the relay's root {}", hex::encode(root));
+    let Rebuilt {
+        headers,
+        tree,
+        root,
+    } = rebuild_tree(c.chains, &relay)?;
 
     let txids = verified_block_txids(
         &Explorer::new(&c.chains.explorer_url),
@@ -313,8 +340,17 @@ pub fn reveal_claim(c: &Claim) -> Result<String> {
         .tree_path(tree.compress(tree.path(index, size)).into())
         .tx_path(tx_merkle_path(&txids, tx_index).into())
         .instruction();
-    let ata = create_ata_idempotent(&payer.pubkey(), &payer.pubkey(), &escrow.mint);
-    let signature = send(&mut rpc, &[ata, claim], &payer)?;
+    // The Payer's token account is made in its own transaction: with it the claim would not fit one.
+    if rpc
+        .account(&payout_token)
+        .map_err(anyhow::Error::msg)?
+        .is_none()
+    {
+        let ata = create_ata_idempotent(&payer.pubkey(), &payer.pubkey(), &escrow.mint);
+        let created = send(&mut rpc, &[ata], &payer)?;
+        println!("Payer token account : {payout_token} ({created})");
+    }
+    let signature = send(&mut rpc, &[claim], &payer)?;
     println!("Reveal Claim        : {signature}");
     Ok(signature)
 }

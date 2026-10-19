@@ -83,6 +83,8 @@ enum Command {
         #[arg(long)]
         output: PathBuf,
     },
+    /// Read-only: rebuild the Final Block Tree from Zcash P2P headers and compare it with the relay.
+    VerifyTree,
     /// Read-only: verify the Escrow matches this PCZT and salt.
     Check {
         #[arg(long)]
@@ -157,6 +159,11 @@ fn main() -> Result<()> {
             expiry_blocks,
             &output,
         )?,
+        Command::VerifyTree => {
+            let mut rpc = zolar_relayer::rpc::HttpRpc::new(&chains.rpc_url);
+            let relay = zolar_cli::solana::read_relay(&mut rpc, &chains.relay)?;
+            payer::rebuild_tree(&chains, &relay)?;
+        }
         Command::Check {
             escrow,
             pczt,

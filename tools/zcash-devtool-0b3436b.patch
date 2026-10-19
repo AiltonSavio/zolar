@@ -1,0 +1,86 @@
+diff --git i/src/commands/pczt/create.rs w/src/commands/pczt/create.rs
+index 2679a32..3d51a2a 100644
+--- i/src/commands/pczt/create.rs
++++ w/src/commands/pczt/create.rs
+@@ -61,6 +61,10 @@ pub(crate) struct Command {
+     #[arg(default_value_t = 10000000)]
+     min_split_output_value: u64,
+ 
++    /// Absolute expiry height for the transaction (default: the wallet's default, 40 blocks ahead)
++    #[arg(long)]
++    expiry_height: Option<u32>,
++
+     /// Path to a file to which to write the PCZT. If not provided, writes to stdout.
+     #[arg(long)]
+     output: Option<PathBuf>,
+@@ -130,8 +134,8 @@ impl Command {
+             account.id(),
+             OvkPolicy::Sender,
+             &proposal,
+-            // Use the builder-derived expiry and a standard Orchard-pool bundle.
+-            None,
++            // The caller's expiry height, else the builder-derived expiry.
++            self.expiry_height.map(zcash_protocol::consensus::BlockHeight::from_u32),
+             zcash_primitives::transaction::builder::BundlePadding::DEFAULT,
+         )
+         .map_err(error::Error::from)?;
+diff --git i/src/commands/pczt/sign.rs w/src/commands/pczt/sign.rs
+index 49c13f9..1d4321f 100644
+--- i/src/commands/pczt/sign.rs
++++ w/src/commands/pczt/sign.rs
+@@ -66,6 +66,9 @@ impl Command {
+             Orchard {
+                 index: usize,
+             },
++            Ironwood {
++                index: usize,
++            },
+             Sapling {
+                 index: usize,
+             },
+@@ -103,6 +106,27 @@ impl Command {
+                 Ok(())
+             })
+             .map_err(|e| anyhow!("Invalid PCZT: {:?}", e))?
++            .with_ironwood::<Infallible, _>(|bundle| {
++                for (index, action) in bundle.actions().iter().enumerate() {
++                    if let Some(account_index) = action
++                        .spend()
++                        .zip32_derivation()
++                        .as_ref()
++                        .and_then(|derivation| {
++                            derivation.extract_account_index(
++                                &seed_fp,
++                                zip32::ChildIndex::hardened(params.network_type().coin_type()),
++                            )
++                        })
++                    {
++                        keys.entry(account_index)
++                            .or_default()
++                            .push(KeyRef::Ironwood { index });
++                    }
++                }
++                Ok(())
++            })
++            .map_err(|e| anyhow!("Invalid PCZT: {:?}", e))?
+             .with_sapling::<Infallible, _>(|bundle| {
+                 for (index, spend) in bundle.spends().iter().enumerate() {
+                     if let Some(account_index) =
+@@ -175,6 +199,17 @@ impl Command {
+                                 anyhow!("Failed to sign Orchard spend {index}: {:?}", e)
+                             })?;
+                     }
++                    KeyRef::Ironwood { index } => {
++                        signer
++                            .sign_ironwood(
++                                UnwrapErr(SysRng),
++                                index,
++                                &orchard::keys::SpendAuthorizingKey::from(usk.orchard()),
++                            )
++                            .map_err(|e| {
++                                anyhow!("Failed to sign Ironwood spend {index}: {:?}", e)
++                            })?;
++                    }
+                     KeyRef::Sapling { index } => {
+                         signer
+                             .sign_sapling(UnwrapErr(SysRng), index, usk.sapling().expsk().ask())
