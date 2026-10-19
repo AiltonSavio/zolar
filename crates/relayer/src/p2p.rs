@@ -144,6 +144,14 @@ fn getheaders_payload(locator: &[[u8; 32]]) -> Vec<u8> {
     p
 }
 
+/// `getdata` for one block: inventory type 2 (`MSG_BLOCK`) and the block hash in internal byte order.
+fn getdata_block_payload(hash: &[u8; 32]) -> Vec<u8> {
+    let mut p = varint(1);
+    p.extend_from_slice(&2u32.to_le_bytes());
+    p.extend_from_slice(hash);
+    p
+}
+
 pub fn parse_headers(payload: &[u8]) -> Result<Vec<RawHeader>, P2pError> {
     let (count, mut offset) = read_varint(payload)?;
     if payload.len() != offset + count * (HEADER_LEN + 1) {
@@ -224,6 +232,23 @@ impl<S: Read + Write> Peer<S> {
         }
         protocol("no headers reply")
     }
+
+    /// The raw block with this hash (internal byte order), as the peer sent it. The caller must check
+    /// that the header inside hashes to `hash`.
+    pub fn getdata_block(&mut self, hash: &[u8; 32]) -> Result<Vec<u8>, P2pError> {
+        self.stream
+            .write_all(&encode_message("getdata", &getdata_block_payload(hash)))?;
+        for _ in 0..60 {
+            let (command, payload) = read_message(&mut self.stream)?;
+            match command.as_str() {
+                "block" => return Ok(payload),
+                "notfound" => return protocol("the peer does not have that block"),
+                "ping" => self.stream.write_all(&encode_message("pong", &payload))?,
+                _ => {}
+            }
+        }
+        protocol("no block reply")
+    }
 }
 
 impl Peer<TcpStream> {
@@ -249,4 +274,18 @@ pub fn resolve(hosts: &[String]) -> Vec<std::net::SocketAddr> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_block_request_names_one_block_inventory_item() {
+        let payload = getdata_block_payload(&[7; 32]);
+        assert_eq!(payload.len(), 1 + 4 + 32);
+        assert_eq!(payload[0], 1);
+        assert_eq!(payload[1..5], [2, 0, 0, 0]);
+        assert_eq!(payload[5..], [7; 32]);
+    }
 }

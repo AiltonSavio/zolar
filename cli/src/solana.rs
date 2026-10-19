@@ -88,6 +88,7 @@ fn error_name_any(code: u32) -> String {
         19 => "RefundNotRequested",
         20 => "ClaimWindowOpen",
         21 => "NotPayer",
+        22 => "InvalidProof",
         _ => "",
     };
     format!(

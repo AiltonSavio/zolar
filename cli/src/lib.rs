@@ -8,6 +8,7 @@ pub mod devtool;
 pub mod explorer;
 pub mod payee;
 pub mod payer;
+pub mod prover;
 pub mod rpc;
 pub mod solana;
 
