@@ -6,14 +6,13 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use solana_signer::Signer;
 use zolar_cli::{
-    DEVNET_RELAY, DEVNET_RPC, TESTNET_EXPLORER,
+    DEVNET_RPC, Network, default_explorer, default_relay,
     devtool::Devtool,
     payer::{self, Chains, Check, Claim, PrivateClaimArgs},
     prover::Prover,
     read_salt,
     solana::{load_keypair, parse_address},
 };
-use zolar_relayer::p2p::SEEDERS;
 
 /// `circuits/scripts/prove.sh` relative to the repository this binary was built from.
 const DEFAULT_PROVE_SCRIPT: &str =
@@ -22,7 +21,7 @@ const DEFAULT_PROVE_SCRIPT: &str =
 #[derive(Parser)]
 #[command(
     name = "zolar-payer",
-    about = "Payer side of a Zolar swap (Zcash testnet, Solana devnet)"
+    about = "Payer side of a Zolar swap (Zcash testnet or mainnet, Solana devnet)"
 )]
 struct Cli {
     #[command(flatten)]
@@ -35,10 +34,15 @@ struct Cli {
 struct Net {
     #[arg(long, env = "ZOLAR_RPC_URL", default_value = DEVNET_RPC, global = true)]
     rpc_url: String,
-    #[arg(long, env = "ZOLAR_RELAY", default_value = DEVNET_RELAY, global = true)]
-    relay: String,
-    #[arg(long, env = "ZOLAR_EXPLORER", default_value = TESTNET_EXPLORER, global = true)]
-    explorer: String,
+    /// The Header Relay (default: the devnet relay of the chosen Zcash network).
+    #[arg(long, env = "ZOLAR_RELAY", global = true)]
+    relay: Option<String>,
+    /// The block explorer (default: the one of the chosen Zcash network).
+    #[arg(long, env = "ZOLAR_EXPLORER", global = true)]
+    explorer: Option<String>,
+    /// The Zcash network of the payment: testnet or mainnet.
+    #[arg(long, env = "ZOLAR_NETWORK", default_value = "testnet", global = true)]
+    network: Network,
     /// The Payer's Solana keypair file; its address is the payout wallet.
     #[arg(long, env = "ZOLAR_PAYER_KEYPAIR", global = true)]
     keypair: Option<PathBuf>,
@@ -89,7 +93,7 @@ enum Command {
     CreatePczt {
         #[command(flatten)]
         zcash: Zcash,
-        /// The Payee's unified address (testnet).
+        /// The Payee's unified address (of the chosen network).
         #[arg(long)]
         address: String,
         /// Zatoshis to pay.
@@ -182,11 +186,22 @@ enum Command {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let network = cli.net.network;
+    let relay = cli
+        .net
+        .relay
+        .clone()
+        .unwrap_or_else(|| default_relay(network).to_string());
     let chains = Chains {
         rpc_url: cli.net.rpc_url.clone(),
-        explorer_url: cli.net.explorer.clone(),
-        relay: parse_address(&cli.net.relay)?,
-        peers: SEEDERS.iter().map(|s| s.to_string()).collect(),
+        explorer_url: cli
+            .net
+            .explorer
+            .clone()
+            .unwrap_or_else(|| default_explorer(network).to_string()),
+        relay: parse_address(&relay)?,
+        peers: zolar_cli::seeders(network),
+        network,
     };
     let wallet = || -> Result<solana_address::Address> {
         let path = cli

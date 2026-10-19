@@ -9,26 +9,103 @@ use std::{
 use rand::Rng;
 use sha2::{Digest, Sha256};
 
-pub const MAGIC: [u8; 4] = [0xfa, 0x1a, 0xf9, 0xbf];
-pub const PORT: u16 = 18233;
 /// Protocol version of NU7; peers older than this are on the stale pre-NU7 branch.
 pub const PROTOCOL: i32 = 170_180;
 /// 140 byte header, `fd4005`, 1,344 byte Equihash solution.
 pub const HEADER_LEN: usize = 1487;
-pub const SEEDERS: [&str; 3] = [
+const TESTNET_SEEDERS: [&str; 3] = [
     "testnet.seeder.zfnd.org",
     "seeder.testnet.zec.rocks",
     "dnsseed.testnet.z.cash",
 ];
+const MAINNET_SEEDERS: [&str; 3] = [
+    "mainnet.seeder.zfnd.org",
+    "seeder.mainnet.zec.rocks",
+    "dnsseed.z.cash",
+];
+/// Mainnet has no NU7 yet, so any peer on the Canopy-or-later chain is on the chain we follow.
+const MAINNET_MIN_PROTOCOL: i32 = 170_100;
+/// The NU7 activation height on the Zcash testnet.
+const TESTNET_NU7_HEIGHT: u32 = 4_465_026;
 const MAX_HANDSHAKE_MESSAGES: usize = 50;
 const MAX_PAYLOAD: usize = 4 * 1024 * 1024;
 const USER_AGENT: &[u8] = b"/zolar-relayer:0.1/";
+
+/// The Zcash network a Relayer, a peer connection or a Checkpoint belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Network {
+    Testnet,
+    Mainnet,
+}
+
+impl Network {
+    pub fn magic(self) -> [u8; 4] {
+        match self {
+            Self::Testnet => [0xfa, 0x1a, 0xf9, 0xbf],
+            Self::Mainnet => [0x24, 0xe9, 0x27, 0x64],
+        }
+    }
+
+    pub fn port(self) -> u16 {
+        match self {
+            Self::Testnet => 18233,
+            Self::Mainnet => 8233,
+        }
+    }
+
+    pub fn seeders(self) -> &'static [&'static str] {
+        match self {
+            Self::Testnet => &TESTNET_SEEDERS,
+            Self::Mainnet => &MAINNET_SEEDERS,
+        }
+    }
+
+    /// The oldest peer protocol version that follows the chain we want.
+    pub fn min_peer_protocol(self) -> i32 {
+        match self {
+            Self::Testnet => PROTOCOL,
+            Self::Mainnet => MAINNET_MIN_PROTOCOL,
+        }
+    }
+
+    /// The `network` byte of a Header Relay Checkpoint.
+    pub fn checkpoint_network(self) -> u8 {
+        match self {
+            Self::Mainnet => 0,
+            Self::Testnet => 1,
+        }
+    }
+
+    /// The NU7 activation height; `u32::MAX` while mainnet has none (the relay then keeps the
+    /// 17-block difficulty window forever, so a new mainnet relay is needed after activation).
+    pub fn nu7_height(self) -> u32 {
+        match self {
+            Self::Testnet => TESTNET_NU7_HEIGHT,
+            Self::Mainnet => u32::MAX,
+        }
+    }
+}
+
+impl std::str::FromStr for Network {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "testnet" => Ok(Self::Testnet),
+            "mainnet" => Ok(Self::Mainnet),
+            other => Err(format!("unknown network {other}: use testnet or mainnet")),
+        }
+    }
+}
 
 pub type RawHeader = [u8; HEADER_LEN];
 
 #[derive(Debug)]
 pub enum P2pError {
     Io(io::Error),
+    /// The read timed out before a single byte of the next message arrived: the peer is quiet,
+    /// and the stream is still on a message boundary.
+    Idle,
     Protocol(String),
 }
 
@@ -36,6 +113,7 @@ impl fmt::Display for P2pError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(e) => write!(f, "i/o: {e}"),
+            Self::Idle => write!(f, "no message before the read timeout"),
             Self::Protocol(m) => write!(f, "protocol: {m}"),
         }
     }
@@ -78,11 +156,11 @@ fn read_varint(data: &[u8]) -> Result<(usize, usize), P2pError> {
     }
 }
 
-pub fn encode_message(command: &str, payload: &[u8]) -> Vec<u8> {
+pub fn encode_message(network: Network, command: &str, payload: &[u8]) -> Vec<u8> {
     let mut name = [0u8; 12];
     name[..command.len()].copy_from_slice(command.as_bytes());
     let mut out = Vec::with_capacity(24 + payload.len());
-    out.extend_from_slice(&MAGIC);
+    out.extend_from_slice(&network.magic());
     out.extend_from_slice(&name);
     out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     out.extend_from_slice(&sha256d(payload)[..4]);
@@ -90,10 +168,27 @@ pub fn encode_message(command: &str, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-pub fn read_message(r: &mut impl Read) -> Result<(String, Vec<u8>), P2pError> {
+pub fn read_message(network: Network, r: &mut impl Read) -> Result<(String, Vec<u8>), P2pError> {
     let mut head = [0u8; 24];
-    r.read_exact(&mut head)?;
-    if head[..4] != MAGIC {
+    let mut filled = 0;
+    while filled < head.len() {
+        match r.read(&mut head[filled..]) {
+            Ok(0) => return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into()),
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e)
+                if filled == 0
+                    && matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+            {
+                return Err(P2pError::Idle);
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    if head[..4] != network.magic() {
         return protocol("wrong network magic");
     }
     let len = u32::from_le_bytes(head[16..20].try_into().unwrap()) as usize;
@@ -175,17 +270,22 @@ pub fn parse_headers(payload: &[u8]) -> Result<Vec<RawHeader>, P2pError> {
 /// A handshaken connection to one peer.
 pub struct Peer<S> {
     stream: S,
+    network: Network,
     version: i32,
 }
 
 impl<S: Read + Write> Peer<S> {
-    /// Exchanges `version` and `verack`; refuses peers older than NU7.
-    pub fn handshake(mut stream: S) -> Result<Self, P2pError> {
+    /// Exchanges `version` and `verack`; refuses peers older than the network's chain needs.
+    pub fn handshake(mut stream: S, network: Network) -> Result<Self, P2pError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
         let nonce = rand::thread_rng().gen();
-        stream.write_all(&encode_message("version", &version_payload(now, nonce)))?;
+        stream.write_all(&encode_message(
+            network,
+            "version",
+            &version_payload(now, nonce),
+        ))?;
         let (mut got_verack, mut version) = (false, None);
         let mut messages = 0;
         while !(got_verack && version.is_some()) {
@@ -193,21 +293,26 @@ impl<S: Read + Write> Peer<S> {
             if messages > MAX_HANDSHAKE_MESSAGES {
                 return protocol("peer never finished the handshake");
             }
-            let (command, payload) = read_message(&mut stream)?;
+            let (command, payload) = read_message(network, &mut stream)?;
             match command.as_str() {
                 "version" if payload.len() >= 4 => {
                     version = Some(i32::from_le_bytes(payload[..4].try_into().unwrap()));
-                    stream.write_all(&encode_message("verack", &[]))?;
+                    stream.write_all(&encode_message(network, "verack", &[]))?;
                 }
                 "verack" => got_verack = true,
                 _ => {}
             }
         }
         let version = version.unwrap();
-        if version < PROTOCOL {
-            return protocol(format!("peer speaks {version}, older than {PROTOCOL}"));
+        let oldest = network.min_peer_protocol();
+        if version < oldest {
+            return protocol(format!("peer speaks {version}, older than {oldest}"));
         }
-        Ok(Self { stream, version })
+        Ok(Self {
+            stream,
+            network,
+            version,
+        })
     }
 
     pub fn protocol_version(&self) -> i32 {
@@ -218,15 +323,28 @@ impl<S: Read + Write> Peer<S> {
         self.stream
     }
 
-    /// The headers that follow the first locator hash the peer knows.
+    /// The headers that follow the first locator hash the peer knows; none when the peer has
+    /// nothing newer, answers with an empty list or stays silent until the read timeout.
     pub fn getheaders(&mut self, locator: &[[u8; 32]]) -> Result<Vec<RawHeader>, P2pError> {
-        self.stream
-            .write_all(&encode_message("getheaders", &getheaders_payload(locator)))?;
+        self.stream.write_all(&encode_message(
+            self.network,
+            "getheaders",
+            &getheaders_payload(locator),
+        ))?;
         for _ in 0..60 {
-            let (command, payload) = read_message(&mut self.stream)?;
+            let (command, payload) = match read_message(self.network, &mut self.stream) {
+                Ok(message) => message,
+                // Zebra peers on mainnet stay silent when no block follows the locator: that is
+                // "nothing newer", not a dead peer (a dead peer resets or closes the connection).
+                // Only a quiet message boundary counts; a stall inside a message is an error.
+                Err(P2pError::Idle) => return Ok(Vec::new()),
+                Err(e) => return Err(e),
+            };
             match command.as_str() {
                 "headers" => return parse_headers(&payload),
-                "ping" => self.stream.write_all(&encode_message("pong", &payload))?,
+                "ping" => self
+                    .stream
+                    .write_all(&encode_message(self.network, "pong", &payload))?,
                 _ => {}
             }
         }
@@ -236,14 +354,19 @@ impl<S: Read + Write> Peer<S> {
     /// The raw block with this hash (internal byte order), as the peer sent it. The caller must check
     /// that the header inside hashes to `hash`.
     pub fn getdata_block(&mut self, hash: &[u8; 32]) -> Result<Vec<u8>, P2pError> {
-        self.stream
-            .write_all(&encode_message("getdata", &getdata_block_payload(hash)))?;
+        self.stream.write_all(&encode_message(
+            self.network,
+            "getdata",
+            &getdata_block_payload(hash),
+        ))?;
         for _ in 0..60 {
-            let (command, payload) = read_message(&mut self.stream)?;
+            let (command, payload) = read_message(self.network, &mut self.stream)?;
             match command.as_str() {
                 "block" => return Ok(payload),
                 "notfound" => return protocol("the peer does not have that block"),
-                "ping" => self.stream.write_all(&encode_message("pong", &payload))?,
+                "ping" => self
+                    .stream
+                    .write_all(&encode_message(self.network, "pong", &payload))?,
                 _ => {}
             }
         }
@@ -252,22 +375,22 @@ impl<S: Read + Write> Peer<S> {
 }
 
 impl Peer<TcpStream> {
-    pub fn connect(addr: std::net::SocketAddr) -> Result<Self, P2pError> {
+    pub fn connect(addr: std::net::SocketAddr, network: Network) -> Result<Self, P2pError> {
         let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10))?;
         stream.set_read_timeout(Some(Duration::from_secs(15)))?;
         stream.set_write_timeout(Some(Duration::from_secs(30)))?;
-        Self::handshake(stream)
+        Self::handshake(stream, network)
     }
 }
 
 /// IPv4 addresses of peers behind the DNS seeders (or the given `host:port` overrides).
-pub fn resolve(hosts: &[String]) -> Vec<std::net::SocketAddr> {
+pub fn resolve(hosts: &[String], network: Network) -> Vec<std::net::SocketAddr> {
     let mut out = Vec::new();
     for host in hosts {
         let target = if host.contains(':') {
             host.clone()
         } else {
-            format!("{host}:{PORT}")
+            format!("{host}:{}", network.port())
         };
         if let Ok(found) = target.to_socket_addrs() {
             out.extend(found.filter(|a| a.is_ipv4()));

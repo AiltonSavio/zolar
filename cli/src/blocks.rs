@@ -3,7 +3,7 @@
 //!
 //! Where it comes from, and why:
 //!
-//! * Merkle roots: Zcash P2P `getheaders` against live testnet peers. A header carries its Merkle root,
+//! * Merkle roots: Zcash P2P `getheaders` against live peers of the chosen network. A header carries its Merkle root,
 //!   headers are cheap (160 per request, no key, no account) and are the same bytes the Relayer sent
 //!   to the Header Relay. The rebuilt tree must reproduce the Relay's own root, which pins every root.
 //! * Transaction IDs: the explorer, because the Relay needs the whole block's txid list and a header
@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use anyhow::{Result, bail, ensure};
 use zcash_primitives::transaction::Transaction;
 use zcash_protocol::consensus::BranchId;
-use zolar_relayer::p2p::{self, Peer, RawHeader};
+use zolar_relayer::p2p::{self, Network, Peer, RawHeader};
 
 #[cfg(test)]
 use crate::internal_txid;
@@ -46,11 +46,16 @@ fn links(parent: &[u8; 32], headers: &[RawHeader]) -> bool {
 }
 
 /// The `count` headers after the block with hash `start` (internal byte order), from live peers.
-pub fn fetch_headers(start: [u8; 32], count: usize, hosts: &[String]) -> Result<Vec<RawHeader>> {
-    let mut addresses: Vec<SocketAddr> = p2p::resolve(hosts);
+pub fn fetch_headers(
+    start: [u8; 32],
+    count: usize,
+    hosts: &[String],
+    network: Network,
+) -> Result<Vec<RawHeader>> {
+    let mut addresses: Vec<SocketAddr> = p2p::resolve(hosts, network);
     addresses.sort();
     addresses.dedup();
-    ensure!(!addresses.is_empty(), "no Zcash testnet peers found");
+    ensure!(!addresses.is_empty(), "no Zcash {network:?} peers found");
     let mut out: Vec<RawHeader> = Vec::with_capacity(count);
     let mut tip = start;
     let mut peer: Option<Peer<std::net::TcpStream>> = None;
@@ -59,11 +64,11 @@ pub fn fetch_headers(start: [u8; 32], count: usize, hosts: &[String]) -> Result<
     while out.len() < count {
         let Some(connected) = peer.as_mut() else {
             if failures > 3 * addresses.len().max(10) {
-                bail!("could not read {count} headers from the Zcash testnet peers");
+                bail!("could not read {count} headers from the Zcash {network:?} peers");
             }
             let addr = addresses[next % addresses.len()];
             next += 1;
-            match Peer::connect(addr) {
+            match Peer::connect(addr, network) {
                 Ok(p) => peer = Some(p),
                 Err(_) => failures += 1,
             }
@@ -135,13 +140,17 @@ pub fn parse_block(raw: &[u8]) -> Result<(RawHeader, Vec<[u8; 32]>)> {
 /// IDs. The header must hash to `hash` and the transactions to the header's Merkle root, so a peer
 /// cannot lie. Nothing about the Payer's payment is sent: the request names a block hash, which any
 /// syncing node asks for.
-pub fn fetch_block_txids(hash: [u8; 32], hosts: &[String]) -> Result<Vec<[u8; 32]>> {
-    let mut addresses: Vec<SocketAddr> = p2p::resolve(hosts);
+pub fn fetch_block_txids(
+    hash: [u8; 32],
+    hosts: &[String],
+    network: Network,
+) -> Result<Vec<[u8; 32]>> {
+    let mut addresses: Vec<SocketAddr> = p2p::resolve(hosts, network);
     addresses.sort();
     addresses.dedup();
-    ensure!(!addresses.is_empty(), "no Zcash testnet peers found");
+    ensure!(!addresses.is_empty(), "no Zcash {network:?} peers found");
     for addr in addresses.iter().take(12) {
-        let Ok(mut peer) = Peer::connect(*addr) else {
+        let Ok(mut peer) = Peer::connect(*addr, network) else {
             continue;
         };
         let Ok(raw) = peer.getdata_block(&hash) else {
@@ -157,7 +166,7 @@ pub fn fetch_block_txids(hash: [u8; 32], hosts: &[String]) -> Result<Vec<[u8; 32
         }
     }
     bail!(
-        "no Zcash testnet peer returned the block {}",
+        "no Zcash {network:?} peer returned the block {}",
         hex::encode(hash)
     )
 }

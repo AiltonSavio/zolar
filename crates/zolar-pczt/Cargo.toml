@@ -6,6 +6,15 @@ rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 description = "Transaction ID and viewing-key output decryption for unsigned Ironwood PCZTs"
 
+[dev-dependencies]
+hex = "0.4"
+# A mainnet PCZT built from nothing but a fake transparent coin (tests/mainnet.rs); never signed.
+pczt = { version = "=0.10.0-pre.2", default-features = false, features = ["zcp-builder", "transparent", "orchard"] }
+rand = { version = "0.10", default-features = false, features = ["sys_rng"] }
+secp256k1 = "0.33"
+zcash_primitives = { version = "=0.31.0-pre.2", default-features = false, features = ["transparent-inputs"] }
+zcash_transparent = { version = "0.11.0-pre.2", default-features = false, features = ["transparent-inputs"] }
+
 [dependencies]
 orchard = { version = "0.16", default-features = false }
 pczt = { version = "=0.10.0-pre.2", default-features = false, features = ["signer"] }

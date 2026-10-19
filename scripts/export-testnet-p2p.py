@@ -129,4 +129,5 @@ def main():
     print(f"wrote {count} headers {rows[0][0]}..{rows[count-1][0]} to {out}")
 
 
-main()
+if __name__ == "__main__":
+    main()

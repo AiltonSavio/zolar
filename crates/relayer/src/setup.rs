@@ -16,7 +16,7 @@ use zcash_header::header;
 
 use crate::{
     chain::{error_name, Cluster, TxError, SYSTEM_PROGRAM},
-    p2p::{sha256d, RawHeader},
+    p2p::{sha256d, Network, RawHeader},
 };
 
 /// Blocks of times and difficulty a Checkpoint carries: the 102-block NU7 window plus the median of 11.
@@ -24,8 +24,6 @@ pub const CONTEXT: usize = 113;
 /// The Store holds headers once it has 400 slots: three `GrowStore` calls.
 const GROWS: usize = 3;
 const WRITE_CHUNK: usize = 480;
-pub const TESTNET: u8 = 1;
-pub const TESTNET_NU7_HEIGHT: u32 = 4_465_026;
 
 /// The Checkpoint whose block is the last of the 113 consecutive `headers`; `last_height` is its height.
 pub fn checkpoint_from(
@@ -33,6 +31,7 @@ pub fn checkpoint_from(
     last_height: u32,
     finality_depth: u16,
     nonce: u64,
+    network: Network,
 ) -> Result<Checkpoint, String> {
     let headers: &[RawHeader; CONTEXT] = headers.try_into().map_err(|_| {
         format!(
@@ -47,9 +46,9 @@ pub fn checkpoint_from(
     }
     Ok(Checkpoint {
         version: 1,
-        network: TESTNET,
+        network: network.checkpoint_network(),
         finality_depth,
-        nu7_height: TESTNET_NU7_HEIGHT,
+        nu7_height: network.nu7_height(),
         height: last_height,
         nonce,
         hash: sha256d(&headers[CONTEXT - 1]),
@@ -117,4 +116,10 @@ pub fn create_relay(
         signatures.push(send(cluster, payer, &[grow])?);
     }
     Ok((relay, signatures))
+}
+
+/// Whether a header was mined within the last hour of `now` (Unix seconds). A scan that meets a
+/// silent peer uses it to tell "the tip" from "a peer that stopped answering behind the tip".
+pub fn looks_current(header: &RawHeader, now: u64) -> bool {
+    now.saturating_sub(u64::from(header::time(header))) < 3_600
 }

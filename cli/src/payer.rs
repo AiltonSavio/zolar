@@ -35,12 +35,15 @@ use crate::{
 };
 
 const POLL: Duration = Duration::from_secs(10);
+/// Mainnet needs Finality Depth 20 blocks at about 75 to 90 s each, before any slow block.
+const FINALITY_WAIT: Duration = Duration::from_secs(90 * 60);
 
 pub struct Chains {
     pub rpc_url: String,
     pub explorer_url: String,
     pub relay: Address,
     pub peers: Vec<String>,
+    pub network: p2p::Network,
 }
 
 /// Builds the unsigned PCZT: the Payee's address, a value, the challenge memo, and an expiry
@@ -329,7 +332,7 @@ pub fn rebuild_tree(chains: &Chains, relay: &RelayState) -> Result<Rebuilt> {
     let view = relay.view()?;
     let checkpoint = relay.account()?.checkpoint;
     let size = view.leaf_count() as usize;
-    let headers = fetch_headers(checkpoint.hash, size, &chains.peers)?;
+    let headers = fetch_headers(checkpoint.hash, size, &chains.peers, chains.network)?;
     let leaves = headers
         .iter()
         .enumerate()
@@ -413,7 +416,7 @@ fn locate_payment(
                 .map(|h| header_hash(&rebuilt.headers[leaf_of(h)]))
                 .collect();
             let found = find_payment(&hashes, txid, |hash| {
-                fetch_block_txids(*hash, &chains.peers)
+                fetch_block_txids(*hash, &chains.peers, chains.network)
             })?;
             if let Some(Found {
                 candidate,
@@ -453,8 +456,9 @@ fn locate_payment(
             next_height.map_or(0, |n| n - 1)
         );
         ensure!(
-            started.elapsed() < Duration::from_secs(45 * 60),
-            "the payment did not appear in a final block in 45 minutes"
+            started.elapsed() < FINALITY_WAIT,
+            "the payment did not appear in a final block in {} minutes",
+            FINALITY_WAIT.as_secs() / 60
         );
         sleep(POLL);
     }

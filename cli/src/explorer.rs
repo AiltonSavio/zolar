@@ -1,4 +1,4 @@
-//! Zcash testnet block explorer (zecblock), used only by the Payee to check that a transaction is new.
+//! Zcash block explorer (zecblock, testnet or mainnet host), used only by the Payee to check that a transaction is new.
 //! The Payer never asks it anything: a lookup would tell the explorer which payment a Claim belongs to
 //! (privacy limit, see the README).
 
@@ -44,5 +44,23 @@ impl Explorer {
     pub fn knows(&self, display_txid: &str) -> Result<bool> {
         let (status, _) = self.get(&format!("/api/tx/{display_txid}"))?;
         Ok(status != 404)
+    }
+
+    /// The transaction IDs of a block in block order, display form. Only the mainnet rehearsal example
+    /// uses it, to pick a payment that is already mined; the Payer never does.
+    pub fn block_txids(&self, height: u32) -> Result<Vec<String>> {
+        let (status, body) = self.get(&format!("/api/block/{height}"))?;
+        anyhow::ensure!(status == 200, "block {height}: HTTP {status}");
+        body["transactions"]
+            .as_array()
+            .context("no transactions")?
+            .iter()
+            .map(|t| {
+                t["txid"]
+                    .as_str()
+                    .map(str::to_string)
+                    .context("transaction without txid")
+            })
+            .collect()
     }
 }
