@@ -15,6 +15,7 @@ The relay follows the chain with the most cumulative work (the first one seen wi
 - `scripts/final-block-tree-ref`: independent circomlibjs computation of the Final Block Tree roots the tests compare against.
 - `crates/relay-tests`: LiteSVM tests that drive the program through the generated Rust client.
 - `tools/forge-header`: builds the one forged fixture (valid Equihash, hash above target).
+- `crates/zolar-pczt`: standalone crate (own workspace, pinned to the librustzcash revision zcash-devtool uses). Computes the transaction ID of an unsigned Ironwood PCZT and decrypts a payee's output from its viewing key; `cd crates/zolar-pczt && cargo test`.
 
 ```sh
 cargo fmt --all --check
