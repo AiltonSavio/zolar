@@ -47,6 +47,9 @@ pub struct CreateEscrow {
     pub salt_out: PathBuf,
     /// Tokens of the mint the Payer must lock before a Claim can settle (0: none).
     pub bond: u64,
+    /// Private-only: the Reveal Claim is refused, so nobody can put the transaction ID on Solana. A
+    /// payment in a block of more than 256 transactions then cannot be claimed (the Payee can refund).
+    pub private_only: bool,
 }
 
 pub struct Created {
@@ -153,7 +156,7 @@ pub fn create_escrow(a: &CreateEscrow) -> Result<Created> {
         .amount(a.amount)
         .bond_required(a.bond)
         .expiry_height(report.expiry_height)
-        .claim_mode(0)
+        .claim_mode(if a.private_only { 1 } else { 0 })
         .instruction();
     let signature = send(&mut rpc, &[create_vault, create], &payee)?;
     println!("Escrow created      : {escrow}");

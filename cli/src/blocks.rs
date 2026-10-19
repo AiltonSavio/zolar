@@ -14,9 +14,13 @@
 use std::net::SocketAddr;
 
 use anyhow::{Result, bail, ensure};
+use rand::seq::SliceRandom;
+use zcash_primitives::transaction::Transaction;
+use zcash_protocol::consensus::BranchId;
 use zolar_relayer::p2p::{self, Network, Peer, RawHeader};
 
-use crate::{explorer::Explorer, internal_txid};
+#[cfg(test)]
+use crate::internal_txid;
 
 /// Offset of the Merkle root in a raw header.
 const MERKLE_ROOT: std::ops::Range<usize> = 36..68;
@@ -88,25 +92,151 @@ pub fn fetch_headers(
     Ok(out)
 }
 
-/// The transaction IDs of the block at `height` in internal byte order, accepted only when their
-/// Merkle root equals `expected_root` (from the block's header).
-pub fn verified_block_txids(
-    explorer: &Explorer,
-    height: u32,
-    expected_root: &[u8; 32],
-) -> Result<Vec<[u8; 32]>> {
-    let txids: Vec<[u8; 32]> = explorer
-        .block_txids(height)?
-        .iter()
-        .map(|t| internal_txid(t))
-        .collect::<Result<_>>()?;
-    ensure!(!txids.is_empty(), "block {height} has no transactions");
-    let root = zolar_claim::tx_merkle_root(&txids);
+fn read_compact_size(r: &mut impl std::io::Read) -> Result<u64> {
+    let mut first = [0u8; 1];
+    r.read_exact(&mut first)?;
+    Ok(match first[0] {
+        0xfd => {
+            let mut b = [0u8; 2];
+            r.read_exact(&mut b)?;
+            u16::from_le_bytes(b) as u64
+        }
+        0xfe => {
+            let mut b = [0u8; 4];
+            r.read_exact(&mut b)?;
+            u32::from_le_bytes(b) as u64
+        }
+        0xff => bail!("absurd transaction count"),
+        n => n as u64,
+    })
+}
+
+/// The transaction IDs of a raw `block` message payload, in block order, internal byte order, and the
+/// header it carries. Every transaction is parsed, so its ID is computed from the bytes (ZIP 244 for
+/// v5 and v6) rather than read from anyone's list.
+pub fn parse_block(raw: &[u8]) -> Result<(RawHeader, Vec<[u8; 32]>)> {
     ensure!(
-        &root == expected_root,
-        "the explorer's transaction list for block {height} does not hash to the block header's Merkle root"
+        raw.len() > p2p::HEADER_LEN,
+        "block is shorter than its header"
     );
-    Ok(txids)
+    let header: RawHeader = raw[..p2p::HEADER_LEN].try_into().expect("length checked");
+    ensure!(
+        header[140..143] == [0xfd, 0x40, 0x05],
+        "header has no 1,344 byte solution"
+    );
+    let mut rest: &[u8] = &raw[p2p::HEADER_LEN..];
+    let count = read_compact_size(&mut rest)?;
+    ensure!(count > 0, "block has no transactions");
+    let mut txids = Vec::new();
+    for _ in 0..count {
+        let tx = Transaction::read(&mut rest, BranchId::Nu7)
+            .map_err(|e| anyhow::anyhow!("transaction does not parse: {e}"))?;
+        txids.push(*tx.txid().as_ref());
+    }
+    ensure!(rest.is_empty(), "bytes after the last transaction");
+    Ok((header, txids))
+}
+
+/// Fetches the block with `hash` (internal byte order) from Zcash P2P peers and returns its transaction
+/// IDs. The header must hash to `hash` and the transactions to the header's Merkle root, so a peer
+/// cannot lie. Nothing about the Payer's payment is sent: the request names a block hash, which any
+/// syncing node asks for.
+pub fn fetch_block_txids(
+    hash: [u8; 32],
+    hosts: &[String],
+    network: Network,
+) -> Result<Vec<[u8; 32]>> {
+    let mut addresses: Vec<SocketAddr> = p2p::resolve(hosts, network);
+    addresses.sort();
+    addresses.dedup();
+    ensure!(!addresses.is_empty(), "no Zcash {network:?} peers found");
+    // A random order spreads the load, and many peers refuse blocks or are gone.
+    addresses.shuffle(&mut rand::thread_rng());
+    let started = std::time::Instant::now();
+    for addr in addresses.iter().take(40) {
+        // Each peer read is bounded, but 40 slow peers add up: give up on this block for now.
+        if started.elapsed() > std::time::Duration::from_secs(90) {
+            break;
+        }
+        let Ok(mut peer) = Peer::connect(*addr, network) else {
+            continue;
+        };
+        let Ok(raw) = peer.getdata_block(&hash) else {
+            continue;
+        };
+        let Ok((header, txids)) = parse_block(&raw) else {
+            continue;
+        };
+        if header_hash(&header) == hash
+            && zolar_claim::tx_merkle_root(&txids) == merkle_root(&header)
+        {
+            return Ok(txids);
+        }
+    }
+    bail!(
+        "no Zcash {network:?} peer returned the block {}",
+        hex::encode(hash)
+    )
+}
+
+/// Where a payment was found.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Found {
+    /// Position of the block among the candidates.
+    pub candidate: usize,
+    /// All transaction IDs of the block, internal byte order.
+    pub txids: Vec<[u8; 32]>,
+    /// Position of the payment in the block.
+    pub tx_index: usize,
+}
+
+/// What a look through some blocks found.
+#[derive(Debug)]
+pub struct Scan {
+    pub found: Option<Found>,
+    /// How many of the blocks, from the first, were read and do not hold the payment (or do, when found).
+    pub scanned: usize,
+    /// Why the look stopped early: a block that no peer would give. Try again later.
+    pub failure: Option<String>,
+}
+
+/// Looks for `txid` in the blocks with the given hashes, in order, using `fetch` to get each block's
+/// transaction IDs, and stops at the first block `fetch` cannot give. The Payer finds its own payment
+/// this way, locally, without telling an explorer which transaction or which height it cares about.
+pub fn find_payment(
+    hashes: &[[u8; 32]],
+    txid: &[u8; 32],
+    mut fetch: impl FnMut(&[u8; 32]) -> Result<Vec<[u8; 32]>>,
+) -> Scan {
+    for (candidate, hash) in hashes.iter().enumerate() {
+        match fetch(hash) {
+            Ok(txids) => {
+                if let Some(tx_index) = txids.iter().position(|t| t == txid) {
+                    return Scan {
+                        found: Some(Found {
+                            candidate,
+                            txids,
+                            tx_index,
+                        }),
+                        scanned: candidate + 1,
+                        failure: None,
+                    };
+                }
+            }
+            Err(e) => {
+                return Scan {
+                    found: None,
+                    scanned: candidate,
+                    failure: Some(e.to_string()),
+                };
+            }
+        }
+    }
+    Scan {
+        found: None,
+        scanned: hashes.len(),
+        failure: None,
+    }
 }
 
 #[cfg(test)]
@@ -124,6 +254,84 @@ mod tests {
                 h
             })
             .collect()
+    }
+
+    const BLOCK: &[u8] = include_bytes!("../fixtures/block-4517478.bin");
+
+    /// Transaction IDs of block 4,517,478 as the explorer printed them (display order), taken from the
+    /// ticket 10 circuit fixture: an independent source for what the parser computes from raw bytes.
+    fn expected_txids() -> Vec<[u8; 32]> {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../circuits/fixtures/swap2-block.json")).unwrap();
+        fixture["txids_display"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| internal_txid(t.as_str().unwrap()).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_raw_testnet_block_yields_the_transaction_ids_the_explorer_lists() {
+        let (header, txids) = parse_block(BLOCK).unwrap();
+        assert_eq!(txids, expected_txids());
+        assert_eq!(zolar_claim::tx_merkle_root(&txids), merkle_root(&header));
+        assert_eq!(
+            hex::encode(
+                header_hash(&header)
+                    .iter()
+                    .rev()
+                    .copied()
+                    .collect::<Vec<_>>()
+            ),
+            "000027af3c4bf4943313d7766771d1435fec0dbbd4d858d1e3e9fbb7c9deac6f"
+        );
+    }
+
+    #[test]
+    fn a_truncated_or_padded_block_is_refused() {
+        assert!(parse_block(&BLOCK[..BLOCK.len() - 1]).is_err());
+        let mut padded = BLOCK.to_vec();
+        padded.push(0);
+        assert!(parse_block(&padded).is_err());
+        assert!(parse_block(&BLOCK[..100]).is_err());
+    }
+
+    #[test]
+    fn the_payment_is_found_in_the_block_that_holds_it_and_not_before() {
+        let txids = expected_txids();
+        let payment = txids[3];
+        let hashes = [[1u8; 32], [2u8; 32], [3u8; 32]];
+        let mut asked = Vec::new();
+        let found = find_payment(&hashes, &payment, |h| {
+            asked.push(h[0]);
+            Ok(if h[0] == 2 {
+                txids.clone()
+            } else {
+                vec![[9; 32]]
+            })
+        })
+        .found
+        .unwrap();
+        assert_eq!((found.candidate, found.tx_index), (1, 3));
+        assert_eq!(asked, vec![1, 2], "stops at the block that holds it");
+        let none = find_payment(&hashes, &[5; 32], |_| Ok(vec![[9; 32]]));
+        assert!(none.found.is_none() && none.failure.is_none());
+        assert_eq!(none.scanned, 3);
+    }
+
+    #[test]
+    fn a_block_no_peer_gives_stops_the_look_and_keeps_what_was_read() {
+        let hashes = [[1u8; 32], [2u8; 32], [3u8; 32]];
+        let scan = find_payment(&hashes, &[5; 32], |h| {
+            if h[0] == 2 {
+                bail!("no peer has it")
+            }
+            Ok(vec![[9; 32]])
+        });
+        assert!(scan.found.is_none());
+        assert_eq!(scan.scanned, 1, "the first block is not read again");
+        assert!(scan.failure.unwrap().contains("no peer"));
     }
 
     #[test]

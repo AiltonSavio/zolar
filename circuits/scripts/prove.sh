@@ -18,7 +18,7 @@ if [ -f "$zkey" ] && [ -n "$RAPIDSNARK" ] && [ -x "$RAPIDSNARK" ]; then
 elif [ -f "$zkey" ]; then
   capped $SNARKJS groth16 prove "$zkey" "$out/witness.wtns" "$out/proof.json" "$out/public.json"
 else
-  capped "$CIRCUITS/../target/release/dev-groth16" prove "$dir/private_claim_d$depth.r1cs" "$dir/dev_pk.bin" "$out/witness.wtns" "$out/proof.json" "$out/public.json"
+  capped "${DEV_GROTH16:-$CIRCUITS/../target/release/dev-groth16}" prove "$dir/private_claim_d$depth.r1cs" "$dir/dev_pk.bin" "$out/witness.wtns" "$out/proof.json" "$out/public.json"
 fi
 rm -f "$out/witness.wtns"
 capped $SNARKJS groth16 verify "${VKEY:-$dir/verification_key.json}" "$out/public.json" "$out/proof.json"

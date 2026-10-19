@@ -32,6 +32,8 @@ solana-address = "2"
 solana-instruction = "3"
 solana-keypair = "3"
 solana-signer = "3"
+zcash_primitives = { version = "=0.31.0-pre.2", default-features = false }
+zcash_protocol = "=0.11.0-pre.1"
 ureq = { version = "3", features = ["json"] }
 
 # A workspace of its own: the Zcash dependency tree (librustzcash, pinned to the revision zcash-devtool

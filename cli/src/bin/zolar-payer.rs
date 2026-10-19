@@ -8,10 +8,15 @@ use solana_signer::Signer;
 use zolar_cli::{
     DEVNET_RPC, Network, default_explorer, default_relay,
     devtool::Devtool,
-    payer::{self, Chains, Check, Claim},
+    payer::{self, Chains, Check, Claim, PrivateClaimArgs},
+    prover::Prover,
     read_salt,
     solana::{load_keypair, parse_address},
 };
+
+/// `circuits/scripts/prove.sh` relative to the repository this binary was built from.
+const DEFAULT_PROVE_SCRIPT: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../circuits/scripts/prove.sh");
 
 #[derive(Parser)]
 #[command(
@@ -141,7 +146,8 @@ enum Command {
         #[arg(long)]
         escrow: String,
     },
-    /// Wait until the payment's block is in the Final Block Tree and send the Reveal Claim.
+    /// Wait until the payment's block is in the Final Block Tree and send the Reveal Claim. This puts
+    /// the Zcash transaction ID and the salt on Solana; use `private-claim` to keep them off.
     Claim {
         #[arg(long)]
         escrow: String,
@@ -149,9 +155,32 @@ enum Command {
         pczt: PathBuf,
         #[arg(long)]
         salt_file: PathBuf,
-        /// The block the payment was mined in (default: ask the explorer).
+    },
+    /// Wait until the payment's block is in the Final Block Tree, prove it on this machine and send a
+    /// Private Claim: only the proof and a root reach Solana, never the transaction ID or block.
+    PrivateClaim {
         #[arg(long)]
-        block_height: Option<u32>,
+        escrow: String,
+        #[arg(long)]
+        pczt: PathBuf,
+        #[arg(long)]
+        salt_file: PathBuf,
+        /// `circuits/scripts/prove.sh` of this repository (runs the witness and the prover locally).
+        #[arg(long, env = "ZOLAR_PROVE_SCRIPT", default_value = DEFAULT_PROVE_SCRIPT)]
+        prove_script: PathBuf,
+        /// Directory with the large circuit artifacts (`build/d8/`: wasm, R1CS, proving key,
+        /// verification key). Not in git; see circuits/README.md.
+        #[arg(long, env = "ZOLAR_DATA")]
+        zolar_data: PathBuf,
+        /// Memory cap for each proving step (the prover peaks at about 1.8 GiB).
+        #[arg(long, env = "ZOLAR_MEM_MAX", default_value = "2500M")]
+        mem_max: String,
+        /// Directory for the proof's temporary files; the witness is deleted after proving.
+        #[arg(long, env = "ZOLAR_WORK_DIR", default_value = ".zolar-work")]
+        work_dir: PathBuf,
+        /// Times to prove again when the root ages out of the relay's last 128 while proving.
+        #[arg(long, default_value_t = 3)]
+        max_attempts: u32,
     },
 }
 
@@ -252,8 +281,11 @@ fn main() -> Result<()> {
                 finalized_wait: std::time::Duration::from_secs(terms.finalized_wait_secs),
             })?;
             payer::deposit_bond(&chains, &keypair_path()?, parse_address(&escrow)?)?;
-            let height = payer::pay(&chains, &zcash.tool(), &checked, &pczt, &work_dir)?;
-            println!("payment {} mined in block {height}", checked.txid);
+            payer::pay(&zcash.tool(), &checked, &pczt, &work_dir)?;
+            println!(
+                "payment {} broadcast; run `claim` or `private-claim` once its block is final",
+                checked.txid
+            );
         }
         Command::DepositBond { escrow } => {
             payer::deposit_bond(&chains, &keypair_path()?, parse_address(&escrow)?)?;
@@ -262,24 +294,44 @@ fn main() -> Result<()> {
             escrow,
             pczt,
             salt_file,
-            block_height,
         } => {
             let txid = zolar_pczt::summary(&std::fs::read(&pczt)?)?.txid;
-            let height = match block_height {
-                Some(h) => h,
-                None => payer::wait_until_mined(&chains, &txid)?,
-            };
             payer::reveal_claim(&Claim {
                 chains: &chains,
-                keypair: cli
-                    .net
-                    .keypair
-                    .clone()
-                    .context("--keypair (or ZOLAR_PAYER_KEYPAIR) is required")?,
+                keypair: keypair_path()?,
                 escrow_address: parse_address(&escrow)?,
                 txid: &txid,
-                block_height: height,
                 salt: read_salt(&salt_file)?,
+            })?;
+        }
+        Command::PrivateClaim {
+            escrow,
+            pczt,
+            salt_file,
+            prove_script,
+            zolar_data,
+            mem_max,
+            work_dir,
+            max_attempts,
+        } => {
+            let txid = zolar_pczt::summary(&std::fs::read(&pczt)?)?.txid;
+            let prover = Prover {
+                script: prove_script,
+                data_dir: zolar_data,
+                depth: 8,
+                mem_max,
+            };
+            payer::private_claim(&PrivateClaimArgs {
+                claim: Claim {
+                    chains: &chains,
+                    keypair: keypair_path()?,
+                    escrow_address: parse_address(&escrow)?,
+                    txid: &txid,
+                    salt: read_salt(&salt_file)?,
+                },
+                prover: &prover,
+                work_dir,
+                max_attempts,
             })?;
         }
     }

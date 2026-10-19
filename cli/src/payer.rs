@@ -9,19 +9,24 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use escrow_client::{
     accounts::Escrow,
-    instructions::{DepositBondBuilder, RevealClaimBuilder},
+    instructions::{DepositBondBuilder, PrivateClaimBuilder, RevealClaimBuilder},
 };
 use solana_address::Address;
+use solana_keypair::Keypair;
 use solana_signer::Signer;
-use zolar_claim::{FinalBlockTree, block_leaf, tx_merkle_path};
+use zolar_claim::{
+    FinalBlockTree, block_leaf,
+    private_claim::{ClaimTree, Witness, circuit_input, claim_window_lower},
+    tx_merkle_path,
+};
 use zolar_pczt::summary;
 use zolar_relayer::{chain::Cluster, p2p, rpc::HttpRpc};
 
 use crate::{
-    blocks::{fetch_headers, merkle_root, verified_block_txids},
+    blocks::{Found, fetch_block_txids, fetch_headers, find_payment, header_hash, merkle_root},
     devtool::Devtool,
-    explorer::Explorer,
     internal_txid,
+    prover::Prover,
     rpc::finalized_account_within,
     solana::{
         RelayState, associated_token_account, create_ata_idempotent, load_keypair,
@@ -292,15 +297,10 @@ pub fn deposit_bond(chains: &Chains, keypair: &Path, escrow_address: Address) ->
     bond_is_finalized(chains, escrow_address, escrow.bond_required)
 }
 
-/// Proves, signs and broadcasts the checked PCZT, then waits until the explorer shows it mined.
-/// Returns the block height.
-pub fn pay(
-    chains: &Chains,
-    devtool: &Devtool,
-    checked: &Checked,
-    pczt: &Path,
-    work: &Path,
-) -> Result<u32> {
+/// Proves, signs and broadcasts the checked PCZT. It does not look the payment up anywhere: asking an
+/// explorer for the transaction would tell it which payment the next Claim belongs to. `claim` and
+/// `private-claim` find the block themselves from Zcash P2P blocks.
+pub fn pay(devtool: &Devtool, checked: &Checked, pczt: &Path, work: &Path) -> Result<()> {
     std::fs::create_dir_all(work)?;
     let proven = work.join("proven.pczt");
     let signed = work.join("signed.pczt");
@@ -316,23 +316,7 @@ pub fn pay(
     );
     println!("broadcasting {}", checked.txid);
     devtool.send(&combined)?;
-    wait_until_mined(chains, &checked.txid)
-}
-
-pub fn wait_until_mined(chains: &Chains, txid: &str) -> Result<u32> {
-    let explorer = Explorer::new(&chains.explorer_url);
-    let started = Instant::now();
-    loop {
-        if let Some(mined) = explorer.mined(txid)? {
-            println!("mined in block {}", mined.block_height);
-            return Ok(mined.block_height);
-        }
-        ensure!(
-            started.elapsed() < Duration::from_secs(30 * 60),
-            "transaction {txid} was not mined in 30 minutes"
-        );
-        sleep(POLL);
-    }
+    Ok(())
 }
 
 /// The Final Block Tree rebuilt from Zcash P2P headers, proven equal to the relay's.
@@ -382,68 +366,128 @@ pub struct Claim<'a> {
     pub keypair: PathBuf,
     pub escrow_address: Address,
     pub txid: &'a str,
-    pub block_height: u32,
     pub salt: [u8; 32],
 }
 
-/// Waits until the block is in the Final Block Tree, builds the Inclusion Proof and the tree path from
-/// data outside Solana, checks both against the relay's own root, and sends the Reveal Claim.
+/// The payment's block, found and tied to the relay's Final Block Tree.
+struct Located {
+    height: u32,
+    /// Position of the block's leaf in the tree (`height - checkpoint_height - 1`).
+    leaf: usize,
+    /// Leaves of the tree the relay's root was checked against.
+    size: usize,
+    tree: FinalBlockTree,
+    root: [u8; 32],
+    txids: Vec<[u8; 32]>,
+    tx_index: usize,
+}
+
+/// Waits for the payment's block to enter the Final Block Tree and finds it. The Payer asks Zcash P2P
+/// peers for the blocks of the Escrow's height window one after another, in order, each by hash, and
+/// looks for its own transaction ID in them locally: no explorer or other third party is told which
+/// transaction or which height matters. Every block is checked against the header's Merkle root, the
+/// headers against the relay's own root.
+fn locate_payment(
+    chains: &Chains,
+    rpc: &mut HttpRpc,
+    escrow: &Escrow,
+    txid: &[u8; 32],
+) -> Result<Located> {
+    let started = Instant::now();
+    let mut next_height: Option<u32> = None;
+    let mut cached: Option<(u32, Rebuilt)> = None;
+    loop {
+        let relay = read_relay(rpc, &chains.relay)?;
+        let view = relay.view()?;
+        view.ensure_running()
+            .map_err(|e| anyhow::anyhow!("the relay is halted: {e:?}"))?;
+        let checkpoint = relay.account()?.checkpoint;
+        let size = view.leaf_count();
+        let lower = claim_window_lower(escrow.created_tip, view.finality_depth());
+        let first = next_height.unwrap_or(lower.max(checkpoint.height + 1));
+        let last = (checkpoint.height + size).min(escrow.expiry_height);
+        if size > 0 && first <= last {
+            if cached.as_ref().map(|(n, _)| *n) != Some(size) {
+                cached = Some((size, rebuild_tree(chains, &relay)?));
+            }
+            let (_, rebuilt) = cached.as_ref().expect("just set");
+            let leaf_of = |h: u32| (h - checkpoint.height - 1) as usize;
+            let hashes: Vec<[u8; 32]> = (first..=last)
+                .map(|h| header_hash(&rebuilt.headers[leaf_of(h)]))
+                .collect();
+            let scan = find_payment(&hashes, txid, |hash| {
+                fetch_block_txids(*hash, &chains.peers, chains.network)
+            });
+            if let Some(Found {
+                candidate,
+                txids,
+                tx_index,
+            }) = scan.found
+            {
+                let height = first + candidate as u32;
+                let (size, rebuilt) = cached.take().expect("just set");
+                println!("the payment is in a final block; building the proof");
+                return Ok(Located {
+                    height,
+                    leaf: leaf_of(height),
+                    size: size as usize,
+                    tree: rebuilt.tree,
+                    root: rebuilt.root,
+                    txids,
+                    tx_index,
+                });
+            }
+            next_height = Some(first + scan.scanned as u32);
+            if let Some(why) = scan.failure {
+                println!("could not read the next block from Zcash peers ({why}); will retry");
+            }
+        }
+        ensure!(
+            next_height.is_none_or(|n| n <= escrow.expiry_height),
+            "the payment is in none of the final blocks up to the Escrow's expiry height {}; it was \
+             not mined in time",
+            escrow.expiry_height
+        );
+        println!(
+            "waiting for finality: relay tip {}, final up to {}, looked through {}",
+            view.tip_height(),
+            view.finalized_height(),
+            next_height.map_or(0, |n| n - 1)
+        );
+        ensure!(
+            started.elapsed() < FINALITY_WAIT,
+            "the payment did not appear in a final block in {} minutes",
+            FINALITY_WAIT.as_secs() / 60
+        );
+        sleep(POLL);
+    }
+}
+
+fn payout_account(rpc: &mut HttpRpc, payer: &Keypair, escrow: &Escrow) -> Result<Address> {
+    let payout_token = associated_token_account(&payer.pubkey(), &escrow.mint);
+    // The Payer's token account is made in its own transaction: with it the claim would not fit one.
+    if rpc
+        .account(&payout_token)
+        .map_err(anyhow::Error::msg)?
+        .is_none()
+    {
+        let ata = create_ata_idempotent(&payer.pubkey(), &payer.pubkey(), &escrow.mint);
+        let created = send(rpc, &[ata], payer)?;
+        println!("Payer token account : {payout_token} ({created})");
+    }
+    Ok(payout_token)
+}
+
+/// Waits for the payment's block to be final, finds it, builds the Inclusion Proof and the tree path,
+/// checks both against the relay's own root, and sends the Reveal Claim. The Reveal Claim publishes
+/// the transaction ID and salt on Solana; use [`private_claim`] to keep them off the chain.
 pub fn reveal_claim(c: &Claim) -> Result<String> {
     let mut rpc = HttpRpc::new(&c.chains.rpc_url);
     let payer = load_keypair(&c.keypair)?;
     let escrow = read_escrow(&read_account(&mut rpc, &c.escrow_address)?)?;
-
-    let started = Instant::now();
-    let relay = loop {
-        let relay = read_relay(&mut rpc, &c.chains.relay)?;
-        let view = relay.view()?;
-        view.ensure_running()
-            .map_err(|e| anyhow::anyhow!("the relay is halted: {e:?}"))?;
-        if view.finalized_height() >= c.block_height {
-            break relay;
-        }
-        println!(
-            "waiting for finality: block {}, relay tip {}, final up to {}",
-            c.block_height,
-            view.tip_height(),
-            view.finalized_height()
-        );
-        ensure!(
-            started.elapsed() < FINALITY_WAIT,
-            "the block did not become final in {} minutes",
-            FINALITY_WAIT.as_secs() / 60
-        );
-        sleep(POLL);
-    };
-    let view = relay.view()?;
-    let checkpoint = relay.account()?.checkpoint;
-    let size = view.leaf_count() as usize;
-    let index = (c.block_height - checkpoint.height - 1) as usize;
-    ensure!(index < size, "the block is not in the tree yet");
-    println!("final block tree: {size} leaves, the block is leaf {index}");
-    let Rebuilt {
-        headers,
-        tree,
-        root,
-    } = rebuild_tree(c.chains, &relay)?;
-
-    let txids = verified_block_txids(
-        &Explorer::new(&c.chains.explorer_url),
-        c.block_height,
-        &merkle_root(&headers[index]),
-    )?;
     let me = internal_txid(c.txid)?;
-    let tx_index = txids
-        .iter()
-        .position(|t| *t == me)
-        .with_context(|| format!("{} is not in block {}", c.txid, c.block_height))?;
-    println!(
-        "Inclusion Proof: transaction {tx_index} of {} in block {}",
-        txids.len(),
-        c.block_height
-    );
-
-    let payout_token = associated_token_account(&payer.pubkey(), &escrow.mint);
+    let found = locate_payment(c.chains, &mut rpc, &escrow, &me)?;
+    let payout_token = payout_account(&mut rpc, &payer, &escrow)?;
     let claim = RevealClaimBuilder::new()
         .escrow(c.escrow_address)
         .relay(c.chains.relay)
@@ -452,25 +496,172 @@ pub fn reveal_claim(c: &Claim) -> Result<String> {
         .payee(escrow.payee)
         .txid(me)
         .salt(c.salt)
-        .block_height(c.block_height)
-        .tx_index(tx_index as u32)
-        .root(root)
-        .tree_path(tree.compress(tree.path(index, size)).into())
-        .tx_path(tx_merkle_path(&txids, tx_index).into())
+        .block_height(found.height)
+        .tx_index(found.tx_index as u32)
+        .root(found.root)
+        .tree_path(
+            found
+                .tree
+                .compress(found.tree.path(found.leaf, found.size))
+                .into(),
+        )
+        .tx_path(tx_merkle_path(&found.txids, found.tx_index).into())
         .instruction();
-    // The Payer's token account is made in its own transaction: with it the claim would not fit one.
-    if rpc
-        .account(&payout_token)
-        .map_err(anyhow::Error::msg)?
-        .is_none()
-    {
-        let ata = create_ata_idempotent(&payer.pubkey(), &payer.pubkey(), &escrow.mint);
-        let created = send(&mut rpc, &[ata], &payer)?;
-        println!("Payer token account : {payout_token} ({created})");
-    }
     let signature = send(&mut rpc, &[claim], &payer)?;
     println!("Reveal Claim        : {signature}");
     Ok(signature)
+}
+
+/// The relay keeps its last 128 roots. A proof takes a minute; if the root it names has aged out by the
+/// time it is ready, or the program says so, the Private Claim starts again from a fresh root.
+#[derive(Debug)]
+pub struct RootAgedOut;
+
+impl std::fmt::Display for RootAgedOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the root fell out of the relay's history of 128 roots")
+    }
+}
+
+impl std::error::Error for RootAgedOut {}
+
+/// Runs `attempt` until it stops failing with [`RootAgedOut`], at most `attempts` times.
+pub fn retry_aged_root<T>(attempts: u32, mut attempt: impl FnMut() -> Result<T>) -> Result<T> {
+    let mut left = attempts;
+    loop {
+        match attempt() {
+            Err(e) if e.downcast_ref::<RootAgedOut>().is_some() && left > 1 => {
+                left -= 1;
+                println!("{e}; proving again against a fresh root ({left} attempts left)");
+            }
+            other => return other,
+        }
+    }
+}
+
+pub struct PrivateClaimArgs<'a> {
+    pub claim: Claim<'a>,
+    pub prover: &'a Prover,
+    /// Directory for the proof's temporary files (the witness is deleted after proving).
+    pub work_dir: PathBuf,
+    pub max_attempts: u32,
+}
+
+/// Sends a Private Claim: finds the payment's block, builds the witness and proves it on this
+/// machine, then submits only the 288 bytes of proof and root. The transaction ID, salt, block height
+/// and Merkle paths stay in this process.
+pub fn private_claim(a: &PrivateClaimArgs) -> Result<String> {
+    let c = &a.claim;
+    let mut rpc = HttpRpc::new(&c.chains.rpc_url);
+    let payer = load_keypair(&c.keypair)?;
+    let escrow = read_escrow(&read_account(&mut rpc, &c.escrow_address)?)?;
+    ensure!(
+        escrow.payout == payer.pubkey(),
+        "the Escrow pays {}, not this keypair",
+        escrow.payout
+    );
+    let me = internal_txid(c.txid)?;
+    ensure!(
+        zolar_claim::payment_commitment(&me, &c.salt)? == escrow.commitment,
+        "this transaction ID and salt do not match the Escrow's Payment Commitment"
+    );
+    // Found once: blocks do not change. Only the root may need refreshing.
+    let found = locate_payment(c.chains, &mut rpc, &escrow, &me)?;
+    let payout_token = payout_account(&mut rpc, &payer, &escrow)?;
+
+    retry_aged_root(a.max_attempts, || {
+        let relay = read_relay(&mut rpc, &c.chains.relay)?;
+        let view = relay.view()?;
+        view.ensure_running()
+            .map_err(|e| anyhow::anyhow!("the relay is halted: {e:?}"))?;
+        // The newest root the tree can be rebuilt for; it stays among the last 128 for about two hours.
+        let size = view.leaf_count() as usize;
+        let rebuilt;
+        let tree = if size == found.size {
+            &found.tree
+        } else {
+            rebuilt = rebuild_tree(c.chains, &relay)?;
+            &rebuilt.tree
+        };
+        let setup = ProofSetup {
+            tree,
+            size,
+            finality_depth: view.finality_depth(),
+        };
+        prove_and_send(a, &mut rpc, &payer, &escrow, &payout_token, &found, &setup)
+    })
+}
+
+struct ProofSetup<'a> {
+    tree: &'a FinalBlockTree,
+    size: usize,
+    finality_depth: u16,
+}
+
+fn prove_and_send(
+    a: &PrivateClaimArgs,
+    rpc: &mut HttpRpc,
+    payer: &Keypair,
+    escrow: &Escrow,
+    payout_token: &Address,
+    found: &Located,
+    setup: &ProofSetup,
+) -> Result<String> {
+    let c = &a.claim;
+    let me = internal_txid(c.txid)?;
+    let input = circuit_input(&Witness {
+        txids: &found.txids,
+        index: found.tx_index,
+        salt: c.salt,
+        height: found.height,
+        tx_depth: a.prover.depth,
+        tree: ClaimTree {
+            tree: setup.tree,
+            size: setup.size,
+            leaf: found.leaf,
+        },
+        lower: claim_window_lower(escrow.created_tip, setup.finality_depth),
+        expiry: escrow.expiry_height,
+    })
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "cannot build the Private Claim witness: {e} (a block with more than 2^{} transactions \
+             needs a Reveal Claim, which publishes the transaction ID)",
+            a.prover.depth
+        )
+    })?;
+    debug_assert_eq!(
+        zolar_claim::payment_commitment(&me, &c.salt)?,
+        input.public.commitment
+    );
+    println!("proving on this machine (no network is used)");
+    let proof = a.prover.prove(&input, &a.work_dir)?;
+    println!("proof ready in {:.1} s", proof.took.as_secs_f64());
+
+    // The relay moved on while proving: is the root still one of its last 128?
+    let relay = read_relay(rpc, &c.chains.relay)?;
+    if !relay.view()?.is_known_root(&input.public.root) {
+        return Err(RootAgedOut.into());
+    }
+    let claim = PrivateClaimBuilder::new()
+        .escrow(c.escrow_address)
+        .relay(c.chains.relay)
+        .vault(escrow.vault)
+        .payout_token(*payout_token)
+        .payee(escrow.payee)
+        .proof_a(proof.bytes.a)
+        .proof_b(proof.bytes.b)
+        .proof_c(proof.bytes.c)
+        .root(input.public.root)
+        .instruction();
+    match send(rpc, &[claim], payer) {
+        Ok(signature) => {
+            println!("Private Claim       : {signature}");
+            Ok(signature)
+        }
+        Err(e) if e.to_string().contains("UnknownRoot") => Err(RootAgedOut.into()),
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]
@@ -494,6 +685,36 @@ mod tests {
         d[0] = 1;
         d[1] = 1;
         d
+    }
+
+    #[test]
+    fn an_aged_out_root_is_proved_again_and_other_errors_are_not_retried() {
+        let mut calls = 0;
+        let out = retry_aged_root(3, || {
+            calls += 1;
+            if calls < 3 {
+                Err(RootAgedOut.into())
+            } else {
+                Ok(calls)
+            }
+        });
+        assert_eq!(out.unwrap(), 3);
+
+        let mut calls = 0;
+        let out: Result<()> = retry_aged_root(3, || {
+            calls += 1;
+            Err(RootAgedOut.into())
+        });
+        assert_eq!(calls, 3, "gives up after the attempts");
+        assert!(out.unwrap_err().downcast_ref::<RootAgedOut>().is_some());
+
+        let mut calls = 0;
+        let out: Result<()> = retry_aged_root(3, || {
+            calls += 1;
+            bail!("the proof was rejected")
+        });
+        assert_eq!(calls, 1);
+        assert!(out.is_err());
     }
 
     #[test]

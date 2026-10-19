@@ -131,7 +131,6 @@ fn main() -> Result<()> {
         keypair: a.payer_keypair,
         escrow_address: escrow,
         txid: &txid,
-        block_height: height,
         salt,
     })?;
     println!(

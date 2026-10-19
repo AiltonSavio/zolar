@@ -36,3 +36,12 @@ Steps 1, 2 and 5 of `scripts/setup.sh` stay; replace the single throwaway contri
 the ptau source and hash, every zkey hash and the `zkey verify` output. Then export the verification key,
 replace `verification_key.json` here and regenerate `programs/escrow/src/verifying_key_generated.rs` with the
 `gen_vk` command above; regenerate the proof fixtures with `scripts/prove.sh`.
+
+## Proving from the Payer CLI
+
+`zolar-payer private-claim` runs `scripts/prove.sh` as a subprocess on the Payer's machine (flags `--prove-script`, `--zolar-data`, `--mem-max`; environment `ZOLAR_PROVE_SCRIPT`, `ZOLAR_DATA`, `ZOLAR_MEM_MAX`). It needs, on that machine only:
+
+1. `pnpm --dir circuits install` (snarkjs, for witness generation) and node 22.
+2. The prover binary: `cargo build --release -p dev-groth16` (development key; `DEV_GROTH16` overrides the path `target/release/dev-groth16`). After the ceremony the zkey and rapidsnark replace it.
+3. `$ZOLAR_DATA/build/d8/` holding `private_claim_d8_js/` (the wasm), `private_claim_d8.r1cs`, `dev_pk.bin` (or `claim_final.zkey`) and `verification_key.json`. A fresh user gets them in one of two ways: build them (`circuits/scripts/build.sh 8` needs circom 2.2.3 and 4.4 GB of memory, 130 s; `scripts/dev-setup.sh 8` makes the development key in 40 s), or copy an already built `build/d8/` from whoever published it, checking `private_claim_d8.r1cs.sha256` and that `verification_key.json` equals the one in this repository, because the on-chain verifying key is generated from it. On the development machine they are in `~/Work/zecathon/.zolar-data/t10`.
+4. About 2 GiB free memory and about a minute (47 to 52 s on the 15 GB development machine); the prover runs in a capped systemd scope when `systemd-run` exists, otherwise set `ZOLAR_NO_CAP=1`.

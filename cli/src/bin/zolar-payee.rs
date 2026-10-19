@@ -56,6 +56,9 @@ enum Command {
         /// never pays forfeits it to the Payee at the refund.
         #[arg(long, default_value_t = 0)]
         bond: u64,
+        /// Refuse the Reveal Claim (which publishes the transaction ID): only a Private Claim settles.
+        #[arg(long)]
+        private_only: bool,
         #[arg(long, env = "ZOLAR_RPC_URL", default_value = DEVNET_RPC)]
         rpc_url: String,
         /// The Header Relay (default: the devnet relay of the chosen Zcash network).
@@ -98,6 +101,7 @@ fn main() -> Result<()> {
             keypair,
             salt_out,
             bond,
+            private_only,
             rpc_url,
             relay,
             explorer,
@@ -119,6 +123,7 @@ fn main() -> Result<()> {
                 amount,
                 salt_out,
                 bond,
+                private_only,
             })?;
         }
         Command::Refund {

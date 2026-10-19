@@ -3516,6 +3516,8 @@ dependencies = [
  "solana-keypair",
  "solana-signer",
  "ureq",
+ "zcash_primitives",
+ "zcash_protocol",
  "zolar-claim",
  "zolar-pczt",
  "zolar-relayer",
