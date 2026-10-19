@@ -1,0 +1,108 @@
+use std::io::{Cursor, Read, Write};
+
+use sha2::{Digest, Sha256};
+use zolar_relayer::p2p::{Peer, HEADER_LEN};
+
+const TRANSCRIPT: &[u8] = include_bytes!("../fixtures/p2p-transcript.bin");
+const FIXTURE: &str = include_str!("../../zcash-header/fixtures/testnet-nu7-4495261-4495660.txt");
+
+/// What a live NU7 testnet peer sent us during one handshake and one `getheaders` request.
+struct Recorded {
+    input: Cursor<&'static [u8]>,
+    output: Vec<u8>,
+}
+
+impl Read for Recorded {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.input.read(buf)
+    }
+}
+
+impl Write for Recorded {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.output.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn sha256d(data: &[u8]) -> [u8; 32] {
+    Sha256::digest(Sha256::digest(data)).into()
+}
+
+fn locator_4495260() -> [u8; 32] {
+    let mut hash: [u8; 32] =
+        hex::decode("00000005c6568f0bc6f3ce796a6daf312edaeb01a846a387680ba28703f35ac5")
+            .unwrap()
+            .try_into()
+            .unwrap();
+    hash.reverse();
+    hash
+}
+
+#[test]
+fn a_recorded_peer_hands_over_the_headers_after_a_locator() {
+    let stream = Recorded {
+        input: Cursor::new(TRANSCRIPT),
+        output: Vec::new(),
+    };
+    let mut peer = Peer::handshake(stream).expect("handshake with the recorded peer");
+    assert!(peer.protocol_version() >= 170_180);
+
+    let headers = peer.getheaders(&[locator_4495260()]).unwrap();
+
+    assert_eq!(headers.len(), 160);
+    let mut parent = locator_4495260();
+    for (i, header) in headers.iter().enumerate() {
+        assert_eq!(header.len(), HEADER_LEN);
+        assert_eq!(
+            header[4..36],
+            parent,
+            "header {i} links to the previous one"
+        );
+        parent = sha256d(header);
+    }
+    // The first headers equal the independently exported fixture of heights 4,495,261 onward.
+    for (header, line) in headers.iter().zip(FIXTURE.lines()) {
+        let (_, hex_header) = line.split_once(' ').unwrap();
+        assert_eq!(hex::encode(header), hex_header);
+    }
+}
+
+#[test]
+fn the_getheaders_request_is_the_wire_format_peers_expect() {
+    let stream = Recorded {
+        input: Cursor::new(TRANSCRIPT),
+        output: Vec::new(),
+    };
+    let mut peer = Peer::handshake(stream).unwrap();
+    peer.getheaders(&[locator_4495260()]).unwrap();
+    let sent = peer.into_stream().output;
+
+    // The last message we sent: magic, "getheaders" padded to 12, length, checksum, payload.
+    let payload_len = 4 + 1 + 32 + 32;
+    let message = &sent[sent.len() - (24 + payload_len)..];
+    assert_eq!(message[..4], [0xfa, 0x1a, 0xf9, 0xbf]);
+    assert_eq!(&message[4..16], b"getheaders\0\0");
+    assert_eq!(message[16..20], (payload_len as u32).to_le_bytes());
+    let payload = &message[24..];
+    assert_eq!(message[20..24], sha256d(payload)[..4]);
+    assert_eq!(payload[..4], 170_180i32.to_le_bytes());
+    assert_eq!(payload[4], 1);
+    assert_eq!(payload[5..37], locator_4495260());
+    assert_eq!(payload[37..], [0u8; 32]);
+}
+
+#[test]
+fn a_corrupted_checksum_is_refused() {
+    let mut bytes = TRANSCRIPT.to_vec();
+    // First message is the peer's version: flip a payload byte.
+    bytes[30] ^= 0xff;
+    let stream = Recorded {
+        input: Cursor::new(Box::leak(bytes.into_boxed_slice())),
+        output: Vec::new(),
+    };
+    assert!(Peer::handshake(stream).is_err());
+}
