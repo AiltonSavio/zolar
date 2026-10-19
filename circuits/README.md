@@ -31,11 +31,15 @@ cargo run -p zolar-claim --example gen_vk -- verification_key.json programs/escr
 
 ## Ceremony (ticket 12)
 
-Steps 1, 2 and 5 of `scripts/setup.sh` stay; replace the single throwaway contribution (step 3) with one
-`snarkjs zkey contribute` per participant and finish with `snarkjs zkey beacon`. Publish the R1CS hash,
-the ptau source and hash, every zkey hash and the `zkey verify` output. Then export the verification key,
-replace `verification_key.json` here and regenerate `programs/escrow/src/verifying_key_generated.rs` with the
-`gen_vk` command above; regenerate the proof fixtures with `scripts/prove.sh`.
+The committed key is still the single-party development key. The phase-2 ceremony that replaces it is in
+[`ceremony/`](ceremony/README.md): a tool (`ceremony/ceremony.mjs`), contributor instructions
+([`CONTRIBUTE.md`](ceremony/CONTRIBUTE.md)), the coordinator runbook ([`COORDINATOR.md`](ceremony/COORDINATOR.md)),
+and one command that verifies the finished transcript against the R1CS and the Powers of Tau
+(`node ceremony/ceremony.mjs verify`). The PSE Powers of Tau files are already prepared for phase 2, so
+`scripts/setup.sh` (single throwaway contribution) is only for local experiments; its
+`powersoftau prepare phase2` step is not needed with the PSE files. After the ceremony `finalize --install`
+replaces `verification_key.json` and the generated Escrow constants; regenerate the proof fixtures with
+`ZKEY=<claim_final.zkey> scripts/prove.sh`.
 
 ## Proving from the Payer CLI
 

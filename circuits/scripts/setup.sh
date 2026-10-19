@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# Single-party throwaway Groth16 setup for a built circuit (ticket 10). The real multi-party ceremony
-# (ticket 12) replaces steps 3 and 4 with its contributions and beacon; steps 1, 2 and 5 are the same.
-#   scripts/setup.sh <depth> <ptau>      ptau: a Perpetual Powers of Tau file with 2^power >= constraints + 2
+# Single-party throwaway Groth16 setup for a built circuit (ticket 10), for local experiments only. The real
+# multi-party ceremony is ceremony/ceremony.mjs (ticket 12). The PSE ptau files are already prepared for
+# phase 2 (sections 12 to 15 present); an unprepared file needs `snarkjs powersoftau prepare phase2` first.
+#   scripts/setup.sh <depth> <ptau>      ptau: a prepared Powers of Tau file with 2^power >= constraints + 2
 set -euo pipefail
 source "$(dirname "$0")/env.sh"
 depth="${1:?usage: setup.sh <depth> <ptau>}"
 ptau="${2:?usage: setup.sh <depth> <ptau>}"
 dir="$ZOLAR_DATA/build/d$depth"
 r1cs="$dir/private_claim_d$depth.r1cs"
-prepared="${ptau%.ptau}_prepared.ptau"
-# 1. Prepare the Powers of Tau for phase 2 (once per ptau).
-[ -f "$prepared" ] || capped $SNARKJS powersoftau prepare phase2 "$ptau" "$prepared"
+prepared="$ptau"
 # 2. Proving key with no contribution.
 capped $SNARKJS groth16 setup "$r1cs" "$prepared" "$dir/claim_0000.zkey"
 # 3. One throwaway contribution (entropy from the OS). Ceremony: one per contributor, in turn.

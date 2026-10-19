@@ -156,6 +156,10 @@ jobs:
           test "$(sha256sum "$ZOLAR_DATA/build/d8/private_claim_d8.r1cs" | cut -d' ' -f1)" = "$(cut -d' ' -f1 circuits/private_claim_d8.r1cs.sha256)"
       - name: The committed proof verifies against the committed verification key
         run: node circuits/node_modules/snarkjs/build/cli.cjs groth16 verify circuits/verification_key.json circuits/fixtures/swap2.public.json circuits/fixtures/swap2.proof.json
+      - name: Ceremony tool tests
+        run: node --test circuits/ceremony/test/*.test.mjs
+      - name: The committed verification key is the final key of the ceremony transcript (once it exists)
+        run: node circuits/ceremony/ceremony.mjs check-vk
       - name: The verifying key constants are generated from the committed verification key
         run: |
           cargo run -p zolar-claim --example gen_vk -- circuits/verification_key.json programs/escrow/src
