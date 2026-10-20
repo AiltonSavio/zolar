@@ -1,0 +1,27 @@
+{
+  "ptaus": [
+    {
+      "file": "ppot_0080_20.ptau",
+      "power": 20,
+      "sha256": "560412532a1205145d5f21585274fb2cef61273496ddc7186aec855aab01a8cd",
+      "blake2b512": "117b49e5570b4490b9377962c295e369506116e1db6ee035a7a28bcd83011366297bc486ca8df6cb62f247e2fd0f52d44c892ea4f033393457fbb264a59c75ac",
+      "url": "https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_20.ptau",
+      "source": "Privacy Scaling Explorations, Perpetual Powers of Tau contribution 80, prepared for phase 2"
+    },
+    {
+      "file": "ppot_0080_18.ptau",
+      "power": 18,
+      "sha256": "9693220206afab749e3d88d4ab5fdf5d36120ea102e7e587ccea0e7a5208e711",
+      "blake2b512": "6355b8e57582568e1b11efb56719bf20193ce92154c52edb3825e89d47e4c32364134020bca8232671ede0722635e59f528fddfeb24bf95450450fd964142d70",
+      "url": "https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_18.ptau",
+      "source": "Privacy Scaling Explorations, Perpetual Powers of Tau contribution 80, prepared for phase 2 (dry runs only)"
+    }
+  ],
+  "productionDepth": 8,
+  "productionPtauPower": 20,
+  "beacon": {
+    "chain": "zcash-mainnet",
+    "iterationsExp": 20
+  },
+  "ceremonyComplete": false
+}
