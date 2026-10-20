@@ -50,8 +50,15 @@ impl Cluster for Lite {
         }
     }
 
-    fn account(&mut self, address: &Address) -> Result<Option<Vec<u8>>, String> {
-        Ok(self.svm.borrow().get_account(address).map(|a| a.data))
+    fn account_with_owner(
+        &mut self,
+        address: &Address,
+    ) -> Result<Option<(Address, Vec<u8>)>, String> {
+        Ok(self
+            .svm
+            .borrow()
+            .get_account(address)
+            .map(|a| (a.owner, a.data)))
     }
 }
 

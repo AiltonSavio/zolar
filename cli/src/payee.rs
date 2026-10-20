@@ -95,8 +95,6 @@ pub fn create_escrow(a: &CreateEscrow) -> Result<Created> {
     let mut rpc = HttpRpc::new(&a.rpc_url);
     let relay = read_relay(&mut rpc, &a.relay)?;
     let view = relay.view()?;
-    view.ensure_running()
-        .map_err(|e| anyhow::anyhow!("the relay is not running: {e:?}"))?;
     let tip = view.tip_height();
     println!("relay tip {tip}, Finality Depth {}", view.finality_depth());
     ensure!(
@@ -237,7 +235,7 @@ pub fn refund(a: &RefundArgs) -> Result<Refunded> {
             escrow.payee
         );
         let relay = read_relay(&mut rpc, &escrow.relay)?;
-        let view = relay.view()?;
+        let view = relay.status()?;
         let step = refund_step(
             &escrow,
             view.tip_height(),

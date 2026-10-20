@@ -5,7 +5,6 @@
 use std::{path::PathBuf, process::Command, sync::Once};
 
 use escrow_client::{accounts::Escrow, instructions::*, ESCROW_ID};
-use header_relay_interface::RelayView;
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use relay_tests::{
     synthetic::{synthetic_checkpoint, Branch, Synth, CHECKPOINT_HEIGHT},
@@ -193,7 +192,7 @@ impl World {
         }
         let data = self.h.relay_data(&self.relay);
         assert!(
-            RelayView::parse(&data).unwrap().is_halted(),
+            relay_tests::relay_status(&self.relay, &data).is_halted(),
             "the relay halted"
         );
     }
@@ -233,7 +232,7 @@ impl World {
 
     pub fn tip(&self) -> u32 {
         let data = self.h.relay_data(&self.relay);
-        RelayView::parse(&data).unwrap().tip_height()
+        relay_tests::relay_status(&self.relay, &data).tip_height()
     }
 
     /// Blocks needed above `height` for it to be in the Final Block Tree.
@@ -346,7 +345,7 @@ impl World {
     /// The Final Block Tree rebuilt from the blocks the relay holds as final.
     pub fn tree(&self) -> (FinalBlockTree, usize) {
         let data = self.h.relay_data(&self.relay);
-        let size = RelayView::parse(&data).unwrap().leaf_count() as usize;
+        let size = relay_tests::relay_status(&self.relay, &data).leaf_count() as usize;
         let leaves = self.branch.blocks[..size]
             .iter()
             .map(|b| block_leaf(b.height, &b.merkle_root).unwrap())
@@ -394,7 +393,7 @@ impl World {
     /// tests.
     pub fn forge_latest_root(&mut self, root: [u8; 32]) {
         let mut account = self.h.svm.get_account(&self.relay).unwrap();
-        let count = RelayView::parse(&account.data).unwrap().leaf_count() as usize;
+        let count = relay_tests::relay_status(&self.relay, &account.data).leaf_count() as usize;
         let at =
             header_relay_interface::R_ROOTS + (count % header_relay_interface::ROOT_HISTORY) * 32;
         account.data[at..at + 32].copy_from_slice(&root);

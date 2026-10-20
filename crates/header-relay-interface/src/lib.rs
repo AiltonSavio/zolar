@@ -1,10 +1,17 @@
 //! Read interface of the Zolar Header Relay for other Solana programs.
 //!
 //! A consumer stores the address of the Header Relay it trusts (the address commits to the
-//! Checkpoint, so it fixes the network, the start and the Finality Depth). On every use it checks the
-//! account is **owned by the Header Relay program** and equals that address, then parses the data
-//! with [`RelayView::parse`]. The crate has no dependencies and does no I/O, so it works in any
-//! on-chain or off-chain Rust.
+//! Checkpoint, so it fixes the network, the start and the Finality Depth). Both constructors take the
+//! account's owner and key next to its data and check that the account is **owned by the Header Relay
+//! program** and **is the relay the consumer trusts**, so the checks cannot be forgotten:
+//!
+//! - [`RelayView::parse`] is the default: it also requires the relay to be sealed and **running**, and
+//!   only a `RelayView` answers root queries (a Halted relay's frozen ring still holds roots of blocks
+//!   a deep reorg orphaned).
+//! - [`RelayStatus::parse_allow_halted`] is for readers that must see a Halted relay (status displays,
+//!   the CLI, tools). It has no root queries; [`RelayStatus::running`] upgrades it to a `RelayView`.
+//!
+//! The crate has no dependencies and does no I/O, so it works in any on-chain or off-chain Rust.
 //!
 //! Hashes are in internal byte order (raw SHA-256d; explorers print them reversed). Tree roots are
 //! 32-byte big-endian BN254 field elements, the form the `sol_poseidon` syscall (big-endian mode) and
@@ -15,6 +22,12 @@
 //! the block's transaction Merkle root as 128-bit big-endian numbers, node = `Poseidon(left, right)`.
 //! Every value is passed to Poseidon as a 32-byte big-endian field element.
 #![no_std]
+
+/// The Header Relay program that owns every Header Relay account Zolar trusts.
+pub const HEADER_RELAY_PROGRAM: [u8; 32] = [
+    0x4d, 0xe4, 0xdb, 0x60, 0x3b, 0xec, 0xf8, 0x04, 0xa8, 0x2a, 0x8f, 0x22, 0x6a, 0xca, 0xc6, 0x34,
+    0x7d, 0xcc, 0x7d, 0xd8, 0x13, 0xab, 0xa2, 0xe4, 0x5d, 0xd5, 0xc2, 0xdc, 0x5b, 0x49, 0xb4, 0xd8,
+];
 
 pub const DISC_RELAY: u8 = 1;
 pub const VERSION: u8 = 1;
@@ -79,6 +92,10 @@ pub const ROOT_HISTORY: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewError {
+    /// The account is not owned by the Header Relay program.
+    WrongOwner,
+    /// The account is not the relay the consumer trusts.
+    WrongAddress,
     /// Wrong length, discriminator or version: not a Header Relay account of this layout.
     NotARelay,
     /// The Checkpoint is not sealed yet, so the address does not yet commit to its contents.
@@ -87,10 +104,15 @@ pub enum ViewError {
     Halted(u8),
 }
 
-/// Read-only view over the data of a Header Relay account. The caller must already have checked
-/// that the account is owned by the Header Relay program and is the relay it trusts.
+/// Read-only view over a sealed Header Relay account that may be Halted. It answers everything except
+/// root queries; see [`RelayView`] for those.
 #[derive(Clone, Copy)]
-pub struct RelayView<'a>(&'a [u8]);
+pub struct RelayStatus<'a>(&'a [u8]);
+
+/// Read-only view over a sealed, **running** Header Relay account: the only type that answers root
+/// queries. Dereferences to [`RelayStatus`] for the rest.
+#[derive(Clone, Copy)]
+pub struct RelayView<'a>(RelayStatus<'a>);
 
 fn u32_at(d: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([d[at], d[at + 1], d[at + 2], d[at + 3]])
@@ -102,9 +124,22 @@ fn bytes32(d: &[u8], at: usize) -> [u8; 32] {
     out
 }
 
-impl<'a> RelayView<'a> {
-    /// Checks length, discriminator, version and that the relay is sealed.
-    pub fn parse(data: &'a [u8]) -> Result<Self, ViewError> {
+impl<'a> RelayStatus<'a> {
+    /// Checks that the account is owned by the Header Relay program, is `expected_key`, has the relay
+    /// layout and is sealed. A Halted relay parses; check [`Self::ensure_running`] before honouring a
+    /// Claim, or use [`RelayView::parse`].
+    pub fn parse_allow_halted(
+        owner: &[u8; 32],
+        key: &[u8; 32],
+        expected_key: &[u8; 32],
+        data: &'a [u8],
+    ) -> Result<Self, ViewError> {
+        if owner != &HEADER_RELAY_PROGRAM {
+            return Err(ViewError::WrongOwner);
+        }
+        if key != expected_key {
+            return Err(ViewError::WrongAddress);
+        }
         if data.len() != RELAY_LEN || data[R_DISC] != DISC_RELAY || data[R_VERSION] != VERSION {
             return Err(ViewError::NotARelay);
         }
@@ -112,6 +147,12 @@ impl<'a> RelayView<'a> {
             return Err(ViewError::NotSealed);
         }
         Ok(Self(data))
+    }
+
+    /// The view that answers root queries, if the relay is running.
+    pub fn running(self) -> Result<RelayView<'a>, ViewError> {
+        self.ensure_running()?;
+        Ok(RelayView(self))
     }
 
     /// `Ok` only while the relay accepts headers. Use it before honouring a Claim.
@@ -183,6 +224,19 @@ impl<'a> RelayView<'a> {
     pub fn halt_hash(&self) -> [u8; 32] {
         bytes32(self.0, R_HALT_HASH)
     }
+}
+
+impl<'a> RelayView<'a> {
+    /// Checks that the account is owned by the Header Relay program, is `expected_key`, has the relay
+    /// layout, is sealed and is running (not Halted).
+    pub fn parse(
+        owner: &[u8; 32],
+        key: &[u8; 32],
+        expected_key: &[u8; 32],
+        data: &'a [u8],
+    ) -> Result<Self, ViewError> {
+        RelayStatus::parse_allow_halted(owner, key, expected_key, data)?.running()
+    }
 
     /// The newest Final Block Tree root.
     pub fn latest_root(&self) -> [u8; 32] {
@@ -196,7 +250,7 @@ impl<'a> RelayView<'a> {
             return None;
         }
         Some(bytes32(
-            self.0,
+            self.0 .0,
             R_ROOTS + (size as usize % ROOT_HISTORY) * 32,
         ))
     }
@@ -219,6 +273,13 @@ impl<'a> RelayView<'a> {
     }
 }
 
+impl<'a> core::ops::Deref for RelayView<'a> {
+    type Target = RelayStatus<'a>;
+    fn deref(&self) -> &RelayStatus<'a> {
+        &self.0
+    }
+}
+
 /// The three field elements hashed into the leaf of a block: `[height, root_hi, root_lo]`, each a
 /// 32-byte big-endian number below 2^128.
 pub fn leaf_inputs(height: u32, merkle_root: &[u8; 32]) -> [[u8; 32]; 3] {
@@ -238,6 +299,8 @@ mod tests {
     extern crate std;
     use std::vec;
 
+    const KEY: [u8; 32] = [7; 32];
+
     fn relay_with(count: u32, root_for: impl Fn(u32) -> u8) -> std::vec::Vec<u8> {
         let mut d = vec![0u8; RELAY_LEN];
         d[R_DISC] = DISC_RELAY;
@@ -251,34 +314,68 @@ mod tests {
         d
     }
 
-    #[test]
-    fn rejects_other_accounts() {
-        let mut d = relay_with(0, |_| 1);
-        assert!(RelayView::parse(&d).is_ok());
-        d[R_DISC] = 2;
-        assert_eq!(RelayView::parse(&d).err(), Some(ViewError::NotARelay));
-        assert_eq!(
-            RelayView::parse(&d[..100]).err(),
-            Some(ViewError::NotARelay)
-        );
-        let mut d = relay_with(0, |_| 1);
-        d[R_STATE] = STATE_PENDING;
-        assert_eq!(RelayView::parse(&d).err(), Some(ViewError::NotSealed));
+    fn view(d: &[u8]) -> Result<RelayView<'_>, ViewError> {
+        RelayView::parse(&HEADER_RELAY_PROGRAM, &KEY, &KEY, d)
+    }
+
+    fn status(d: &[u8]) -> Result<RelayStatus<'_>, ViewError> {
+        RelayStatus::parse_allow_halted(&HEADER_RELAY_PROGRAM, &KEY, &KEY, d)
     }
 
     #[test]
-    fn halt_is_visible() {
+    fn rejects_other_accounts() {
         let mut d = relay_with(0, |_| 1);
+        assert!(view(&d).is_ok());
+        d[R_DISC] = 2;
+        assert_eq!(view(&d).err(), Some(ViewError::NotARelay));
+        assert_eq!(view(&d[..100]).err(), Some(ViewError::NotARelay));
+        let mut d = relay_with(0, |_| 1);
+        d[R_STATE] = STATE_PENDING;
+        assert_eq!(view(&d).err(), Some(ViewError::NotSealed));
+        assert_eq!(status(&d).err(), Some(ViewError::NotSealed));
+    }
+
+    #[test]
+    fn the_owner_and_the_address_are_pinned_by_both_constructors() {
+        let d = relay_with(0, |_| 1);
+        let other = [9u8; 32];
+        assert_eq!(
+            RelayView::parse(&other, &KEY, &KEY, &d).err(),
+            Some(ViewError::WrongOwner)
+        );
+        assert_eq!(
+            RelayView::parse(&HEADER_RELAY_PROGRAM, &other, &KEY, &d).err(),
+            Some(ViewError::WrongAddress)
+        );
+        assert_eq!(
+            RelayStatus::parse_allow_halted(&other, &KEY, &KEY, &d).err(),
+            Some(ViewError::WrongOwner)
+        );
+        assert_eq!(
+            RelayStatus::parse_allow_halted(&HEADER_RELAY_PROGRAM, &other, &KEY, &d).err(),
+            Some(ViewError::WrongAddress)
+        );
+    }
+
+    #[test]
+    fn a_halted_relay_is_refused_by_default_and_visible_through_the_status_reader() {
+        let mut d = relay_with(5, |size| size as u8 + 1);
         d[R_HALTED] = HALT_DEEP_REORG;
-        let v = RelayView::parse(&d).unwrap();
-        assert!(v.is_halted());
-        assert_eq!(v.ensure_running(), Err(ViewError::Halted(HALT_DEEP_REORG)));
+        assert_eq!(view(&d).err(), Some(ViewError::Halted(HALT_DEEP_REORG)));
+        let s = status(&d).unwrap();
+        assert!(s.is_halted());
+        assert_eq!(s.halt_reason(), HALT_DEEP_REORG);
+        assert_eq!(
+            s.running().err(),
+            Some(ViewError::Halted(HALT_DEEP_REORG)),
+            "its frozen roots are unreachable"
+        );
     }
 
     #[test]
     fn history_holds_the_last_128_roots() {
         let d = relay_with(300, |size| (size % 251) as u8 + 1);
-        let v = RelayView::parse(&d).unwrap();
+        let v = view(&d).unwrap();
         assert_eq!(v.latest_root(), [(300 % 251) as u8 + 1; 32]);
         assert_eq!(v.root_at(173), Some([174u8; 32]));
         assert_eq!(v.root_at(300 - 128), None, "aged out of the ring");
@@ -291,7 +388,7 @@ mod tests {
     #[test]
     fn a_young_tree_knows_its_empty_root() {
         let d = relay_with(2, |size| size as u8 + 10);
-        let v = RelayView::parse(&d).unwrap();
+        let v = view(&d).unwrap();
         assert_eq!(v.root_at(0), Some([10; 32]));
         assert_eq!(v.root_size(&[11; 32]), Some(1));
     }

@@ -186,7 +186,10 @@ impl Cluster for HttpRpc {
         Err(TxError::Other(format!("{signature} not confirmed in time")))
     }
 
-    fn account(&mut self, address: &Address) -> Result<Option<Vec<u8>>, String> {
+    fn account_with_owner(
+        &mut self,
+        address: &Address,
+    ) -> Result<Option<(Address, Vec<u8>)>, String> {
         let result = self
             .call(
                 "getAccountInfo",
@@ -198,9 +201,14 @@ impl Cluster for HttpRpc {
             return Ok(None);
         }
         let data = value["data"][0].as_str().ok_or("account has no data")?;
-        STANDARD
+        let data = STANDARD
             .decode(data)
-            .map(Some)
-            .map_err(|e| format!("account data: {e}"))
+            .map_err(|e| format!("account data: {e}"))?;
+        let owner = value["owner"]
+            .as_str()
+            .ok_or("account has no owner")?
+            .parse::<Address>()
+            .map_err(|e| format!("account owner: {e}"))?;
+        Ok(Some((owner, data)))
     }
 }

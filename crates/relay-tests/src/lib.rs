@@ -11,6 +11,7 @@ use header_relay_client::{
     types::Checkpoint,
     HEADER_RELAY_ID,
 };
+use header_relay_interface::{RelayStatus, HEADER_RELAY_PROGRAM};
 use litesvm::{
     types::{FailedTransactionMetadata, TransactionMetadata},
     LiteSVM,
@@ -491,4 +492,11 @@ pub fn solana_system_transfer(from: &Address, to: &Address, lamports: u64) -> In
             solana_instruction::AccountMeta::new(*to, false),
         ],
     )
+}
+
+/// The read interface over `data`, read from the Header Relay account `relay`, which must be sealed
+/// (a Halted relay parses; call `.running()` for root queries).
+pub fn relay_status<'a>(relay: &Address, data: &'a [u8]) -> RelayStatus<'a> {
+    let key = relay.to_bytes();
+    RelayStatus::parse_allow_halted(&HEADER_RELAY_PROGRAM, &key, &key, data).unwrap()
 }

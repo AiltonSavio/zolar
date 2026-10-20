@@ -1,10 +1,10 @@
 //! Solana side: reading the Escrow and the relay, the vault's associated token account, and the
 //! checks a Payer makes before paying into an Escrow.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use escrow_client::accounts::Escrow;
 use header_relay_client::accounts::Relay;
-use header_relay_interface::RelayView;
+use header_relay_interface::{HEADER_RELAY_PROGRAM, RelayStatus, RelayView};
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::{Keypair, read_keypair_file};
@@ -104,14 +104,26 @@ pub fn read_account(cluster: &mut impl Cluster, address: &Address) -> Result<Vec
         .with_context(|| format!("account {address} does not exist"))
 }
 
-/// The relay as the Escrow reads it, after the owner and address checks every consumer must make.
+/// A Header Relay account read over RPC: owned by the Header Relay program, at the address asked
+/// for, sealed. It may be Halted: [`RelayState::status`] shows that, [`RelayState::view`] refuses it.
 pub struct RelayState {
+    pub address: Address,
     pub data: Vec<u8>,
 }
 
 impl RelayState {
+    /// The relay including a Halted one (for status display and the refund decision).
+    pub fn status(&self) -> Result<RelayStatus<'_>> {
+        let key = self.address.to_bytes();
+        RelayStatus::parse_allow_halted(&HEADER_RELAY_PROGRAM, &key, &key, &self.data)
+            .map_err(|e| anyhow::anyhow!("relay: {e:?}"))
+    }
+
+    /// The relay while it is running, the only view that answers root queries.
     pub fn view(&self) -> Result<RelayView<'_>> {
-        RelayView::parse(&self.data).map_err(|e| anyhow::anyhow!("relay: {e:?}"))
+        self.status()?
+            .running()
+            .map_err(|e| anyhow::anyhow!("the relay is not running: {e:?}"))
     }
 
     pub fn account(&self) -> Result<Relay> {
@@ -119,10 +131,22 @@ impl RelayState {
     }
 }
 
+/// Reads `relay` and checks that it is a Header Relay account (owner, layout, sealed); a Halted relay
+/// is returned as is.
 pub fn read_relay(cluster: &mut impl Cluster, relay: &Address) -> Result<RelayState> {
-    let data = read_account(cluster, relay)?;
-    let state = RelayState { data };
-    state.view()?;
+    let (owner, data) = cluster
+        .account_with_owner(relay)
+        .map_err(anyhow::Error::msg)?
+        .with_context(|| format!("account {relay} does not exist"))?;
+    ensure!(
+        owner.to_bytes() == HEADER_RELAY_PROGRAM,
+        "{relay} is owned by {owner}, not by the Header Relay program"
+    );
+    let state = RelayState {
+        address: *relay,
+        data,
+    };
+    state.status()?;
     Ok(state)
 }
 

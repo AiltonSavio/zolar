@@ -11,7 +11,7 @@ The relay follows the chain with the most cumulative work (the first one seen wi
 - `crates/zcash-header`: `no_std` header parsing, SHA-256d, compact targets, chain work, Equihash, shared by the program and off-chain tools.
 - `programs/header-relay`: the program. It has its own workspace and lockfile because `cargo build-sbf` uses an older toolchain.
 - `clients/codama`: the program's Codama definition; `clients/rust` and `clients/js` are generated from it.
-- `crates/header-relay-interface`: dependency-free `no_std` layout and `RelayView`, the read interface for programs that trust a Header Relay.
+- `crates/header-relay-interface`: dependency-free `no_std` layout, `RelayView` (a running relay, owner and address checked) and `RelayStatus` (also a Halted one), the read interface for programs that trust a Header Relay.
 - `scripts/final-block-tree-ref`: independent circomlibjs computation of the Final Block Tree roots the tests compare against.
 - `crates/relay-tests`: LiteSVM tests that drive the program through the generated Rust client.
 - `tools/forge-header`: builds the one forged fixture (valid Equihash, hash above target).

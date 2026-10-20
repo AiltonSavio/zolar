@@ -1,7 +1,7 @@
 //! Final Block Tree, Finality Depth and the read interface, driven through the generated client.
 
 use header_relay_interface::{
-    RelayView, HALT_DEEP_REORG, HALT_TREE_FULL, ROOT_HISTORY, R_FINALIZED_HASH, R_FINALIZED_HEIGHT,
+    HALT_DEEP_REORG, HALT_TREE_FULL, ROOT_HISTORY, R_FINALIZED_HASH, R_FINALIZED_HEIGHT,
     R_LEAF_COUNT, TREE_CAPACITY,
 };
 use relay_tests::{synthetic::*, *};
@@ -34,7 +34,7 @@ fn the_final_block_tree_after_replaying_live_headers_equals_the_reference_root()
     let relay = h.init_relay(&checkpoint);
 
     let empty = h.relay_data(&relay);
-    let view = RelayView::parse(&empty).unwrap();
+    let view = relay_status(&relay, &empty).running().unwrap();
     assert_eq!(view.latest_root(), roots[0], "empty tree root");
     assert_eq!(view.finality_depth(), 30);
 
@@ -61,7 +61,7 @@ fn the_final_block_tree_after_replaying_live_headers_equals_the_reference_root()
     println!("CU AcceptHeader alone, NU7 window, one append: {accept_alone}");
 
     let data = h.relay_data(&relay);
-    let view = RelayView::parse(&data).unwrap();
+    let view = relay_status(&relay, &data).running().unwrap();
     assert_eq!(view.tip_height(), 4_465_300);
     assert_eq!(view.finalized_height(), 4_465_270);
     assert_eq!(view.finalized_hash(), row_hash(&rows, 4_465_270));
@@ -84,7 +84,7 @@ fn the_final_block_tree_after_replaying_live_headers_equals_the_reference_root()
 
 fn tip_hash(h: &Harness, relay: &Address) -> [u8; 32] {
     let data = h.relay_data(relay);
-    RelayView::parse(&data).unwrap().tip_hash()
+    relay_status(relay, &data).tip_hash()
 }
 
 /// Hashes held by the Store's slots.
@@ -144,7 +144,7 @@ fn competing_branches_resolve_to_the_one_with_most_work() {
     send_all(&mut h, &relay, &b_blocks[2..]);
     assert_eq!(tip_hash(&h, &relay), b_blocks[2].hash, "more work wins");
     let data = h.relay_data(&relay);
-    assert_eq!(RelayView::parse(&data).unwrap().tip_height(), base + 3);
+    assert_eq!(relay_status(&relay, &data).tip_height(), base + 3);
 
     // Work, not length: three minimum-difficulty blocks (tall, cheap) lose to one ordinary block.
     let mut h = Harness::new();
@@ -161,7 +161,7 @@ fn competing_branches_resolve_to_the_one_with_most_work() {
     send_all(&mut h, &relay, std::slice::from_ref(&one));
     send_all(&mut h, &relay, &three);
     let data = h.relay_data(&relay);
-    let view = RelayView::parse(&data).unwrap();
+    let view = relay_status(&relay, &data);
     assert_eq!(view.tip_hash(), one.hash);
     assert_eq!(
         view.tip_height(),
@@ -179,7 +179,7 @@ fn a_reorg_deeper_than_finality_depth_halts_the_relay() {
     let mut h = Harness::new();
     let (relay, trunk, chain) = build_trunk(&mut h, 2, 8);
     let data = h.relay_data(&relay);
-    let before = RelayView::parse(&data).unwrap();
+    let before = relay_status(&relay, &data).running().unwrap();
     assert_eq!(
         (before.finalized_height(), before.leaf_count()),
         (CHECKPOINT_HEIGHT + 6, 6)
@@ -195,14 +195,20 @@ fn a_reorg_deeper_than_finality_depth_halts_the_relay() {
         .expect("the Halting header itself succeeds");
 
     let data = h.relay_data(&relay);
-    let view = RelayView::parse(&data).unwrap();
+    let view = relay_status(&relay, &data);
     assert!(view.is_halted());
     assert_eq!(view.halt_reason(), HALT_DEEP_REORG);
     assert_eq!(view.halt_hash(), blocks[5].hash);
     assert_eq!(view.halt_height(), CHECKPOINT_HEIGHT + 8);
     assert_eq!(view.tip_hash(), chain[7].hash, "the tip does not move");
     assert_eq!(view.leaf_count(), 6);
-    assert_eq!(view.latest_root(), root_before, "the tree is untouched");
+    let at = header_relay_interface::R_ROOTS + (6 % ROOT_HISTORY) * 32;
+    assert_eq!(data[at..at + 32], root_before, "the tree is untouched");
+    assert_eq!(
+        view.running().err(),
+        Some(header_relay_interface::ViewError::Halted(HALT_DEEP_REORG)),
+        "a Halted relay answers no root queries through the default view"
+    );
 
     let mut more = trunk.clone();
     assert_eq!(
@@ -217,7 +223,7 @@ fn a_reorg_within_finality_depth_switches_chains_and_keeps_final_blocks() {
     let (relay, trunk, _) = build_trunk(&mut h, 3, 8);
     let data = h.relay_data(&relay);
     assert_eq!(
-        RelayView::parse(&data).unwrap().finalized_height(),
+        relay_status(&relay, &data).finalized_height(),
         CHECKPOINT_HEIGHT + 5
     );
 
@@ -227,7 +233,7 @@ fn a_reorg_within_finality_depth_switches_chains_and_keeps_final_blocks() {
     send_all(&mut h, &relay, &blocks);
 
     let data = h.relay_data(&relay);
-    let view = RelayView::parse(&data).unwrap();
+    let view = relay_status(&relay, &data);
     assert!(!view.is_halted());
     assert_eq!(view.tip_hash(), blocks[3].hash);
     assert_eq!(view.finalized_height(), CHECKPOINT_HEIGHT + 6);
@@ -356,7 +362,7 @@ fn a_full_final_block_tree_halts_the_relay_instead_of_bricking_it() {
     send_all(&mut h, &relay, &[branch.next(1)]);
     send_all(&mut h, &relay, &[branch.next(2)]);
     let data = h.relay_data(&relay);
-    let view = RelayView::parse(&data).unwrap();
+    let view = relay_status(&relay, &data);
     assert_eq!(
         view.leaf_count() as u64,
         TREE_CAPACITY,
@@ -366,7 +372,7 @@ fn a_full_final_block_tree_halts_the_relay_instead_of_bricking_it() {
     h.relay_synthetic(&relay, &branch.next(3).raw)
         .expect("the Halting header succeeds");
     let data = h.relay_data(&relay);
-    let view = RelayView::parse(&data).unwrap();
+    let view = relay_status(&relay, &data);
     assert_eq!(view.halt_reason(), HALT_TREE_FULL);
     assert_eq!(view.tip_height(), CHECKPOINT_HEIGHT + 2);
     assert_eq!(view.leaf_count() as u64, TREE_CAPACITY);
@@ -397,7 +403,7 @@ fn a_tip_that_finalises_forty_blocks_is_accepted_and_forty_one_is_refused() {
     let cu = h.relay_synthetic(&relay, &next.raw).expect("forty appends");
     println!("CU AcceptHeader alone with 40 appends: {cu}");
     let data = h.relay_data(&relay);
-    let view = RelayView::parse(&data).unwrap();
+    let view = relay_status(&relay, &data);
     assert_eq!(view.finalized_height(), CHECKPOINT_HEIGHT + 60);
     assert_eq!(view.leaf_count(), 60);
 }

@@ -2,7 +2,6 @@
 
 use escrow_client::accounts::Escrow;
 use escrow_tests::*;
-use header_relay_interface::RelayView;
 use relay_tests::synthetic::CHECKPOINT_HEIGHT;
 use solana_signer::Signer;
 use zolar_claim::tx_merkle_root;
@@ -245,7 +244,7 @@ fn a_halted_relay_stops_creation_and_claims() {
     }
     let data = w.h.relay_data(&w.relay);
     assert!(
-        RelayView::parse(&data).unwrap().is_halted(),
+        relay_tests::relay_status(&w.relay, &data).is_halted(),
         "the relay halted"
     );
 

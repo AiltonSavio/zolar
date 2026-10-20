@@ -149,17 +149,25 @@ pub fn process_instruction(
     }
 }
 
-/// The relay view of `relay`, which must be owned by the Header Relay program and sealed.
-fn relay_view<'a>(relay: &AccountView, data: &'a [u8]) -> Result<RelayView<'a>, ProgramError> {
-    if !relay.owned_by(&Address::new_from_array(HEADER_RELAY_PROGRAM)) {
-        return Err(fail(EscrowError::WrongAccount));
-    }
-    let view = RelayView::parse(data).map_err(|_| fail(EscrowError::RelayNotReadable))?;
-    view.ensure_running().map_err(|e| match e {
+/// The view of `relay`, which must be owned by the Header Relay program, be `expected` (the address the
+/// Escrow trusts), sealed and running.
+fn relay_view<'a>(
+    relay: &AccountView,
+    expected: &[u8; 32],
+    data: &'a [u8],
+) -> Result<RelayView<'a>, ProgramError> {
+    // SAFETY: nothing assigns or closes the account while this copy is read.
+    let owner: [u8; 32] = unsafe { *relay.owner().as_array() };
+    RelayView::parse(&owner, relay.address().as_array(), expected, data).map_err(|e| match e {
+        ViewError::WrongOwner | ViewError::WrongAddress => fail(EscrowError::WrongAccount),
         ViewError::Halted(_) => fail(EscrowError::RelayHalted),
-        _ => fail(EscrowError::RelayNotReadable),
-    })?;
-    Ok(view)
+        ViewError::NotARelay | ViewError::NotSealed => fail(EscrowError::RelayNotReadable),
+    })
+}
+
+/// The relay address stored in the Escrow.
+fn stored_relay(escrow: &AccountView) -> Result<[u8; 32], ProgramError> {
+    Ok(array32(&escrow.try_borrow()?, E_RELAY))
 }
 
 // Token account layout (classic SPL Token).
@@ -378,7 +386,7 @@ fn create_escrow(program_id: &Address, accounts: &[AccountView], args: &[u8]) ->
 
     let tip = {
         let data = relay.try_borrow()?;
-        let view = relay_view(relay, &data)?;
+        let view = relay_view(relay, relay.address().as_array(), &data)?;
         view.tip_height()
     };
     if expiry_height <= tip || expiry_height > tip.saturating_add(MAX_EXPIRY_AHEAD) {
@@ -496,7 +504,7 @@ fn reveal_claim(program_id: &Address, accounts: &[AccountView], args: &[u8]) -> 
     };
 
     let relay_data = relay.try_borrow()?;
-    let view = relay_view(relay, &relay_data)?;
+    let view = relay_view(relay, &stored_relay(escrow)?, &relay_data)?;
 
     // The commitment: Poseidon over the two 128-bit limbs of the transaction ID and the salt.
     let [_, txid_hi, txid_lo] = leaf_inputs(0, &txid);
@@ -643,7 +651,7 @@ fn private_claim(program_id: &Address, accounts: &[AccountView], args: &[u8]) ->
 
     let lower = {
         let relay_data = relay.try_borrow()?;
-        let view = relay_view(relay, &relay_data)?;
+        let view = relay_view(relay, &stored_relay(escrow)?, &relay_data)?;
         if !view.is_known_root(&root) {
             return Err(fail(EscrowError::UnknownRoot));
         }
@@ -745,7 +753,7 @@ fn refund_possible(
         return Ok(true);
     }
     let data = relay.try_borrow()?;
-    let view = relay_view(relay, &data)?;
+    let view = relay_view(relay, &stored_relay(escrow)?, &data)?;
     Ok(view.tip_height() > expiry_height.saturating_add(view.finality_depth() as u32))
 }
 

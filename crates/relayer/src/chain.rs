@@ -44,7 +44,14 @@ pub enum TxError {
 pub trait Cluster {
     /// Sends and waits until the transaction is confirmed; returns its signature.
     fn send(&mut self, instructions: &[Instruction], payer: &Keypair) -> Result<String, TxError>;
-    fn account(&mut self, address: &Address) -> Result<Option<Vec<u8>>, String>;
+    /// The owner program and data of an account, if it exists.
+    fn account_with_owner(
+        &mut self,
+        address: &Address,
+    ) -> Result<Option<(Address, Vec<u8>)>, String>;
+    fn account(&mut self, address: &Address) -> Result<Option<Vec<u8>>, String> {
+        Ok(self.account_with_owner(address)?.map(|(_, data)| data))
+    }
 }
 
 fn compute_limit(units: u32) -> Instruction {

@@ -220,8 +220,6 @@ pub fn check_escrow(c: &Check) -> Result<Checked> {
 
     let relay = read_relay(&mut rpc, &escrow.relay)?;
     let view = relay.view()?;
-    view.ensure_running()
-        .map_err(|e| anyhow::anyhow!("the relay is halted: {e:?}"))?;
     ensure!(
         view.tip_height() < s.expiry_height,
         "the relay tip {} is already at the expiry {}",
@@ -400,8 +398,6 @@ fn locate_payment(
     loop {
         let relay = read_relay(rpc, &chains.relay)?;
         let view = relay.view()?;
-        view.ensure_running()
-            .map_err(|e| anyhow::anyhow!("the relay is halted: {e:?}"))?;
         let checkpoint = relay.account()?.checkpoint;
         let size = view.leaf_count();
         let lower = claim_window_lower(escrow.created_tip, view.finality_depth());
@@ -573,8 +569,6 @@ pub fn private_claim(a: &PrivateClaimArgs) -> Result<String> {
     retry_aged_root(a.max_attempts, || {
         let relay = read_relay(&mut rpc, &c.chains.relay)?;
         let view = relay.view()?;
-        view.ensure_running()
-            .map_err(|e| anyhow::anyhow!("the relay is halted: {e:?}"))?;
         // The newest root the tree can be rebuilt for; it stays among the last 128 for about two hours.
         let size = view.leaf_count() as usize;
         let rebuilt;
