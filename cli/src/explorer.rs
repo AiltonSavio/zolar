@@ -1,6 +1,6 @@
-//! Zcash block explorer (zecblock, testnet or mainnet host), used only by the Payee to check that a transaction is new.
-//! The Payer never asks it anything: a lookup would tell the explorer which payment a Claim belongs to
-//! (privacy limit, see the README).
+//! Zcash block explorer (zecblock, testnet or mainnet host), used only by the mainnet rehearsal example to
+//! pick a payment that is already mined. Neither the Payer nor the Payee asks it anything: a lookup
+//! would tell the explorer which payment an Escrow or a Claim belongs to.
 
 use std::time::Duration;
 
@@ -40,14 +40,7 @@ impl Explorer {
         Ok((status, body))
     }
 
-    /// Whether the explorer has seen the transaction at all (mined or waiting in a mempool).
-    pub fn knows(&self, display_txid: &str) -> Result<bool> {
-        let (status, _) = self.get(&format!("/api/tx/{display_txid}"))?;
-        Ok(status != 404)
-    }
-
-    /// The transaction IDs of a block in block order, display form. Only the mainnet rehearsal example
-    /// uses it, to pick a payment that is already mined; the Payer never does.
+    /// The transaction IDs of a block in block order, display form.
     pub fn block_txids(&self, height: u32) -> Result<Vec<String>> {
         let (status, body) = self.get(&format!("/api/block/{height}"))?;
         anyhow::ensure!(status == 200, "block {height}: HTTP {status}");

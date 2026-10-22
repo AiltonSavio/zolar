@@ -40,7 +40,6 @@ const FINALITY_WAIT: Duration = Duration::from_secs(90 * 60);
 
 pub struct Chains {
     pub rpc_url: String,
-    pub explorer_url: String,
     pub relay: Address,
     pub peers: Vec<String>,
     pub network: p2p::Network,
@@ -90,24 +89,33 @@ pub struct Check<'a> {
     pub pczt: &'a Path,
     pub salt: [u8; 32],
     pub accept_freeze_authority: bool,
+    pub terms: Terms,
+    /// How long to wait for the Escrow to be finalized on Solana.
+    pub finalized_wait: Duration,
+}
+
+/// The terms of the trade as the Payer agreed them. The Escrow's own fields are not trusted.
+#[derive(Clone, Debug)]
+pub struct Terms {
     /// The token the Payer agreed to be paid in. The Payee's Escrow must hold exactly this mint.
-    pub expected_mint: Address,
+    pub mint: Address,
     /// The least tokens (smallest unit) the Payer agreed to be paid.
     pub min_amount: u64,
     /// The most the Payer agreed to lock as a Bond.
     pub max_bond: u64,
-    /// How long to wait for the Escrow to be finalized on Solana.
-    pub finalized_wait: Duration,
+    /// The Payer accepts an Escrow that refuses the Reveal Claim.
+    pub accept_private_only: bool,
 }
+
+/// `claim_mode` of an Escrow that only a Private Claim can release.
+const PRIVATE_ONLY: u8 = 1;
 
 /// The terms of the trade as the Payer agreed them, against what the Payee locked.
 pub fn check_terms(
     escrow: &Escrow,
     payer_wallet: &Address,
     relay: &Address,
-    expected_mint: &Address,
-    min_amount: u64,
-    max_bond: u64,
+    terms: &Terms,
 ) -> Result<()> {
     ensure!(
         escrow.state == 0,
@@ -124,19 +132,28 @@ pub fn check_terms(
         escrow.payout
     );
     ensure!(
-        &escrow.mint == expected_mint,
-        "the Escrow holds mint {}, not the agreed {expected_mint}",
-        escrow.mint
+        escrow.mint == terms.mint,
+        "the Escrow holds mint {}, not the agreed {}",
+        escrow.mint,
+        terms.mint
     );
     ensure!(
-        escrow.amount >= min_amount,
-        "the Escrow locks {} tokens, fewer than the agreed {min_amount}",
-        escrow.amount
+        escrow.amount >= terms.min_amount,
+        "the Escrow locks {} tokens, fewer than the agreed {}",
+        escrow.amount,
+        terms.min_amount
     );
     ensure!(
-        escrow.bond_required <= max_bond,
-        "the Escrow asks for a Bond of {}, more than the agreed {max_bond}",
-        escrow.bond_required
+        escrow.bond_required <= terms.max_bond,
+        "the Escrow asks for a Bond of {}, more than the agreed {}",
+        escrow.bond_required,
+        terms.max_bond
+    );
+    ensure!(
+        escrow.claim_mode != PRIVATE_ONLY || terms.accept_private_only,
+        "the Escrow is private-only: only a Private Claim releases it, and a payment mined in a block \
+         of more than 256 transactions can never be claimed (the Payee would refund it). Pass \
+         --accept-private-only if you accept that"
     );
     Ok(())
 }
@@ -174,14 +191,7 @@ pub fn check_escrow(c: &Check) -> Result<Checked> {
         "{} is not an Escrow account of the Escrow program",
         c.escrow_address
     );
-    check_terms(
-        &escrow,
-        &c.payer_wallet,
-        &c.chains.relay,
-        &c.expected_mint,
-        c.min_amount,
-        c.max_bond,
-    )?;
+    check_terms(&escrow, &c.payer_wallet, &c.chains.relay, &c.terms)?;
     let commitment = zolar_claim::payment_commitment(&internal_txid(&s.txid)?, &c.salt)?;
     ensure!(
         commitment == escrow.commitment,
@@ -219,6 +229,12 @@ pub fn check_escrow(c: &Check) -> Result<Checked> {
     }
 
     let relay = read_relay(&mut rpc, &escrow.relay)?;
+    let checkpoint_network = relay.account()?.checkpoint.network;
+    ensure!(
+        checkpoint_network == c.chains.network.checkpoint_network(),
+        "the relay follows Zcash network {checkpoint_network}, not {:?}",
+        c.chains.network
+    );
     let view = relay.view()?;
     ensure!(
         view.tip_height() < s.expiry_height,
@@ -226,6 +242,8 @@ pub fn check_escrow(c: &Check) -> Result<Checked> {
         view.tip_height(),
         s.expiry_height
     );
+    // A relay on a chain of its own would never finalize the real payment.
+    rebuild_tree(c.chains, &relay)?;
 
     println!("Escrow {} checked", c.escrow_address);
     println!("  mint            : {}", escrow.mint);
@@ -253,9 +271,15 @@ pub fn check_escrow(c: &Check) -> Result<Checked> {
     })
 }
 
-/// Locks the Bond the Escrow requires, if it is not locked yet. A Payer calls this before broadcasting:
-/// a Reveal Claim cannot settle without it, and it returns with the tokens.
-pub fn deposit_bond(chains: &Chains, keypair: &Path, escrow_address: Address) -> Result<()> {
+/// Locks the Bond the Escrow requires, if it is not locked yet, after checking the Escrow against the
+/// agreed terms. A Payer calls this right before broadcasting: a Claim cannot settle without it, and it
+/// returns with the tokens.
+pub fn deposit_bond(
+    chains: &Chains,
+    keypair: &Path,
+    escrow_address: Address,
+    terms: &Terms,
+) -> Result<()> {
     let mut rpc = HttpRpc::new(&chains.rpc_url);
     let payer = load_keypair(keypair)?;
     let escrow = read_escrow(&read_account(&mut rpc, &escrow_address)?)?;
@@ -264,6 +288,7 @@ pub fn deposit_bond(chains: &Chains, keypair: &Path, escrow_address: Address) ->
         "the Escrow pays {}, not this keypair; only that wallet can lock the Bond",
         escrow.payout
     );
+    check_terms(&escrow, &payer.pubkey(), &chains.relay, terms)?;
     if escrow.bond_required == 0 {
         println!("the Escrow requires no Bond");
         return Ok(());
@@ -296,10 +321,8 @@ pub fn deposit_bond(chains: &Chains, keypair: &Path, escrow_address: Address) ->
     bond_is_finalized(chains, escrow_address, escrow.bond_required)
 }
 
-/// Proves, signs and broadcasts the checked PCZT. It does not look the payment up anywhere: asking an
-/// explorer for the transaction would tell it which payment the next Claim belongs to. `claim` and
-/// `private-claim` find the block themselves from Zcash P2P blocks.
-pub fn pay(devtool: &Devtool, checked: &Checked, pczt: &Path, work: &Path) -> Result<()> {
+/// Proves and signs the checked PCZT; returns the transaction ready to broadcast.
+pub fn sign(devtool: &Devtool, checked: &Checked, pczt: &Path, work: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(work)?;
     let proven = work.join("proven.pczt");
     let signed = work.join("signed.pczt");
@@ -313,8 +336,38 @@ pub fn pay(devtool: &Devtool, checked: &Checked, pczt: &Path, work: &Path) -> Re
         summary(&std::fs::read(&combined)?)?.txid == checked.txid,
         "the signed transaction has another ID than the committed one"
     );
+    Ok(combined)
+}
+
+/// Broadcasts the signed transaction if the Escrow is still open and the relay has not reached its
+/// expiry, then checks that zcash-devtool sent the committed transaction. It does not look the payment
+/// up anywhere: asking an explorer for the transaction would tell it which payment the next Claim
+/// belongs to. `claim` and `private-claim` find the block themselves from Zcash P2P blocks.
+pub fn broadcast(
+    chains: &Chains,
+    devtool: &Devtool,
+    checked: &Checked,
+    combined: &Path,
+) -> Result<()> {
+    let mut rpc = HttpRpc::new(&chains.rpc_url);
+    let escrow = read_escrow(&read_account(&mut rpc, &checked.escrow_address)?)?;
+    ensure!(
+        escrow.state == 0,
+        "the Escrow is no longer open (a refund may be under way); not broadcasting"
+    );
+    let tip = read_relay(&mut rpc, &escrow.relay)?.view()?.tip_height();
+    ensure!(
+        tip < checked.expiry_height,
+        "the relay tip {tip} reached the expiry {} while proving; not broadcasting",
+        checked.expiry_height
+    );
     println!("broadcasting {}", checked.txid);
-    devtool.send(&combined)?;
+    let sent = devtool.send(combined)?;
+    ensure!(
+        sent == checked.txid,
+        "zcash-devtool reports sending {sent}, not the committed {}",
+        checked.txid
+    );
     Ok(())
 }
 
@@ -325,34 +378,59 @@ pub struct Rebuilt {
     pub root: [u8; 32],
 }
 
+/// Peers are drawn again in a new random order this many times before a rebuild gives up.
+const REBUILD_ATTEMPTS: usize = 3;
+
 /// Rebuilds the relay's Final Block Tree from the headers of the blocks it holds as final and checks
-/// the root against the relay's own. A mismatch means the peers' chain is not the relay's.
+/// the root against the relay's own. A mismatch means the peers' chain is not the relay's: one stale or
+/// lying peer is not trusted, the headers are fetched again from other peers.
 pub fn rebuild_tree(chains: &Chains, relay: &RelayState) -> Result<Rebuilt> {
     let view = relay.view()?;
     let checkpoint = relay.account()?.checkpoint;
     let size = view.leaf_count() as usize;
-    let headers = fetch_headers(checkpoint.hash, size, &chains.peers, chains.network)?;
+    let expected = view.root_at(size as u32);
+    let mut last_error = None;
+    for attempt in 1..=REBUILD_ATTEMPTS {
+        let rebuilt = fetch_headers(checkpoint.hash, size, &chains.peers, chains.network)
+            .and_then(|headers| tree_from_headers(checkpoint.height, headers))
+            .and_then(|rebuilt| {
+                ensure!(
+                    Some(rebuilt.root) == expected,
+                    "the tree rebuilt from Zcash P2P headers does not equal the relay's root: the \
+                     peers' chain differs from the relay's"
+                );
+                Ok(rebuilt)
+            });
+        match rebuilt {
+            Ok(rebuilt) => {
+                println!(
+                    "rebuilt {size} leaves from P2P headers; the root {} equals the relay's",
+                    hex::encode(rebuilt.root)
+                );
+                return Ok(rebuilt);
+            }
+            Err(e) => {
+                println!("rebuild attempt {attempt} of {REBUILD_ATTEMPTS} failed: {e}");
+                last_error = Some(e);
+            }
+        }
+    }
+    Err(last_error.expect("at least one attempt"))
+}
+
+fn tree_from_headers(checkpoint_height: u32, headers: Vec<p2p::RawHeader>) -> Result<Rebuilt> {
     let leaves = headers
         .iter()
         .enumerate()
         .map(|(i, h)| {
             Ok(block_leaf(
-                checkpoint.height + 1 + i as u32,
+                checkpoint_height + 1 + i as u32,
                 &merkle_root(h),
             )?)
         })
         .collect::<Result<Vec<_>>>()?;
     let tree = FinalBlockTree::new(leaves);
-    let root = tree.root(size);
-    ensure!(
-        view.root_at(size as u32) == Some(root),
-        "the tree rebuilt from Zcash P2P headers does not equal the relay's root: the peers' chain \
-         differs from the relay's"
-    );
-    println!(
-        "rebuilt {size} leaves from P2P headers; the root {} equals the relay's",
-        hex::encode(root)
-    );
+    let root = tree.root(headers.len());
     Ok(Rebuilt {
         headers,
         tree,
@@ -716,25 +794,54 @@ mod tests {
     fn the_payer_pays_only_into_the_agreed_mint_and_amount() {
         let e = escrow();
         let (payer, relay, mint) = (e.payout, e.relay, e.mint);
-        check_terms(&e, &payer, &relay, &mint, 5_000_000, 0).unwrap();
-        check_terms(&e, &payer, &relay, &mint, 1, 0).unwrap();
+        let terms = |mint, min_amount, max_bond| Terms {
+            mint,
+            min_amount,
+            max_bond,
+            accept_private_only: false,
+        };
+        check_terms(&e, &payer, &relay, &terms(mint, 5_000_000, 0)).unwrap();
+        check_terms(&e, &payer, &relay, &terms(mint, 1, 0)).unwrap();
         // A worthless token locked against the right payout and relay.
         let other = Address::new_from_array([9; 32]);
-        assert!(check_terms(&e, &payer, &relay, &other, 1, 0).is_err());
+        assert!(check_terms(&e, &payer, &relay, &terms(other, 1, 0)).is_err());
         // Underfunded.
-        assert!(check_terms(&e, &payer, &relay, &mint, 5_000_001, 0).is_err());
+        assert!(check_terms(&e, &payer, &relay, &terms(mint, 5_000_001, 0)).is_err());
         // Another payout wallet, another relay, a required Bond, a closed Escrow.
-        assert!(check_terms(&e, &other, &relay, &mint, 1, 0).is_err());
-        assert!(check_terms(&e, &payer, &other, &mint, 1, 0).is_err());
+        assert!(check_terms(&e, &other, &relay, &terms(mint, 1, 0)).is_err());
+        assert!(check_terms(&e, &payer, &other, &terms(mint, 1, 0)).is_err());
         // A Bond above the agreed maximum is refused, one within it accepted.
         let with_bond = Escrow {
             bond_required: 100,
             ..e.clone()
         };
-        assert!(check_terms(&with_bond, &payer, &relay, &mint, 1, 99).is_err());
-        assert!(check_terms(&with_bond, &payer, &relay, &mint, 1, 100).is_ok());
-        assert!(check_terms(&with_bond, &payer, &relay, &mint, 1, 0).is_err());
+        assert!(check_terms(&with_bond, &payer, &relay, &terms(mint, 1, 99)).is_err());
+        assert!(check_terms(&with_bond, &payer, &relay, &terms(mint, 1, 100)).is_ok());
+        assert!(check_terms(&with_bond, &payer, &relay, &terms(mint, 1, 0)).is_err());
         let closed = Escrow { state: 1, ..e };
-        assert!(check_terms(&closed, &payer, &relay, &mint, 1, 0).is_err());
+        assert!(check_terms(&closed, &payer, &relay, &terms(mint, 1, 0)).is_err());
+    }
+
+    #[test]
+    fn a_private_only_escrow_needs_the_payers_explicit_consent() {
+        // A Payee can fill the payment's block past the circuit's 256 transactions; a private-only
+        // Escrow then cannot be claimed at all, so the Payer must agree to that risk.
+        let e = Escrow {
+            claim_mode: PRIVATE_ONLY,
+            ..escrow()
+        };
+        let mut terms = Terms {
+            mint: e.mint,
+            min_amount: 1,
+            max_bond: 0,
+            accept_private_only: false,
+        };
+        let refused = check_terms(&e, &e.payout, &e.relay, &terms).unwrap_err();
+        assert!(refused.to_string().contains("--accept-private-only"));
+        terms.accept_private_only = true;
+        check_terms(&e, &e.payout, &e.relay, &terms).unwrap();
+        // A Reveal Claim Escrow needs no consent.
+        terms.accept_private_only = false;
+        check_terms(&escrow(), &e.payout, &e.relay, &terms).unwrap();
     }
 }

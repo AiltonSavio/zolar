@@ -15,6 +15,22 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use zolar_claim::private_claim::{CircuitInput, ProofBytes, public_from_snarkjs};
 
+/// Name of a proving run's private directory, followed by the process ID that owns it.
+const PREFIX: &str = "claim-proof-";
+
+fn process_runs(pid: u32) -> bool {
+    Path::new("/proc").join(pid.to_string()).exists()
+}
+
+/// Where proving runs put their private directory when the user names none: the per-user runtime
+/// directory (a tmpfs on Linux, mode 0700, emptied at logout and reboot), so a witness left by a killed
+/// run never reaches a disk or a repository; otherwise `.zolar-work` under the current directory.
+pub fn default_work_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(|d| PathBuf::from(d).join("zolar-work"))
+        .unwrap_or_else(|| PathBuf::from(".zolar-work"))
+}
+
 pub struct Prover {
     /// `circuits/scripts/prove.sh` of this repository.
     pub script: PathBuf,
@@ -52,17 +68,22 @@ impl Prover {
             self.depth
         );
         std::fs::create_dir_all(work)?;
-        // A run that was killed leaves its directory; a witness must not outlive it.
+        // A run that was killed leaves its directory; a witness must not outlive it. A directory
+        // whose process still runs belongs to a claim in progress and stays.
         for entry in std::fs::read_dir(work)?.flatten() {
-            if entry
-                .file_name()
+            let name = entry.file_name();
+            let Some(pid) = name
                 .to_string_lossy()
-                .starts_with("claim-proof-")
-            {
+                .strip_prefix(PREFIX)
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            if !pid.parse().is_ok_and(process_runs) {
                 let _ = std::fs::remove_dir_all(entry.path());
             }
         }
-        let dir = work.join(format!("claim-proof-{}", std::process::id()));
+        let dir = work.join(format!("{PREFIX}{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
         let result = self.run(input, &dir);
@@ -186,14 +207,30 @@ mod tests {
     }
 
     #[test]
-    fn the_witness_of_a_killed_earlier_run_is_removed() {
+    fn the_witness_of_a_killed_earlier_run_is_removed_and_a_running_ones_kept() {
         let (dir, prover) = setup(PUBLIC);
         let work = dir.path().join("work");
-        let stale = work.join("claim-proof-99999");
+        let mut finished = std::process::Command::new("true").spawn().unwrap();
+        finished.wait().unwrap();
+        let stale = work.join(format!("claim-proof-{}", finished.id()));
         std::fs::create_dir_all(&stale).unwrap();
         std::fs::write(stale.join("input.json"), "secret").unwrap();
+        let mut running = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let concurrent = work.join(format!("claim-proof-{}", running.id()));
+        std::fs::create_dir_all(&concurrent).unwrap();
+
         prover.prove(&inputs_of(PUBLIC), &work).unwrap();
-        assert!(!stale.exists());
+        let concurrent_kept = concurrent.exists();
+        running.kill().unwrap();
+        running.wait().unwrap();
+        assert!(!stale.exists(), "a dead run's witness is removed");
+        assert!(
+            concurrent_kept,
+            "a running claim's directory is not touched"
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use zolar_cli::{
-    DEVNET_RPC, Network, default_explorer, default_relay,
+    DEVNET_RPC, Network, default_relay,
     payee::{CreateEscrow, RefundArgs, create_escrow, refund},
     solana::parse_address,
 };
@@ -64,9 +64,6 @@ enum Command {
         /// The Header Relay (default: the devnet relay of the chosen Zcash network).
         #[arg(long, env = "ZOLAR_RELAY")]
         relay: Option<String>,
-        /// The block explorer (default: the one of the chosen Zcash network).
-        #[arg(long, env = "ZOLAR_EXPLORER")]
-        explorer: Option<String>,
         /// The Zcash network the payment is on: testnet or mainnet.
         #[arg(long, env = "ZOLAR_NETWORK", default_value = "testnet")]
         network: Network,
@@ -104,14 +101,12 @@ fn main() -> Result<()> {
             private_only,
             rpc_url,
             relay,
-            explorer,
             network,
         } => {
             let relay = relay.unwrap_or_else(|| default_relay(network).to_string());
             create_escrow(&CreateEscrow {
                 network,
                 rpc_url,
-                explorer_url: explorer.unwrap_or_else(|| default_explorer(network).to_string()),
                 keypair,
                 relay: parse_address(&relay)?,
                 pczt,

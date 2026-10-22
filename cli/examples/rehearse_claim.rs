@@ -121,7 +121,6 @@ fn main() -> Result<()> {
 
     let chains = Chains {
         rpc_url: a.rpc_url.clone(),
-        explorer_url,
         relay,
         peers: seeders(a.network),
         network: a.network,

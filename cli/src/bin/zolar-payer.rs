@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use solana_signer::Signer;
 use zolar_cli::{
-    DEVNET_RPC, Network, default_explorer, default_relay,
+    DEVNET_RPC, Network, default_relay,
     devtool::Devtool,
     payer::{self, Chains, Check, Claim, PrivateClaimArgs},
     prover::Prover,
@@ -37,9 +37,6 @@ struct Net {
     /// The Header Relay (default: the devnet relay of the chosen Zcash network).
     #[arg(long, env = "ZOLAR_RELAY", global = true)]
     relay: Option<String>,
-    /// The block explorer (default: the one of the chosen Zcash network).
-    #[arg(long, env = "ZOLAR_EXPLORER", global = true)]
-    explorer: Option<String>,
     /// The Zcash network of the payment: testnet or mainnet.
     #[arg(long, env = "ZOLAR_NETWORK", default_value = "testnet", global = true)]
     network: Network,
@@ -82,9 +79,24 @@ struct Terms {
     /// The most tokens the Payer agreed to lock as a Bond (0: the Escrow must require none).
     #[arg(long, default_value_t = 0)]
     max_bond: u64,
+    /// Accept a private-only Escrow (no Reveal Claim). A payment mined in a block of more than 256
+    /// transactions can then never be claimed, and the Payee gets the tokens back.
+    #[arg(long)]
+    accept_private_only: bool,
     /// Seconds to wait for the Escrow to be finalized on Solana before paying.
     #[arg(long, default_value_t = 120)]
     finalized_wait_secs: u64,
+}
+
+impl Terms {
+    fn agreed(&self) -> Result<payer::Terms> {
+        Ok(payer::Terms {
+            mint: parse_address(&self.mint)?,
+            min_amount: self.min_amount,
+            max_bond: self.max_bond,
+            accept_private_only: self.accept_private_only,
+        })
+    }
 }
 
 #[derive(Subcommand)]
@@ -123,7 +135,7 @@ enum Command {
         #[arg(long)]
         accept_freeze_authority: bool,
     },
-    /// Check the Escrow, then prove, sign and broadcast, and wait until the payment is mined.
+    /// Check the Escrow, prove and sign, lock the Bond if one is required, then broadcast.
     Pay {
         #[command(flatten)]
         zcash: Zcash,
@@ -143,6 +155,8 @@ enum Command {
     },
     /// Lock the Bond the Escrow requires (`pay` does this itself before it broadcasts).
     DepositBond {
+        #[command(flatten)]
+        terms: Terms,
         #[arg(long)]
         escrow: String,
     },
@@ -175,9 +189,10 @@ enum Command {
         /// Memory cap for each proving step (the prover peaks at about 1.8 GiB).
         #[arg(long, env = "ZOLAR_MEM_MAX", default_value = "2500M")]
         mem_max: String,
-        /// Directory for the proof's temporary files; the witness is deleted after proving.
-        #[arg(long, env = "ZOLAR_WORK_DIR", default_value = ".zolar-work")]
-        work_dir: PathBuf,
+        /// Directory for the proof's temporary files; the witness is deleted after proving (default:
+        /// `$XDG_RUNTIME_DIR/zolar-work`, a tmpfs, else `.zolar-work`).
+        #[arg(long, env = "ZOLAR_WORK_DIR")]
+        work_dir: Option<PathBuf>,
         /// Times to prove again when the root ages out of the relay's last 128 while proving.
         #[arg(long, default_value_t = 3)]
         max_attempts: u32,
@@ -194,11 +209,6 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| default_relay(network).to_string());
     let chains = Chains {
         rpc_url: cli.net.rpc_url.clone(),
-        explorer_url: cli
-            .net
-            .explorer
-            .clone()
-            .unwrap_or_else(|| default_explorer(network).to_string()),
         relay: parse_address(&relay)?,
         peers: zolar_cli::seeders(network),
         network,
@@ -253,9 +263,7 @@ fn main() -> Result<()> {
                 pczt: &pczt,
                 salt: read_salt(&salt_file)?,
                 accept_freeze_authority,
-                expected_mint: parse_address(&terms.mint)?,
-                min_amount: terms.min_amount,
-                max_bond: terms.max_bond,
+                terms: terms.agreed()?,
                 finalized_wait: std::time::Duration::from_secs(terms.finalized_wait_secs),
             })?;
         }
@@ -275,20 +283,32 @@ fn main() -> Result<()> {
                 pczt: &pczt,
                 salt: read_salt(&salt_file)?,
                 accept_freeze_authority,
-                expected_mint: parse_address(&terms.mint)?,
-                min_amount: terms.min_amount,
-                max_bond: terms.max_bond,
+                terms: terms.agreed()?,
                 finalized_wait: std::time::Duration::from_secs(terms.finalized_wait_secs),
             })?;
-            payer::deposit_bond(&chains, &keypair_path()?, parse_address(&escrow)?)?;
-            payer::pay(&zcash.tool(), &checked, &pczt, &work_dir)?;
+            let devtool = zcash.tool();
+            // The Bond is locked only once a signed transaction exists: a failed proof or signature
+            // must not leave it in an Escrow that will be refunded.
+            let signed = payer::sign(&devtool, &checked, &pczt, &work_dir)?;
+            payer::deposit_bond(
+                &chains,
+                &keypair_path()?,
+                checked.escrow_address,
+                &terms.agreed()?,
+            )?;
+            payer::broadcast(&chains, &devtool, &checked, &signed)?;
             println!(
                 "payment {} broadcast; run `claim` or `private-claim` once its block is final",
                 checked.txid
             );
         }
-        Command::DepositBond { escrow } => {
-            payer::deposit_bond(&chains, &keypair_path()?, parse_address(&escrow)?)?;
+        Command::DepositBond { terms, escrow } => {
+            payer::deposit_bond(
+                &chains,
+                &keypair_path()?,
+                parse_address(&escrow)?,
+                &terms.agreed()?,
+            )?;
         }
         Command::Claim {
             escrow,
@@ -330,7 +350,7 @@ fn main() -> Result<()> {
                     salt: read_salt(&salt_file)?,
                 },
                 prover: &prover,
-                work_dir,
+                work_dir: work_dir.unwrap_or_else(zolar_cli::prover::default_work_dir),
                 max_attempts,
             })?;
         }

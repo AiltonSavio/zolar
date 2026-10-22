@@ -13,9 +13,7 @@ use zolar_pczt::inspect;
 use zolar_relayer::rpc::HttpRpc;
 
 use crate::{
-    Network, block_seconds,
-    explorer::Explorer,
-    internal_txid, pczt_network, random_salt,
+    Network, block_seconds, internal_txid, pczt_network, random_salt,
     solana::{
         RefundStep, associated_token_account, create_ata_idempotent, load_keypair,
         parse_token_account, read_account, read_escrow, read_relay, refund_step, send,
@@ -29,12 +27,12 @@ pub struct CreateEscrow {
     /// The Zcash network of the payment (decides how the viewing key is read).
     pub network: Network,
     pub rpc_url: String,
-    pub explorer_url: String,
     pub keypair: PathBuf,
     pub relay: Address,
     pub pczt: PathBuf,
     pub ufvk_file: PathBuf,
-    /// The text the Payee asked the Payer to put in the memo (the replay challenge).
+    /// The text the Payee asked the Payer to put in the memo: the replay challenge. It must be new
+    /// for every trade, so no transaction made before the trade can carry it.
     pub expect_memo: String,
     /// The least the PCZT must pay this Payee, in zatoshis.
     pub min_zats: u64,
@@ -109,12 +107,10 @@ pub fn create_escrow(a: &CreateEscrow) -> Result<Created> {
         (report.expiry_height - tip) * block_seconds(a.network)
     );
 
-    let explorer = Explorer::new(&a.explorer_url);
-    ensure!(
-        !explorer.knows(&report.txid)?,
-        "the explorer already knows transaction {}: it is not a new payment",
-        report.txid
-    );
+    // No explorer is asked whether the transaction is new: the lookup would hand it the transaction
+    // ID together with this Payee's address, right before the Escrow appears on Solana. The fresh
+    // memo challenge already rules out an old payment, and the Escrow only accepts blocks from its
+    // own height window.
 
     let txid = internal_txid(&report.txid)?;
     let salt = random_salt();

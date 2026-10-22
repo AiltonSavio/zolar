@@ -6,10 +6,9 @@
 //! * Merkle roots: Zcash P2P `getheaders` against live peers of the chosen network. A header carries its Merkle root,
 //!   headers are cheap (160 per request, no key, no account) and are the same bytes the Relayer sent
 //!   to the Header Relay. The rebuilt tree must reproduce the Relay's own root, which pins every root.
-//! * Transaction IDs: the explorer, because the Relay needs the whole block's txid list and a header
-//!   has none. It is untrusted: the list is accepted only if its Merkle root equals the header's.
-//!   `getdata` for the full block over P2P would remove the explorer, but the txid of an Ironwood (v6)
-//!   transaction is a ZIP 244 digest that needs librustzcash to parse every transaction.
+//! * Transaction IDs: the full block over P2P `getdata`, requested by block hash. Every transaction is
+//!   parsed with librustzcash to compute its ZIP 244 ID from the bytes, and the list is accepted only
+//!   if its Merkle root equals the header's. No explorer is asked.
 
 use std::net::SocketAddr;
 
@@ -57,6 +56,8 @@ pub fn fetch_headers(
     addresses.sort();
     addresses.dedup();
     ensure!(!addresses.is_empty(), "no Zcash {network:?} peers found");
+    // A new random order on every call, so a retry after a bad answer asks other peers first.
+    addresses.shuffle(&mut rand::thread_rng());
     let mut out: Vec<RawHeader> = Vec::with_capacity(count);
     let mut tip = start;
     let mut peer: Option<Peer<std::net::TcpStream>> = None;

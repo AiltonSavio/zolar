@@ -4,3 +4,4 @@ AGENTS.md
 CLAUDE.md
 node_modules/
 __pycache__/
+.zolar-work/

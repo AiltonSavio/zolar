@@ -119,8 +119,35 @@ impl Devtool {
         Ok(())
     }
 
-    pub fn send(&self, combined: &Path) -> Result<()> {
-        self.pczt(&["send".as_ref(), combined.as_os_str()])?;
-        Ok(())
+    /// Broadcasts the combined PCZT and returns the transaction ID zcash-devtool printed (display order).
+    pub fn send(&self, combined: &Path) -> Result<String> {
+        let stdout = self.pczt(&["send".as_ref(), combined.as_os_str()])?;
+        sent_txid(&stdout)
+    }
+}
+
+/// `pczt send` prints "Sending transaction..." and then the transaction ID on its last line.
+fn sent_txid(stdout: &str) -> Result<String> {
+    let last = stdout.lines().map(str::trim).rfind(|l| !l.is_empty());
+    match last {
+        Some(txid) if txid.len() == 64 && txid.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            Ok(txid.to_ascii_lowercase())
+        }
+        _ => bail!("zcash-devtool send printed no transaction ID: {stdout:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sent_txid;
+
+    #[test]
+    fn the_sent_transaction_id_is_read_from_the_last_line() {
+        let txid = "3dbb300eb730873d10f600c3c04c713b08aefde6368acdb2d34b57e26792e814";
+        let out = format!("Sending transaction...\n{txid}\n");
+        assert_eq!(sent_txid(&out).unwrap(), txid);
+        assert!(sent_txid("Sending transaction...\n").is_err());
+        assert!(sent_txid("").is_err());
+        assert!(sent_txid(&format!("{txid}\nsomething else\n")).is_err());
     }
 }
