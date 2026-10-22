@@ -123,6 +123,42 @@ fn print_event(event: Event) {
     });
 }
 
+/// Scheme and host of an RPC URL: the path or query of a paid endpoint often holds its API key, which
+/// must not reach the log.
+fn rpc_host(url: &str) -> String {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.rsplit('@').next().unwrap_or(host);
+    if scheme.is_empty() {
+        host.to_string()
+    } else {
+        format!("{scheme}://{host}")
+    }
+}
+
+/// Refuses to feed a relay headers of another Zcash network than its Checkpoint's: each would be
+/// rejected and paid for.
+fn check_relay_network(chain: &mut RelayClient<HttpRpc>, network: Network) -> Result<(), String> {
+    let mut attempts = 0;
+    let found = loop {
+        match chain.checkpoint_network() {
+            Ok(found) => break found,
+            Err(e) if attempts < 5 => {
+                attempts += 1;
+                log(format!("retry reading the relay after: {e}"));
+                sleep(Duration::from_secs(5 * attempts));
+            }
+            Err(e) => return Err(format!("cannot read the relay: {e}")),
+        }
+    };
+    if found != network.checkpoint_network() {
+        return Err(format!(
+            "the relay's Checkpoint is on Zcash network {found}, but ZOLAR_NETWORK is {network:?}"
+        ));
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let rpc_url = var("ZOLAR_RPC_URL")?;
     let payer = payer()?;
@@ -133,9 +169,11 @@ fn run() -> Result<(), String> {
     let status_rpc = HttpRpc::new(&rpc_url);
 
     log(format!(
-        "relayer start network={network:?} relay={relay} payer={payer_address} rpc={rpc_url}"
+        "relayer start network={network:?} relay={relay} payer={payer_address} rpc={}",
+        rpc_host(&rpc_url)
     ));
-    let chain = RelayClient::new(HttpRpc::new(&rpc_url), payer, relay);
+    let mut chain = RelayClient::new(HttpRpc::new(&rpc_url), payer, relay);
+    check_relay_network(&mut chain, network)?;
     let mut follower = Follower::new(chain, peers(network), print_event);
     let mut failures = 0u32;
     let mut last_status = Instant::now() - STATUS_EVERY;
@@ -246,10 +284,11 @@ fn init() -> Result<(), String> {
     let mut pool = peers(network);
     let recent = newest_headers(&mut pool, start_height, start, CONTEXT + lag + 1)?;
     let tip = recent.last().map(|(h, _)| *h).unwrap();
-    let end = recent.len() - lag;
-    if end < CONTEXT {
-        return Err(format!("only {} headers found", recent.len()));
-    }
+    let end = recent
+        .len()
+        .checked_sub(lag)
+        .filter(|end| *end >= CONTEXT)
+        .ok_or_else(|| format!("only {} headers found", recent.len()))?;
     let window: Vec<RawHeader> = recent[end - CONTEXT..end].iter().map(|(_, h)| *h).collect();
     let checkpoint = checkpoint_from(&window, recent[end - 1].0, finality_depth, nonce, network)?;
     log(format!(
@@ -283,5 +322,27 @@ fn main() {
     if let Err(e) = result {
         eprintln!("error: {e}");
         process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rpc_host;
+
+    #[test]
+    fn the_logged_rpc_address_keeps_no_key() {
+        assert_eq!(
+            rpc_host("https://devnet.helius-rpc.com/?api-key=secret"),
+            "https://devnet.helius-rpc.com"
+        );
+        assert_eq!(
+            rpc_host("https://user:secret@rpc.example.com/v2/secret"),
+            "https://rpc.example.com"
+        );
+        assert_eq!(
+            rpc_host("https://api.devnet.solana.com"),
+            "https://api.devnet.solana.com"
+        );
+        assert_eq!(rpc_host("localhost:8899"), "localhost:8899");
     }
 }

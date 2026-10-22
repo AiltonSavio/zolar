@@ -3,7 +3,7 @@ use std::{
     fmt,
     io::{self, Read, Write},
     net::{TcpStream, ToSocketAddrs},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use rand::Rng;
@@ -28,6 +28,10 @@ const MAINNET_MIN_PROTOCOL: i32 = 170_100;
 /// The NU7 activation height on the Zcash testnet.
 const TESTNET_NU7_HEIGHT: u32 = 4_465_026;
 const MAX_HANDSHAKE_MESSAGES: usize = 50;
+/// The most one request (a handshake, `getheaders`, `getdata`) may take, however the peer paces its
+/// bytes. The socket's read timeout bounds a single read; without this a peer sending one byte just
+/// inside it would hold a request open for days.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_PAYLOAD: usize = 4 * 1024 * 1024;
 const USER_AGENT: &[u8] = b"/zolar-relayer:0.1/";
 
@@ -267,16 +271,42 @@ pub fn parse_headers(payload: &[u8]) -> Result<Vec<RawHeader>, P2pError> {
     Ok(headers)
 }
 
+/// Reads from `inner` until `until`, then fails every read with `TimedOut`, as a socket timeout would.
+struct Deadline<'a, R> {
+    inner: &'a mut R,
+    until: Instant,
+}
+
+impl<R: Read> Read for Deadline<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if Instant::now() >= self.until {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        self.inner.read(buf)
+    }
+}
+
 /// A handshaken connection to one peer.
 pub struct Peer<S> {
     stream: S,
     network: Network,
     version: i32,
+    request_timeout: Duration,
 }
 
 impl<S: Read + Write> Peer<S> {
     /// Exchanges `version` and `verack`; refuses peers older than the network's chain needs.
-    pub fn handshake(mut stream: S, network: Network) -> Result<Self, P2pError> {
+    pub fn handshake(stream: S, network: Network) -> Result<Self, P2pError> {
+        Self::handshake_within(stream, network, REQUEST_TIMEOUT)
+    }
+
+    /// [`Self::handshake`] with `request_timeout` for the handshake and every later request.
+    pub fn handshake_within(
+        mut stream: S,
+        network: Network,
+        request_timeout: Duration,
+    ) -> Result<Self, P2pError> {
+        let until = Instant::now() + request_timeout;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
@@ -293,7 +323,13 @@ impl<S: Read + Write> Peer<S> {
             if messages > MAX_HANDSHAKE_MESSAGES {
                 return protocol("peer never finished the handshake");
             }
-            let (command, payload) = read_message(network, &mut stream)?;
+            let (command, payload) = read_message(
+                network,
+                &mut Deadline {
+                    inner: &mut stream,
+                    until,
+                },
+            )?;
             match command.as_str() {
                 "version" if payload.len() >= 4 => {
                     version = Some(i32::from_le_bytes(payload[..4].try_into().unwrap()));
@@ -312,7 +348,18 @@ impl<S: Read + Write> Peer<S> {
             stream,
             network,
             version,
+            request_timeout,
         })
+    }
+
+    fn read_until(&mut self, until: Instant) -> Result<(String, Vec<u8>), P2pError> {
+        read_message(
+            self.network,
+            &mut Deadline {
+                inner: &mut self.stream,
+                until,
+            },
+        )
     }
 
     pub fn protocol_version(&self) -> i32 {
@@ -331,8 +378,9 @@ impl<S: Read + Write> Peer<S> {
             "getheaders",
             &getheaders_payload(locator),
         ))?;
+        let until = Instant::now() + self.request_timeout;
         for _ in 0..60 {
-            let (command, payload) = match read_message(self.network, &mut self.stream) {
+            let (command, payload) = match self.read_until(until) {
                 Ok(message) => message,
                 // Zebra peers on mainnet stay silent when no block follows the locator: that is
                 // "nothing newer", not a dead peer (a dead peer resets or closes the connection).
@@ -359,8 +407,9 @@ impl<S: Read + Write> Peer<S> {
             "getdata",
             &getdata_block_payload(hash),
         ))?;
+        let until = Instant::now() + self.request_timeout;
         for _ in 0..60 {
-            let (command, payload) = read_message(self.network, &mut self.stream)?;
+            let (command, payload) = self.read_until(until)?;
             match command.as_str() {
                 "block" => return Ok(payload),
                 "notfound" => return protocol("the peer does not have that block"),
@@ -402,6 +451,76 @@ pub fn resolve(hosts: &[String], network: Network) -> Vec<std::net::SocketAddr> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A peer that starts a 1 MB `block` message and then sends one byte every 20 ms: each read is
+    /// quick, the message never ends.
+    struct Trickle {
+        sent: usize,
+    }
+
+    impl Read for Trickle {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            std::thread::sleep(Duration::from_millis(20));
+            let head = {
+                let mut h = encode_message(Network::Testnet, "block", &[]);
+                h[16..20].copy_from_slice(&1_000_000u32.to_le_bytes());
+                h
+            };
+            buf[0] = head.get(self.sent).copied().unwrap_or(0);
+            self.sent += 1;
+            Ok(1)
+        }
+    }
+
+    impl Write for Trickle {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn trickling_peer(request_timeout: Duration) -> Peer<Trickle> {
+        Peer {
+            stream: Trickle { sent: 0 },
+            network: Network::Testnet,
+            version: PROTOCOL,
+            request_timeout,
+        }
+    }
+
+    #[test]
+    fn a_peer_that_drips_bytes_cannot_hold_a_request_past_its_deadline() {
+        let started = Instant::now();
+        let err = trickling_peer(Duration::from_millis(300))
+            .getdata_block(&[7; 32])
+            .unwrap_err();
+        assert!(
+            matches!(&err, P2pError::Io(e) if e.kind() == io::ErrorKind::TimedOut),
+            "{err}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+
+        // Inside a message the deadline is an error, not "nothing newer".
+        let started = Instant::now();
+        assert!(trickling_peer(Duration::from_millis(300))
+            .getheaders(&[[7; 32]])
+            .is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_handshake_with_a_dripping_peer_ends_at_the_deadline() {
+        let started = Instant::now();
+        let result = Peer::handshake_within(
+            Trickle { sent: 0 },
+            Network::Testnet,
+            Duration::from_millis(300),
+        );
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     #[test]
     fn a_block_request_names_one_block_inventory_item() {

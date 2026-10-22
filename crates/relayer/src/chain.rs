@@ -89,6 +89,11 @@ impl<C: Cluster> RelayClient<C> {
         &mut self.cluster
     }
 
+    /// The Zcash network byte of the relay's Checkpoint (`p2p::Network::checkpoint_network`).
+    pub fn checkpoint_network(&mut self) -> Result<u8, ChainError> {
+        Ok(self.read_relay()?.checkpoint.network)
+    }
+
     fn buffer(&self) -> Address {
         HeaderBuffer::find_pda(&self.relay, &self.payer.pubkey(), self.nonce).0
     }
