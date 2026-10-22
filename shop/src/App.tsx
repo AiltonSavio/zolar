@@ -30,13 +30,15 @@ export function App({ config }: { config: ShopConfig }) {
   const [payout, setPayout] = useState('');
   const [phase, setPhase] = useState<Phase>({ kind: 'shopping' });
   const [error, setError] = useState<string | null>(null);
+  // Bumped when a checkout ends, so the stock shown is read again.
+  const [stockVersion, setStockVersion] = useState(0);
 
   useEffect(() => {
     merchant
       .items()
       .then((items) => setEntry(items.find((i) => i.item.id === config.itemId) ?? null))
       .catch((e: Error) => setError(`The shop is not reachable: ${e.message}`));
-  }, [merchant, config.itemId]);
+  }, [merchant, config.itemId, stockVersion]);
 
   useEffect(() => {
     let live = true;
@@ -73,6 +75,8 @@ export function App({ config }: { config: ShopConfig }) {
       approvalWindow?.close();
       setError((e as Error).message);
       setPhase({ kind: 'shopping' });
+    } finally {
+      setStockVersion((v) => v + 1);
     }
   }
 
