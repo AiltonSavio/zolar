@@ -4,13 +4,16 @@
 //! Payment Commitment and the Escrow use the internal order. [`internal_txid`] converts.
 
 pub mod blocks;
+pub mod checkout;
 pub mod devtool;
 pub mod explorer;
+pub mod merchant;
 pub mod payee;
 pub mod payer;
 pub mod prover;
 pub mod rpc;
 pub mod solana;
+pub mod wallet;
 
 use anyhow::{Context, Result, bail};
 
@@ -91,7 +94,12 @@ pub fn random_salt() -> [u8; 32] {
 pub fn read_salt(path: &std::path::Path) -> Result<[u8; 32]> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let bytes = hex::decode(text.trim()).context("salt file is not hex")?;
+    parse_salt(&text).with_context(|| format!("salt file {}", path.display()))
+}
+
+/// A salt as 64 hex characters.
+pub fn parse_salt(hex_salt: &str) -> Result<[u8; 32]> {
+    let bytes = hex::decode(hex_salt.trim()).context("salt is not hex")?;
     match bytes.try_into() {
         Ok(salt) => Ok(salt),
         Err(_) => bail!("salt is not 32 bytes"),

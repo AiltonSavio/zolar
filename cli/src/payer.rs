@@ -440,7 +440,10 @@ fn tree_from_headers(checkpoint_height: u32, headers: Vec<p2p::RawHeader>) -> Re
 
 pub struct Claim<'a> {
     pub chains: &'a Chains,
+    /// Signs and pays the fees of the claim; it need not be the payout wallet.
     pub keypair: PathBuf,
+    /// The wallet the Payer agreed the tokens go to. The Escrow must pay exactly this one.
+    pub payout: Address,
     pub escrow_address: Address,
     pub txid: &'a str,
     pub salt: [u8; 32],
@@ -538,19 +541,29 @@ fn locate_payment(
     }
 }
 
-fn payout_account(rpc: &mut HttpRpc, payer: &Keypair, escrow: &Escrow) -> Result<Address> {
-    let payout_token = associated_token_account(&payer.pubkey(), &escrow.mint);
-    // The Payer's token account is made in its own transaction: with it the claim would not fit one.
+/// The payout wallet's token account for the Escrow's mint, created (and paid for by `fee_payer`) if
+/// missing: in its own transaction, because with it the claim would not fit one.
+fn payout_account(rpc: &mut HttpRpc, fee_payer: &Keypair, escrow: &Escrow) -> Result<Address> {
+    let payout_token = associated_token_account(&escrow.payout, &escrow.mint);
     if rpc
         .account(&payout_token)
         .map_err(anyhow::Error::msg)?
         .is_none()
     {
-        let ata = create_ata_idempotent(&payer.pubkey(), &payer.pubkey(), &escrow.mint);
-        let created = send(rpc, &[ata], payer)?;
+        let ata = create_ata_idempotent(&fee_payer.pubkey(), &escrow.payout, &escrow.mint);
+        let created = send(rpc, &[ata], fee_payer)?;
         println!("Payer token account : {payout_token} ({created})");
     }
     Ok(payout_token)
+}
+
+fn ensure_payout(escrow: &Escrow, agreed: &Address) -> Result<()> {
+    ensure!(
+        &escrow.payout == agreed,
+        "the Escrow pays {}, not the agreed wallet {agreed}",
+        escrow.payout
+    );
+    Ok(())
 }
 
 /// Waits for the payment's block to be final, finds it, builds the Inclusion Proof and the tree path,
@@ -560,6 +573,7 @@ pub fn reveal_claim(c: &Claim) -> Result<String> {
     let mut rpc = HttpRpc::new(&c.chains.rpc_url);
     let payer = load_keypair(&c.keypair)?;
     let escrow = read_escrow(&read_account(&mut rpc, &c.escrow_address)?)?;
+    ensure_payout(&escrow, &c.payout)?;
     let me = internal_txid(c.txid)?;
     let found = locate_payment(c.chains, &mut rpc, &escrow, &me)?;
     let payout_token = payout_account(&mut rpc, &payer, &escrow)?;
@@ -620,6 +634,8 @@ pub struct PrivateClaimArgs<'a> {
     /// Directory for the proof's temporary files (the witness is deleted after proving).
     pub work_dir: PathBuf,
     pub max_attempts: u32,
+    /// Called when the payment's block is final and proving starts.
+    pub on_proving: Option<&'a (dyn Fn() + Sync)>,
 }
 
 /// Sends a Private Claim: finds the payment's block, builds the witness and proves it on this
@@ -630,11 +646,7 @@ pub fn private_claim(a: &PrivateClaimArgs) -> Result<String> {
     let mut rpc = HttpRpc::new(&c.chains.rpc_url);
     let payer = load_keypair(&c.keypair)?;
     let escrow = read_escrow(&read_account(&mut rpc, &c.escrow_address)?)?;
-    ensure!(
-        escrow.payout == payer.pubkey(),
-        "the Escrow pays {}, not this keypair",
-        escrow.payout
-    );
+    ensure_payout(&escrow, &c.payout)?;
     let me = internal_txid(c.txid)?;
     ensure!(
         zolar_claim::payment_commitment(&me, &c.salt)? == escrow.commitment,
@@ -707,6 +719,9 @@ fn prove_and_send(
         zolar_claim::payment_commitment(&me, &c.salt)?,
         input.public.commitment
     );
+    if let Some(on_proving) = a.on_proving {
+        on_proving();
+    }
     println!("proving on this machine (no network is used)");
     let proof = a.prover.prove(&input, &a.work_dir)?;
     println!("proof ready in {:.1} s", proof.took.as_secs_f64());

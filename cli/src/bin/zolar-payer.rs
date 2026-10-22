@@ -319,6 +319,7 @@ fn main() -> Result<()> {
             payer::reveal_claim(&Claim {
                 chains: &chains,
                 keypair: keypair_path()?,
+                payout: wallet()?,
                 escrow_address: parse_address(&escrow)?,
                 txid: &txid,
                 salt: read_salt(&salt_file)?,
@@ -345,6 +346,7 @@ fn main() -> Result<()> {
                 claim: Claim {
                     chains: &chains,
                     keypair: keypair_path()?,
+                    payout: wallet()?,
                     escrow_address: parse_address(&escrow)?,
                     txid: &txid,
                     salt: read_salt(&salt_file)?,
@@ -352,6 +354,7 @@ fn main() -> Result<()> {
                 prover: &prover,
                 work_dir: work_dir.unwrap_or_else(zolar_cli::prover::default_work_dir),
                 max_attempts,
+                on_proving: None,
             })?;
         }
     }

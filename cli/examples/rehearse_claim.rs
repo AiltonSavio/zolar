@@ -128,6 +128,7 @@ fn main() -> Result<()> {
     let claim = reveal_claim(&Claim {
         chains: &chains,
         keypair: a.payer_keypair,
+        payout: payer.pubkey(),
         escrow_address: escrow,
         txid: &txid,
         salt,
