@@ -237,7 +237,7 @@ pub fn html(body: String) -> Reply {
         .with_header(h("X-Frame-Options", "DENY"))
         .with_header(h(
             "Content-Security-Policy",
-            "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; form-action 'self'",
+            "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'",
         ))
         .with_header(h("Referrer-Policy", "no-referrer"))
 }

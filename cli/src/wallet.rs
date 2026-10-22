@@ -34,6 +34,9 @@ use crate::{
     solana::{parse_address, read_relay},
 };
 
+/// Seconds the customer has to approve a checkout (the merchant's order lapses about then too).
+const APPROVAL_SECS: u64 = 600;
+
 pub struct Config {
     pub port: u16,
     /// Shop pages that may ask this wallet to pay (exact origins).
@@ -347,10 +350,9 @@ impl Wallet {
             job.stage == Stage::AwaitingApproval,
             "this checkout was already decided"
         );
-        ensure!(
-            now() < job.created_at + 600,
-            "this approval expired; start the checkout again"
-        );
+        if self.expire_if_stale(&job)? {
+            bail!("this approval expired; start the checkout again");
+        }
         ensure!(
             digest == job.digest,
             "the terms changed since this page was shown"
@@ -559,12 +561,28 @@ impl Wallet {
         Some(heights)
     }
 
+    /// Ends a checkout nobody approved in time, so the page stops waiting. Nothing was paid.
+    fn expire_if_stale(&self, job: &Job) -> Result<bool> {
+        if job.stage != Stage::AwaitingApproval || now() < job.created_at + APPROVAL_SECS {
+            return Ok(false);
+        }
+        self.set_stage(
+            &job.id,
+            Stage::Failed {
+                reason: "the approval expired; nothing was paid".into(),
+            },
+        )?;
+        Ok(true)
+    }
+
     fn view(&self, id: &str, token: Option<&str>) -> Result<serde_json::Value> {
         let job = self.get(id).context("no such job")?;
         ensure!(
             token == Some(job.token.as_str()),
             "this job belongs to another page"
         );
+        self.expire_if_stale(&job)?;
+        let job = self.get(id).context("no such job")?;
         let mut stage = job.stage.clone();
         if let Stage::WaitingForFinality {
             tip, final_height, ..
@@ -589,7 +607,31 @@ impl Wallet {
         let e = checkout::escape;
         let zec = t.item.price_zats as f64 / 1e8;
         let decided = job.stage != Stage::AwaitingApproval;
+        let short = |s: &str| {
+            if s.chars().count() <= 14 {
+                s.to_string()
+            } else {
+                let head: String = s.chars().take(8).collect();
+                let tail: String = s
+                    .chars()
+                    .rev()
+                    .take(6)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                format!("{head}…{tail}")
+            }
+        };
+        let mark = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(include_bytes!("wallet-mark.png"))
+        );
         let fields = [
+            ("mark", mark),
+            ("address_short", e(&short(&t.zcash_address))),
+            ("mint_short", e(&short(&t.item.mint))),
+            ("payout_short", e(&short(&t.payout))),
             ("origin", e(&job.origin)),
             ("merchant_url", e(&job.merchant_url)),
             ("merchant", e(&t.merchant)),
@@ -856,6 +898,20 @@ mod tests {
     }
 
     #[test]
+    fn an_approval_left_too_long_ends_the_checkout_with_nothing_paid() {
+        let dir = tempdir();
+        let (w, rx, job) = wallet_with_job(&dir, Stage::AwaitingApproval, false);
+        w.update("job1", |j| j.created_at = now() - APPROVAL_SECS - 1)
+            .unwrap();
+        let v = w.view("job1", Some("tok")).unwrap();
+        assert_eq!(v["stage"], "failed");
+        assert!(v["reason"].as_str().unwrap().contains("nothing was paid"));
+        assert!(w.decide("secret", true, &job.digest).is_err());
+        assert!(rx.try_recv().is_err(), "nothing queued");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn a_rejected_checkout_is_never_queued() {
         let dir = tempdir();
         let (w, rx, job) = wallet_with_job(&dir, Stage::AwaitingApproval, false);
@@ -912,6 +968,8 @@ mod tests {
         assert!(page.contains("&lt;script&gt;"));
         assert!(!page.contains("<script>x"));
         assert!(page.contains("0.001"));
+        assert!(!page.contains("{{"), "every placeholder is filled");
+        assert!(page.contains("data:image/png;base64,"));
         let _ = std::fs::remove_dir_all(dir);
     }
 }
