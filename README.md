@@ -113,7 +113,7 @@ scripts/private-swap.sh                        # about 8 minutes: pay, wait for 
 
 The script runs the steps back to back because the payment expires 18 blocks (about 8 minutes on testnet) after the PCZT is made:
 
-1. `zolar-payer create-pczt`: the unsigned payment and its transaction ID.
+1. `zolar-payer create-pczt`: the unsigned payment and its transaction ID, plus the redacted copy for the Payee (`created.payee.pczt`). An unredacted PCZT carries the Payer's full viewing key, note values and change; never hand it to anyone.
 2. `zolar-payee create-escrow`: decrypts the PCZT with the viewing key, checks amount and memo, locks the tokens.
 3. `zolar-payer pay`: checks the Escrow and the relay, proves and signs, broadcasts.
 4. `zolar-payer private-claim` (or `claim`): waits for finality, finds the block over Zcash P2P, proves locally, claims.
@@ -127,7 +127,7 @@ Run `zolar-payer --help` and `zolar-payee --help` for every option, `zolar-payee
 |---|---|---|
 | Anyone reading Solana | The Escrow: Payee, payout wallet, mint, amount, creation tip, expiry height, commitment; when it is claimed or refunded | With a Private Claim: the Zcash transaction ID, its block, its position, the salt |
 | Anyone reading Solana, Reveal Claim | Also the transaction ID and salt, so the Zcash payment is linked to the Escrow | |
-| Payee | The transaction ID, amount and memo (it checks them before locking) | The Payer's other notes, balance or change |
+| Payee | The transaction ID, and the amount and memo of its own output (it checks them before locking) | The Payer's viewing key, other notes, the values of the notes spent, or the change: the Payer hands it a redacted copy of the unsigned payment (`created.payee.pczt`) |
 | Zcash P2P peers asked for blocks | That some node asked for the headers since the Checkpoint and for the blocks of a recent window, each block by hash from a random peer | Any transaction ID |
 | The Payer's light wallet server (lightwalletd behind zcash-devtool) | The whole payment, and the Payer's IP address | Anything on Solana |
 | The Solana RPC node | Every Solana transaction sent through it, with the sender's IP address | The Zcash transaction behind a Private Claim |
