@@ -71,6 +71,9 @@ struct Job {
     /// Set right before the payment is broadcast: from then on the job must end with a claim.
     #[serde(default)]
     broadcasting: bool,
+    /// Relay tip and Finality Depth when the payment went out.
+    #[serde(default)]
+    sent: Option<(u32, u16)>,
 }
 
 /// What the page may read about a job.
@@ -315,6 +318,7 @@ impl Wallet {
             escrow: None,
             expiry: None,
             broadcasting: false,
+            sent: None,
         };
         self.jobs
             .lock()
@@ -400,6 +404,7 @@ impl Wallet {
         let escrow = job.escrow.clone().context("no Escrow recorded")?;
         let txid = job.txid.clone().context("no transaction recorded")?;
         let salt = crate::parse_salt(job.salt.as_deref().context("no salt recorded")?)?;
+        let (sent_tip, finality_depth) = job.sent.unwrap_or((0, 10));
         self.set_stage(
             id,
             Stage::WaitingForFinality {
@@ -407,6 +412,8 @@ impl Wallet {
                 tip: 0,
                 final_height: 0,
                 expiry: job.expiry.unwrap_or(0),
+                sent_tip,
+                finality_depth,
             },
         )?;
         let on_proving = || {
@@ -504,7 +511,15 @@ impl Wallet {
             };
             j.broadcasting = true;
         })?;
-        payer::broadcast(chains, &self.config.devtool, &checked, &signed)
+        payer::broadcast(chains, &self.config.devtool, &checked, &signed)?;
+        let mut rpc = HttpRpc::new(&self.config.rpc_url);
+        if let Ok(relay) = read_relay(&mut rpc, &self.config.relay)
+            && let Ok(view) = relay.view()
+        {
+            let sent = (view.tip_height(), view.finality_depth());
+            self.update(id, |j| j.sent = Some(sent))?;
+        }
+        Ok(())
     }
 
     fn txid_found(&self, txid: &str, escrow: &str) -> Option<bool> {
@@ -618,7 +633,7 @@ impl Wallet {
 
         let result: Result<Reply> = match (&method, parts.as_slice()) {
             // Shop pages: start a checkout, read its stage.
-            (Method::Options, ["checkout"] | ["jobs", _]) if shop.is_some() => {
+            (Method::Options, ["checkout"] | ["jobs", _] | ["status"]) if shop.is_some() => {
                 Ok(checkout::json(204, &serde_json::json!({})))
             }
             (Method::Post, ["checkout"]) => match shop.as_deref() {
@@ -627,6 +642,15 @@ impl Wallet {
                     .map(|s| checkout::json(201, &s)),
                 None => Err(anyhow::anyhow!("this site may not use the wallet")),
             },
+            // Lets a shop page tell whether the customer runs a wallet it may use.
+            (Method::Get, ["status"]) if shop.is_some() => Ok(checkout::json(
+                200,
+                &serde_json::json!({
+                    "wallet": "zolar-wallet",
+                    "network": network_name(self.config.network),
+                    "relay": self.config.relay.to_string(),
+                }),
+            )),
             (Method::Get, ["jobs", id]) if shop.is_some() => self
                 .view(id, token.as_deref())
                 .map(|v| checkout::json(200, &v)),
@@ -725,7 +749,7 @@ mod tests {
     fn terms() -> OrderTerms {
         OrderTerms {
             order_id: "abc123".into(),
-            merchant: "Proof of Party".into(),
+            merchant: "Shielded Night".into(),
             item: Item {
                 id: "ga".into(),
                 name: "General admission".into(),
@@ -768,6 +792,7 @@ mod tests {
             escrow: None,
             expiry: None,
             broadcasting,
+            sent: None,
         };
         std::fs::create_dir_all(dir.join("jobs")).unwrap();
         std::fs::write(

@@ -109,11 +109,15 @@ pub enum Stage {
     Paying {
         escrow: String,
     },
+    /// `sent_tip` is the relay tip when the payment went out: it is mined after it and final
+    /// `finality_depth` blocks later.
     WaitingForFinality {
         escrow: String,
         tip: u32,
         final_height: u32,
         expiry: u32,
+        sent_tip: u32,
+        finality_depth: u16,
     },
     Proving {
         escrow: String,
@@ -270,7 +274,7 @@ mod tests {
     fn terms() -> OrderTerms {
         OrderTerms {
             order_id: "o1".into(),
-            merchant: "Proof of Party".into(),
+            merchant: "Shielded Night".into(),
             item: Item {
                 id: "ga".into(),
                 name: "General admission".into(),
@@ -330,6 +334,8 @@ mod tests {
             tip: 10,
             final_height: 5,
             expiry: 20,
+            sent_tip: 8,
+            finality_depth: 10,
         })
         .unwrap();
         assert_eq!(s["stage"], "waiting_for_finality");

@@ -23,7 +23,7 @@ struct Cli {
     #[arg(long, env = "ZOLAR_MERCHANT_BIND", default_value = "127.0.0.1:7979")]
     bind: String,
     /// The merchant's name, shown in the customer's wallet.
-    #[arg(long, default_value = "Proof of Party")]
+    #[arg(long, default_value = "Shielded Night")]
     name: String,
     #[arg(long, env = "ZOLAR_NETWORK", default_value = "testnet")]
     network: Network,

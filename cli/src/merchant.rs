@@ -424,7 +424,7 @@ mod tests {
 
     fn merchant(dir: &std::path::Path) -> Arc<Merchant> {
         Merchant::new(Config {
-            name: "Proof of Party".into(),
+            name: "Shielded Night".into(),
             network: Network::Testnet,
             rpc_url: "http://127.0.0.1:1".into(),
             relay: Address::new_from_array([4; 32]),

@@ -1,0 +1,20 @@
+{
+  "name": "@zolar/sdk",
+  "version": "0.1.0",
+  "description": "Accept shielded Zcash payments in a Solana checkout with Zolar: merchant and wallet clients and a checkout flow",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "4.0.8"
+  }
+}

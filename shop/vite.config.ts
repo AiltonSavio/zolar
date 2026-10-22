@@ -1,0 +1,14 @@
+/// <reference types="vitest/config" />
+import { fileURLToPath } from 'node:url';
+import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite';
+
+const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
+
+// The SDK is used from source, as a shop would use the published package.
+export default defineConfig({
+  plugins: [react()],
+  resolve: { alias: { '@zolar/sdk': here('../sdk/src/index.ts') } },
+  server: { fs: { allow: [here('..')] } },
+  test: { environment: 'jsdom', include: ['src/**/*.test.{ts,tsx}'] },
+});
