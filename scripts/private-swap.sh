@@ -34,7 +34,7 @@ echo "run dir $RUN, memo '$MEMO'"
 date +%T; echo "== 1. Payer builds the PCZT"
 "$BIN/zolar-payer" create-pczt --address "$(cat "$PAYEE_UA_FILE")" --value "$VALUE" --memo "$MEMO" --expiry-blocks 18 --output "$RUN/created.pczt" | tee "$RUN/create-pczt.log"
 date +%T; echo "== 2. Payee creates the Escrow"
-"$BIN/zolar-payee" create-escrow --pczt "$RUN/created.pczt" --ufvk-file "$PAYEE_UFVK_FILE" --expect-memo "$MEMO" --min-zats "$VALUE" --payout "$PAYER_WALLET" --mint "$MINT" --amount "$AMOUNT" --salt-out "$RUN/salt.txt" $PRIVATE_FLAG | tee "$RUN/escrow.log"
+"$BIN/zolar-payee" create-escrow --pczt "$RUN/created.payee.pczt" --ufvk-file "$PAYEE_UFVK_FILE" --expect-memo "$MEMO" --min-zats "$VALUE" --payout "$PAYER_WALLET" --mint "$MINT" --amount "$AMOUNT" --salt-out "$RUN/salt.txt" $PRIVATE_FLAG | tee "$RUN/escrow.log"
 ESCROW=$(grep '^Escrow created' "$RUN/escrow.log" | awk '{print $NF}')
 date +%T; echo "== 3. Payer checks, pays"
 "$BIN/zolar-payer" pay --mint "$MINT" --min-amount "$AMOUNT" --escrow "$ESCROW" --pczt "$RUN/created.pczt" --salt-file "$RUN/salt.txt" --work-dir "$RUN/work" $ACCEPT_FLAG | tee "$RUN/pay.log"

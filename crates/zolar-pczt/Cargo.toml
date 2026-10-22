@@ -17,7 +17,7 @@ zcash_transparent = { version = "0.11.0-pre.2", default-features = false, featur
 
 [dependencies]
 orchard = { version = "0.16", default-features = false }
-pczt = { version = "=0.10.0-pre.2", default-features = false, features = ["signer"] }
+pczt = { version = "=0.10.0-pre.2", default-features = false, features = ["signer", "orchard"] }
 thiserror = "2"
 zcash_keys = { version = "=0.17.0-pre.2", default-features = false, features = ["orchard"] }
 zcash_note_encryption = "0.5.1"

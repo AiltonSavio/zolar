@@ -5,7 +5,7 @@
 //! and does not change when the PCZT is proven, signed or extracted.
 
 use orchard::keys::{IncomingViewingKey, Scope};
-use pczt::Pczt;
+use pczt::{Pczt, roles::redactor::Redactor};
 use zcash_keys::keys::UnifiedFullViewingKey;
 use zcash_primitives::transaction::{
     TransactionData, TxVersion,
@@ -137,4 +137,48 @@ pub fn inspect(pczt: &[u8], ufvk: &str, network: Network) -> Result<Report, Erro
         expiry_height: summary.expiry_height,
         received,
     })
+}
+
+/// The copy of an unsigned PCZT to hand the Payee: the same transaction effects, so the same
+/// transaction ID and the same outputs for its viewing key to decrypt, without anything private to the
+/// Payer. An unredacted PCZT carries, for every spend, the note's value, the address that received it,
+/// its randomness, a Merkle witness (its position in the note tree), the ZIP 32 derivation path and the
+/// full viewing key of the spending account, and for every output (the change too) its recipient,
+/// value and randomness. The Payer keeps the full PCZT to prove and sign.
+pub fn redact_for_payee(pczt: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut pczt = Pczt::parse(pczt).map_err(|e| Error::Pczt(format!("{e:?}")))?;
+    // Make derived fields explicit first (note and value commitments, encrypted note plaintexts):
+    // once the private fields are gone they could not be derived again.
+    pczt.resolve_fields()
+        .map_err(|e| Error::Pczt(format!("resolving fields: {e:?}")))?;
+    let redact = |mut bundle: pczt::roles::redactor::orchard::OrchardRedactor<'_>| {
+        bundle.redact_actions(|mut action| {
+            action.clear_spend_recipient();
+            action.clear_spend_value();
+            action.clear_spend_rho();
+            action.clear_spend_rseed();
+            action.clear_spend_fvk();
+            action.clear_spend_witness();
+            action.clear_spend_alpha();
+            action.clear_spend_zip32_derivation();
+            action.clear_spend_dummy_sk();
+            action.clear_spend_proprietary();
+            action.clear_output_recipient();
+            action.clear_output_value();
+            action.clear_output_rseed();
+            action.clear_output_ock();
+            action.clear_output_zip32_derivation();
+            action.clear_output_user_address();
+            action.clear_output_proprietary();
+            action.clear_rcv();
+        });
+    };
+    let redacted = Redactor::new(pczt)
+        .redact_global_with(|mut global| global.clear_proprietary())
+        .redact_orchard_with(redact)
+        .redact_ironwood_with(redact)
+        .finish();
+    redacted
+        .serialize()
+        .map_err(|e| Error::Pczt(format!("serializing: {e:?}")))
 }

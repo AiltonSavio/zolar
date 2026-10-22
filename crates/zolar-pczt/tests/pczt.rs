@@ -48,3 +48,76 @@ fn garbage_is_rejected() {
     assert!(inspect(b"not a pczt", PAYEE_UFVK.trim(), Network::Testnet).is_err());
     assert!(inspect(PCZT, "uviewtest1garbage", Network::Testnet).is_err());
 }
+
+mod redaction {
+    use super::*;
+    use zcash_keys::keys::UnifiedFullViewingKey;
+    use zcash_protocol::consensus::TEST_NETWORK;
+    use zolar_pczt::redact_for_payee;
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    fn ironwood_actions(bytes: &[u8]) -> Vec<pczt::orchard::Action> {
+        pczt::Pczt::parse(bytes)
+            .unwrap()
+            .ironwood()
+            .actions()
+            .clone()
+    }
+
+    #[test]
+    fn the_payees_copy_has_the_same_transaction_and_payment() {
+        let redacted = redact_for_payee(PCZT).unwrap();
+        assert_eq!(summary(&redacted).unwrap(), summary(PCZT).unwrap());
+        let full = inspect(PCZT, PAYEE_UFVK.trim(), Network::Testnet).unwrap();
+        let copy = inspect(&redacted, PAYEE_UFVK.trim(), Network::Testnet).unwrap();
+        assert_eq!(
+            copy, full,
+            "same txid, expiry, amount and memo for the Payee"
+        );
+    }
+
+    #[test]
+    fn the_payees_copy_carries_nothing_private_to_the_payer() {
+        let redacted = redact_for_payee(PCZT).unwrap();
+        // The original does carry them: the test would pass vacuously otherwise.
+        let before = ironwood_actions(PCZT);
+        assert!(
+            before.iter().any(|a| a.spend().witness().is_some()),
+            "witness in the original"
+        );
+        assert!(
+            before.iter().all(|a| a.output().value().is_some()),
+            "output values in the original"
+        );
+        for a in ironwood_actions(&redacted) {
+            assert!(a.spend().witness().is_none());
+            assert!(a.spend().dummy_sk().is_none());
+            assert!(a.spend().proprietary().is_empty());
+            assert!(a.output().recipient().is_none());
+            assert!(a.output().value().is_none());
+            assert!(a.output().rseed().is_none());
+            assert!(a.output().user_address().is_none());
+        }
+        // The Payer's full viewing key for Ironwood/Orchard is not in the copy.
+        let fvk = UnifiedFullViewingKey::decode(&TEST_NETWORK, PAYER_UFVK.trim())
+            .unwrap()
+            .orchard()
+            .unwrap()
+            .to_bytes();
+        assert!(
+            contains(PCZT, &fvk),
+            "the unredacted PCZT carries the Payer's viewing key"
+        );
+        assert!(!contains(&redacted, &fvk));
+    }
+
+    #[test]
+    fn a_redacted_copy_can_be_redacted_again() {
+        let once = redact_for_payee(PCZT).unwrap();
+        let twice = redact_for_payee(&once).unwrap();
+        assert_eq!(summary(&twice).unwrap(), summary(PCZT).unwrap());
+    }
+}

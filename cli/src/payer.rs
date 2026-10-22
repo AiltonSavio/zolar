@@ -45,8 +45,15 @@ pub struct Chains {
     pub network: p2p::Network,
 }
 
+/// The file name of the copy of `pczt` that goes to the Payee: `created.pczt` -> `created.payee.pczt`.
+pub fn payee_copy_path(pczt: &Path) -> PathBuf {
+    pczt.with_extension("payee.pczt")
+}
+
 /// Builds the unsigned PCZT: the Payee's address, a value, the challenge memo, and an expiry
-/// `expiry_blocks` above the relay tip so the Escrow's 20 block limit holds.
+/// `expiry_blocks` above the relay tip so the Escrow's 20 block limit holds. Writes the full PCZT to
+/// `out` (it holds this wallet's viewing key, note values and change: keep it) and the redacted copy
+/// for the Payee next to it ([`payee_copy_path`]).
 pub fn create_pczt(
     chains: &Chains,
     devtool: &Devtool,
@@ -67,8 +74,15 @@ pub fn create_pczt(
     devtool.sync()?;
     let expiry = tip + expiry_blocks;
     devtool.create(address, value, memo, expiry, out)?;
-    let s = summary(&std::fs::read(out)?)?;
+    let full = std::fs::read(out)?;
+    let s = summary(&full)?;
+    let copy = payee_copy_path(out);
+    std::fs::write(&copy, zolar_pczt::redact_for_payee(&full)?)?;
     println!("PCZT written to {}", out.display());
+    println!(
+        "Payee's copy    : {} (give the Payee only this one)",
+        copy.display()
+    );
     println!("transaction ID : {}", s.txid);
     println!("expiry height  : {} (relay tip {tip})", s.expiry_height);
     Ok(())

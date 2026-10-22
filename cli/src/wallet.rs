@@ -476,7 +476,9 @@ impl Wallet {
             j.stage = Stage::LockingItem;
             j.txid = Some(txid);
         })?;
-        let created = propose(&job.merchant_url, &terms.order_id, &std::fs::read(pczt)?)?;
+        // The merchant gets a copy without the wallet's viewing key, note values or change.
+        let payee_copy = zolar_pczt::redact_for_payee(&std::fs::read(pczt)?)?;
+        let created = propose(&job.merchant_url, &terms.order_id, &payee_copy)?;
         let job = self.update(id, |j| {
             j.stage = Stage::CheckingEscrow {
                 escrow: created.escrow.clone(),

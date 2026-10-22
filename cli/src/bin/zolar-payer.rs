@@ -101,7 +101,8 @@ impl Terms {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Build the unsigned PCZT for the Payee to inspect.
+    /// Build the unsigned PCZT, and the redacted copy the Payee inspects (`<output>` with the extension
+    /// `.payee.pczt`).
     CreatePczt {
         #[command(flatten)]
         zcash: Zcash,
