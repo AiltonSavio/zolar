@@ -8,6 +8,8 @@ import {
   type WalletStatus,
 } from '@zolar/sdk';
 import { useEffect, useMemo, useState } from 'react';
+import { Brand } from './components/Brand';
+import { CalendarIcon, ClockIcon, PinIcon, ShieldIcon, WalletIcon } from './components/Icons';
 import { Progress } from './components/Progress';
 import { Success } from './components/Success';
 import { type ShopConfig, short, zec } from './config';
@@ -52,7 +54,10 @@ export function App({ config }: { config: ShopConfig }) {
   }, [wallet]);
 
   const item = entry?.item;
-  const canPay = !!item && !!walletStatus && looksLikeAddress(payout) && phase.kind === 'shopping';
+  const price = item ? `${zec(item.price_zats)} ZEC` : '…';
+  const payoutOk = looksLikeAddress(payout);
+  const canPay = !!item && !!walletStatus && payoutOk && phase.kind === 'shopping';
+  const done = phase.kind === 'finished' && phase.view.stage === 'done' ? phase.view : null;
 
   async function pay() {
     if (!item) return;
@@ -93,115 +98,175 @@ export function App({ config }: { config: ShopConfig }) {
   return (
     <div className="page">
       <header className="top">
-        <span className="brand">Zolar</span>
-        <span className="net">Zcash testnet · Solana {config.cluster}</span>
+        <Brand />
+        <span className="pill">
+          <span className="dot" aria-hidden="true" />
+          Zcash testnet · Solana {config.cluster}
+          <span className="badge">Demo</span>
+        </span>
       </header>
 
-      <main className="layout">
-        <section className="event">
-          <p className="eyebrow">Event</p>
-          <h1>{EVENT}</h1>
-          <p className="subtitle">A Zcash party during Breakpoint London</p>
-          <p className="facts">London · 16 November 2026 · 21:00</p>
-          <p className="tagline">A night for people who like their payments private.</p>
-          <div className="ticket-row">
-            <span>{item?.name ?? 'General admission'}</span>
-            <span>{item ? `${zec(item.price_zats)} ZEC (testnet)` : '…'}</span>
-            <span>{entry?.left != null ? `${entry.left} left` : ''}</span>
+      <main>
+        {done && (
+          <div className="hero">
+            <h1 className="display">You’re in.</h1>
+            <p className="mono">A night for people who like their payments private.</p>
           </div>
-          <p className="seller">Seller: {EVENT} (demo shop on Solana {config.cluster})</p>
-          <p className="fine">Unofficial side event. Not affiliated with Breakpoint or the Solana Foundation.</p>
-        </section>
+        )}
 
-        <aside className="checkout">
-          {phase.kind === 'shopping' && (
-            <section className="panel">
-              <h2>Checkout</h2>
-              <div className="field">
-                <span className="field-label">1. Your Solana wallet</span>
-                <div className="wallets">
-                  {solanaWallets.map((w, i) => (
-                    <button key={w.name} type="button" className="secondary" onClick={() => connect(i)}>
-                      Connect {w.name}
-                    </button>
-                  ))}
-                </div>
-                <label className="field-label small" htmlFor="payout">
-                  {solanaWallets.length ? 'or paste an address' : 'Paste your Solana address'}
-                </label>
-                <input
-                  id="payout"
-                  value={payout}
-                  onChange={(e) => setPayout(e.target.value)}
-                  placeholder="Solana address"
-                  spellCheck={false}
-                  autoComplete="off"
-                />
-                {payout && !looksLikeAddress(payout) && <span className="hint bad">That is not a Solana address.</span>}
-                {looksLikeAddress(payout) && <span className="hint">Ticket goes to {short(payout.trim())}</span>}
+        <article className="stub">
+          <section className="stub-top">
+            <img className="art" src="/london-night.webp" alt="Tower Bridge and the Thames at night, in black and yellow" />
+            <div className="event">
+              <p className="eyebrow">Event</p>
+              {done ? <h2 className="display title">{EVENT}</h2> : <h1 className="display title">{EVENT}</h1>}
+              <p className="mono subtitle">A Zcash party during Breakpoint London</p>
+              <ul className="facts">
+                <li><PinIcon /> London</li>
+                <li><CalendarIcon /> 16 November 2026</li>
+                <li><ClockIcon /> 21:00</li>
+              </ul>
+              {!done && <p className="tagline">A night for people who like their payments private.</p>}
+              <p className="mono fine">Unofficial side event. Not affiliated with Breakpoint or the Solana Foundation.</p>
+            </div>
+            <aside className="details">
+              <div>
+                <p className="eyebrow">Ticket</p>
+                <p className="value">{item?.name ?? 'General admission'}</p>
               </div>
-              <div className="field">
-                <span className="field-label">2. Pay with Zcash</span>
+              {done ? (
+                <div className="wallet-line">
+                  <WalletIcon />
+                  <div>
+                    <p className="value">Ticket in wallet</p>
+                    <p className="mono">{short(done.payout)}</p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <p className="eyebrow">Price</p>
+                    <p className="price">{price}</p>
+                    <p className="mono">(testnet)</p>
+                  </div>
+                  {phase.kind === 'running' && payoutOk && (
+                    <div>
+                      <p className="eyebrow">Ticket wallet</p>
+                      <p className="mono wallet-line"><WalletIcon /> {short(payout.trim())}</p>
+                    </div>
+                  )}
+                  <div>
+                    <p className="eyebrow">Availability</p>
+                    <p className="value">{entry?.left != null ? `${entry.left} of 100 left` : '…'}</p>
+                  </div>
+                  <div>
+                    <p className="eyebrow">Seller</p>
+                    <p className="value">{EVENT}</p>
+                    <p className="mono small">(demo shop on Solana {config.cluster})</p>
+                  </div>
+                </>
+              )}
+            </aside>
+          </section>
+
+          <div className="perforation" aria-hidden="true" />
+
+          {phase.kind === 'shopping' && (
+            <section className="stub-bottom checkout">
+              <div className="get">
+                <p className="eyebrow">Checkout</p>
+                <h2 className="display">Get your ticket</h2>
+                {solanaWallets.length > 0 && (
+                  <div className="wallets">
+                    {solanaWallets.map((w, i) => (
+                      <button key={w.name} type="button" className="outline" onClick={() => connect(i)}>
+                        <WalletIcon /> Connect {w.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <label className="field">
+                  <span className="mono small">{solanaWallets.length ? 'or paste a Solana address' : 'Your Solana address (the ticket goes here)'}</span>
+                  <span className="input">
+                    <WalletIcon />
+                    <input
+                      value={payout}
+                      onChange={(e) => setPayout(e.target.value)}
+                      placeholder="Solana address"
+                      aria-label="Solana address"
+                      spellCheck={false}
+                      autoComplete="off"
+                    />
+                    {payoutOk && <span className="mono ok">● {short(payout.trim())}</span>}
+                  </span>
+                </label>
+                {payout && !payoutOk && <p className="mono small bad">That is not a Solana address.</p>}
+              </div>
+              <div className="pay">
+                <p className="eyebrow">Total</p>
+                <p className="price">{price}</p>
+                <p className="mono">(testnet)</p>
                 <button type="button" className="primary" disabled={!canPay} onClick={pay}>
-                  Pay {item ? `${zec(item.price_zats)} ZEC` : ''} with Zcash
+                  <ShieldIcon /> Pay with Zcash
                 </button>
                 {walletStatus === null && (
-                  <span className="hint bad">
+                  <p className="mono small bad">
                     Zolar Wallet is not running on this computer (or does not allow this site). Start it, then try again.
-                  </span>
+                  </p>
                 )}
-                {walletStatus && <span className="hint">Zolar Wallet found ({walletStatus.network}).</span>}
+                {walletStatus && <p className="mono small">Zolar Wallet found ({walletStatus.network}).</p>}
+                <p className="mono small">Your ticket arrives in this wallet. Solana never learns which Zcash payment paid for it.</p>
               </div>
-              <p className="note">Your ticket arrives in this wallet. Solana never learns which Zcash payment paid for it.</p>
             </section>
           )}
 
-          {phase.kind === 'running' && (
-            <>
-              {phase.view ? (
-                <Progress view={phase.view} cluster={config.cluster} />
-              ) : (
-                <section className="panel">
-                  <h2>Starting checkout…</h2>
-                </section>
-              )}
-              {phase.approvalUrl && (
-                <p className="note">
-                  Your browser blocked the wallet’s window.{' '}
-                  <a href={phase.approvalUrl} target="_blank" rel="noreferrer">
-                    Open Zolar Wallet to approve
-                  </a>
-                </p>
-              )}
-            </>
-          )}
+          {phase.kind === 'running' &&
+            (phase.view ? (
+              <Progress view={phase.view} cluster={config.cluster} />
+            ) : (
+              <section className="stub-bottom">
+                <p className="eyebrow">Checkout</p>
+                <h2 className="display">Starting checkout…</h2>
+              </section>
+            ))}
 
-          {phase.kind === 'finished' && phase.view.stage === 'done' && (
-            <Success view={phase.view} cluster={config.cluster} event={EVENT} />
-          )}
-          {phase.kind === 'finished' && phase.view.stage !== 'done' && (
-            <section className="panel">
-              <h2>{phase.view.stage === 'rejected' ? 'Payment rejected' : 'Checkout failed'}</h2>
-              <p>
+          {done && <Success view={done} cluster={config.cluster} />}
+
+          {phase.kind === 'finished' && !done && (
+            <section className="stub-bottom">
+              <p className="eyebrow">Checkout</p>
+              <h2 className="display">{phase.view.stage === 'rejected' ? 'Payment rejected' : 'Checkout failed'}</h2>
+              <p className="mono">
                 {phase.view.stage === 'failed'
                   ? phase.view.reason
                   : 'Nothing was paid. The shop releases the ticket after the order lapses.'}
               </p>
-              <button type="button" className="secondary" onClick={() => setPhase({ kind: 'shopping' })}>
+              <button type="button" className="outline" onClick={() => setPhase({ kind: 'shopping' })}>
                 Back to the shop
               </button>
             </section>
           )}
+        </article>
 
-          {error && (
-            <p className="error" role="alert">
-              {error}
-            </p>
-          )}
-        </aside>
+        {phase.kind === 'running' && phase.approvalUrl && (
+          <p className="mono notice">
+            Your browser blocked the wallet’s window.{' '}
+            <a href={phase.approvalUrl} target="_blank" rel="noreferrer">
+              Open Zolar Wallet to approve
+            </a>
+          </p>
+        )}
+        {error && (
+          <p className="mono notice bad" role="alert">
+            {error}
+          </p>
+        )}
       </main>
 
-      <footer className="foot">Powered by Zolar — private Zcash checkout on Solana</footer>
+      <footer className="foot">
+        <Brand size="small" />
+        <p className="mono small">Powered by Zolar — private Zcash checkout on Solana.</p>
+      </footer>
     </div>
   );
 }

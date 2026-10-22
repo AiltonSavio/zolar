@@ -31,9 +31,9 @@ describe('shop', () => {
   it('shows the price and says when no Zolar Wallet runs', async () => {
     stubFetch(false);
     render(<App config={config} />);
-    expect(await screen.findByText('0.001 ZEC (testnet)')).toBeTruthy();
+    expect((await screen.findAllByText('0.001 ZEC')).length).toBe(2);
     expect(await screen.findByText(/Zolar Wallet is not running/)).toBeTruthy();
-    expect((screen.getByRole('button', { name: /Pay 0.001 ZEC/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /Pay with Zcash/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('reads the stock again when a checkout ends', async () => {
@@ -56,11 +56,11 @@ describe('shop', () => {
     );
     render(<App config={config} />);
     await screen.findByText(/Zolar Wallet found/);
-    fireEvent.change(screen.getByLabelText(/Solana address/), { target: { value: '8CSGksK45fuvW94GMX1Y9Pex4Hu2LoJhGhJTATi215rh' } });
-    fireEvent.click(screen.getByRole('button', { name: /Pay 0.001 ZEC/ }));
+    fireEvent.change(screen.getByLabelText('Solana address'), { target: { value: '8CSGksK45fuvW94GMX1Y9Pex4Hu2LoJhGhJTATi215rh' } });
+    fireEvent.click(screen.getByRole('button', { name: /Pay with Zcash/ }));
     expect(await screen.findByText('sold out')).toBeTruthy();
     await waitFor(() => expect(itemReads).toBe(2));
-    expect(await screen.findByText('40 left')).toBeTruthy();
+    expect(await screen.findByText('40 of 100 left')).toBeTruthy();
   });
 
   it('finds a running wallet', async () => {
@@ -81,15 +81,15 @@ describe('stages', () => {
       />,
     );
     expect(screen.getByText(/6 of 10 blocks on top/)).toBeTruthy();
-    expect(screen.getByText('FSpj…VYDf')).toBeTruthy();
+    expect(screen.getByText('Escrow FSpj…VYDf')).toBeTruthy();
   });
 
   it('states the privacy check result honestly', () => {
     const done = { ...base, stage: 'done' as const, escrow: 'E', claim: 'C' };
-    render(<Success cluster="devnet" event="Shielded Night" view={{ ...done, txid_found_on_solana: false }} />);
+    render(<Success cluster="devnet" view={{ ...done, txid_found_on_solana: false }} />);
     expect(screen.getByText(/appears in none/)).toBeTruthy();
     cleanup();
-    render(<Success cluster="devnet" event="Shielded Night" view={{ ...done, txid_found_on_solana: null }} />);
+    render(<Success cluster="devnet" view={{ ...done, txid_found_on_solana: null }} />);
     expect(screen.getByText(/did not run/)).toBeTruthy();
   });
 });
