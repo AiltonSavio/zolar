@@ -6,6 +6,8 @@ import { toRelayView, type RelayView } from './model/relay';
 const MAX_MULTIPLE_ACCOUNTS = 100;
 const ESCROW_ACCOUNT_SIZE = 300;
 const ESCROW_DISCRIMINATOR_B58 = '2'; // base58 of the single byte 0x01
+// A hung request would keep the page showing "Live" over stale data.
+const REQUEST_TIMEOUT_MS = 20_000;
 
 export class Rpc {
   constructor(private readonly url: string) {}
@@ -16,6 +18,7 @@ export class Rpc {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       const body = (await res.json().catch(() => ({}))) as { result?: T; error?: { code: number; message: string } };
       const limited = res.status === 429 || body.error?.code === 429;

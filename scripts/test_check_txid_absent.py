@@ -79,6 +79,20 @@ class Fetch(unittest.TestCase):
         finally:
             c.rpc = original
 
+    def test_the_history_of_an_address_includes_unfinalized_transactions(self):
+        asked = []
+
+        def fake(url, method, params):
+            asked.append(params[1])
+            return [{"signature": "s1"}]
+
+        original, c.rpc = c.rpc, fake
+        try:
+            self.assertEqual(c.signatures_of("http://x", "addr"), ["s1"])
+        finally:
+            c.rpc = original
+        self.assertEqual(asked[0]["commitment"], "confirmed")
+
 
 if __name__ == "__main__":
     unittest.main()

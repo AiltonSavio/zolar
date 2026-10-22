@@ -165,7 +165,8 @@ def rpc(url, method, params):
 def signatures_of(url, address):
     out, before = [], None
     while True:
-        opts = {"limit": 1000}
+        # The default is finalized history, which misses a claim sent in the last ~13 seconds.
+        opts = {"limit": 1000, "commitment": "confirmed"}
         if before:
             opts["before"] = before
         page = rpc(url, "getSignaturesForAddress", [address, opts])

@@ -45,7 +45,7 @@ export function App({ config }: { config: Config }) {
             <h1>Zolar</h1>
             <p className="tagline">Zcash light client on Solana. Escrows that pay out when a shielded payment is final.</p>
           </div>
-          <div className="live" title={config.rpcUrl}>
+          <div className="live" title={new URL(config.rpcUrl).origin}>
             <span className={`pulse ${rpcError ? 'pulse-bad' : ''}`} />
             <span>{rpcError ? 'RPC trouble, retrying' : 'Live'} · Solana {config.cluster}</span>
             <span className="muted mono">{shorten(new URL(config.rpcUrl).host, 14, 6)}</span>

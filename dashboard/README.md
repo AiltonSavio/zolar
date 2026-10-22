@@ -8,7 +8,7 @@ pnpm --dir dashboard dev --port 5174        # on this machine: devserve --port 5
 pnpm --dir dashboard lint && pnpm --dir dashboard test && pnpm --dir dashboard build
 ```
 
-Configuration is environment variables (see `.env.example`; defaults are the devnet deployment): `VITE_RPC_URL`, `VITE_RELAY_PROGRAM`, `VITE_ESCROW_PROGRAM`, `VITE_TESTNET_RELAY`, `VITE_MAINNET_RELAY`, `VITE_RELAY_POLL_MS`, `VITE_ESCROW_POLL_MS`. The public devnet RPC rate-limits, so the defaults poll politely (5 s for the relays, 10 s for Escrows and transactions) and back off on 429.
+Configuration is environment variables (see `.env.example`; defaults are the devnet deployment): `VITE_RPC_URL`, `VITE_RELAY_PROGRAM`, `VITE_ESCROW_PROGRAM`, `VITE_TESTNET_RELAY`, `VITE_MAINNET_RELAY`, `VITE_RELAY_POLL_MS`, `VITE_ESCROW_POLL_MS`. The public devnet RPC rate-limits, so the defaults poll politely (5 s for the relays, 10 s for Escrows and transactions) and back off on 429. `VITE_RPC_URL` is built into the page, so anyone who loads it can read it: use a public endpoint or a key restricted to this site, never a private API key.
 
 Privacy: a Reveal Claim carries the Zcash txid in its instruction data. The dashboard reads only the first byte of each Escrow instruction (its tag) and never decodes or shows the payload, so nothing here reveals or derives what a Private Claim hides. Reveal Claims are labelled as revealing.
 
