@@ -9,6 +9,10 @@ It has two parts:
 
 Built for ZECATHON (Cross-Chain track). Vocabulary: [`GLOSSARY.md`](GLOSSARY.md). Design decisions: [`docs/adr/`](docs/adr).
 
+## Checkout demo and SDK
+
+The demo shop exchanges shielded Zcash testnet ZEC for a ticket token on Solana devnet. A merchant service locks the ticket; the Payer's local wallet helper asks for approval, pays and makes a Private Claim. The helper stands in for wallet support. See [Build on Zolar](sdk/README.md) for the SDK and [the shop README](shop/README.md) to run the demo.
+
 ## Live on Solana devnet
 
 | What | Address |
@@ -25,7 +29,7 @@ A settled Private Claim swap: Zcash testnet payment `3dbb300e...2e814`, Escrow `
 ## How a swap works
 
 1. **Payer** builds an unsigned Zcash transaction (a PCZT) paying the Payee, with the Payee's challenge text in the memo. Its transaction ID is known before signing.
-2. **Payee** decrypts the PCZT with their viewing key, checks amount and memo, and creates the Escrow: tokens in a vault, the Payer's payout address, an expiry height and the Payment Commitment `Poseidon(txid, salt)`. The salt goes to the Payer privately.
+2. **Payee** receives a redacted copy of the PCZT (`created.payee.pczt`), decrypts their output with their viewing key, checks amount and memo, and creates the Escrow: tokens in a vault, the Payer's payout address, an expiry height and the Payment Commitment `Poseidon(txid, salt)`. The salt goes to the Payer privately. The unredacted PCZT stays with the Payer.
 3. **Payer** checks the Escrow against the agreed terms and the relay against the Zcash chain, then signs and broadcasts the payment.
 4. Once Finality Depth blocks follow the payment's block, the relay appends it to the Final Block Tree.
 5. **Payer** claims:
@@ -196,7 +200,9 @@ Keeping a relay at the tip costs 20,000 lamports per header in fees: about 0.07 
 - `clients/codama`: Codama definitions; `clients/rust`, `clients/js`, `clients/escrow-rust` and `clients/escrow-js` are generated from them.
 - `crates/relayer`: `zolar-relayer`, which follows Zcash peers over P2P and keeps a relay at the tip.
 - `crates/zolar-claim`: Payment Commitment, Merkle paths and Private Claim witness. `crates/zolar-pczt`: transaction ID and viewing-key decryption of an unsigned PCZT (own workspace).
-- `cli/`: `zolar-payer` and `zolar-payee` (own workspace).
+- `cli/`: `zolar-payer`, `zolar-payee`, `zolar-merchant` and `zolar-wallet` (own workspace).
+- `sdk/`: TypeScript merchant and wallet clients and the checkout flow. See [Build on Zolar](sdk/README.md).
+- `shop/`: demo ticket checkout using the SDK. See [the shop README](shop/README.md).
 - `circuits/`: the Private Claim circuit (circom, Groth16), proving scripts and the ceremony tooling. See [`circuits/README.md`](circuits/README.md).
 - `dashboard/`: read-only web page for both relays, open Escrows and Claims.
 - `crates/relay-tests`, `crates/escrow-tests`: LiteSVM tests that drive the programs through the generated clients.
@@ -211,6 +217,11 @@ cargo test --workspace                       # LiteSVM tests build the programs 
 cargo test --manifest-path cli/Cargo.toml
 pnpm --dir clients/codama install && pnpm --dir clients/codama generate   # regenerate the clients
 python3 -I scripts/test_check_txid_absent.py
+pnpm --dir sdk typecheck && pnpm --dir sdk test
+pnpm --dir shop lint && pnpm --dir shop test
+npx --prefix shop --no-install tsc --noEmit -p shop
+pnpm --dir shop build
+pnpm --dir sdk build
 ```
 
 ## License
