@@ -9,7 +9,6 @@
   --ok: #111111;
   --display: 'Fraunces', Georgia, serif;
   --mono: 'IBM Plex Mono', ui-monospace, monospace;
-  --sans: 'Space Grotesk', system-ui, sans-serif;
   color-scheme: light;
 }
 * { box-sizing: border-box; }
@@ -26,10 +25,10 @@ a:hover { text-decoration-color: var(--yellow); }
 
 /* Brand */
 .brand { display: inline-flex; align-items: center; gap: 10px; }
-.brand-word { font-family: var(--sans); font-weight: 700; letter-spacing: -.02em; }
-.brand-large .brand-word { font-size: 40px; }
+.brand-word { display: block; width: auto; }
+.brand-large .brand-word { height: 34px; }
 .brand-large .brand-mark { width: 44px; height: 44px; }
-.brand-small .brand-word { font-size: 26px; }
+.brand-small .brand-word { height: 22px; }
 .brand-small .brand-mark { width: 30px; height: 30px; }
 
 /* Header and footer */
@@ -133,5 +132,5 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--ink); outline-o
   .step::before { display: none; }
   .step-detail { align-items: flex-start; width: 100%; padding-left: 52px; }
   .privacy-panel { flex-direction: column; }
-  .brand-large .brand-word { font-size: 32px; }
+  .brand-large .brand-word { height: 28px; }
 }
