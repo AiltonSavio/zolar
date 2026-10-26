@@ -4131,6 +4131,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sp1-solana-v6"
+version = "0.1.0"
+dependencies = [
+ "groth16-solana",
+ "solana-blake3-hasher",
+ "solana-sha256-hasher",
+]
+
+[[package]]
 name = "spki"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
