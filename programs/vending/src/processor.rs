@@ -1,6 +1,6 @@
 use crate::{
     error::VendingError as E,
-    rules::{can_release, validate_claim, view_error, ClaimAccounts},
+    rules::{can_release, can_request_release, validate_claim, view_error, ClaimAccounts},
     state::*,
 };
 use header_relay_interface::{RelayStatus, RelayView, NETWORK_TESTNET};
@@ -29,6 +29,20 @@ fn pda(seeds: &[&[u8]], program: &Address) -> (Address, u8) {
 }
 #[cfg(not(target_os = "solana"))]
 fn pda(_: &[&[u8]], _: &Address) -> (Address, u8) {
+    unreachable!("instruction processor runs in the SVM")
+}
+#[cfg(target_os = "solana")]
+fn sha256(data: &[u8]) -> [u8; 32] {
+    let mut out = [0; 32];
+    let values: [&[u8]; 1] = [data];
+    // SAFETY: values describes one valid input slice; out is a writable 32-byte buffer.
+    unsafe {
+        pinocchio::syscalls::sol_sha256(values.as_ptr().cast(), 1, out.as_mut_ptr());
+    }
+    out
+}
+#[cfg(not(target_os = "solana"))]
+fn sha256(_: &[u8]) -> [u8; 32] {
     unreachable!("instruction processor runs in the SVM")
 }
 fn signer(a: &AccountView) -> ProgramResult {
@@ -220,6 +234,7 @@ pub fn process_instruction(id: &Address, accounts: &[AccountView], data: &[u8]) 
         1 => reserve(id, accounts, args),
         2 => claim(id, accounts, args),
         3 => release(id, accounts, args),
+        4 => request_release(id, accounts, args),
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }
@@ -227,7 +242,7 @@ fn init(id: &Address, accounts: &[AccountView], d: &[u8]) -> ProgramResult {
     let [payee, machine_account, mint, authority, relay_account, token, system] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
-    if d.len() != 155 {
+    if d.len() != 187 {
         return Err(ProgramError::InvalidInstructionData);
     }
     signer(payee)?;
@@ -238,11 +253,11 @@ fn init(id: &Address, accounts: &[AccountView], d: &[u8]) -> ProgramResult {
     let seed = arr(d, 0);
     let price_zat = u64::from_le_bytes(arr(d, 32));
     let stock = u32::from_le_bytes(arr(d, 40));
-    let reservation_blocks = u32::from_le_bytes(arr(d, 151));
+    let reservation_blocks = u32::from_le_bytes(arr(d, 183));
     if price_zat == 0 || stock == 0 || reservation_blocks == 0 {
         return Err(fail(E::BadConfig));
     }
-    let expected_relay = arr(d, 87);
+    let expected_relay = arr(d, 119);
     let rd = relay_account.try_borrow()?;
     let view = relay(relay_account, &expected_relay, &rd)?;
     if view.network() != NETWORK_TESTNET {
@@ -285,8 +300,9 @@ fn init(id: &Address, accounts: &[AccountView], d: &[u8]) -> ProgramResult {
         available: stock,
         stock,
         diversifier: arr(d, 44),
-        svk_hash: arr(d, 55),
-        vkey_hash: arr(d, 119),
+        svk: arr(d, 55),
+        svk_hash: sha256(&d[55..119]),
+        vkey_hash: arr(d, 151),
         reservation_blocks,
     }
     .write(&mut machine_account.try_borrow_mut()?);
@@ -332,6 +348,8 @@ fn reserve(id: &Address, accounts: &[AccountView], d: &[u8]) -> ProgramResult {
         price_zat: m.price_zat,
         expiry_height,
         created_at: Clock::get()?.unix_timestamp,
+        release_requested: false,
+        release_requested_at: 0,
     }
     .write(&mut ra.try_borrow_mut()?);
     m.available -= 1;
@@ -359,6 +377,9 @@ fn claim(id: &Address, accounts: &[AccountView], d: &[u8]) -> ProgramResult {
     // Validate structural account bindings before verification; the remaining policy is pure.
     let r = reservation(id, ra, ma.address().as_array())?;
     expect_key(payout, &r.payout)?;
+    if pv.payout != r.payout {
+        return Err(fail(E::WrongPayout));
+    }
     expect_key(mint, &m.mint)?;
     let (auth, bump) = pda(&[b"mint", ma.address().as_ref()], id);
     expect_key(authority, auth.as_array())?;
@@ -451,22 +472,14 @@ fn release(id: &Address, accounts: &[AccountView], d: &[u8]) -> ProgramResult {
     let r = reservation(id, ra, ma.address().as_array())?;
     expect_key(payout, &r.payout)?;
     let rd = relay_account.try_borrow()?;
-    let view = RelayStatus::parse_allow_halted(
+    RelayStatus::parse_allow_halted(
         &owner(relay_account),
         relay_account.address().as_array(),
         &m.relay,
         &rd,
     )
     .map_err(|e| fail(view_error(e)))?;
-    can_release(
-        view.tip_height(),
-        view.finality_depth(),
-        view.is_halted(),
-        r.expiry_height,
-        r.created_at,
-        Clock::get()?.unix_timestamp,
-    )
-    .map_err(fail)?;
+    can_release(&r, Clock::get()?.unix_timestamp).map_err(fail)?;
     drop(rd);
     m.available = m
         .available
@@ -475,5 +488,43 @@ fn release(id: &Address, accounts: &[AccountView], d: &[u8]) -> ProgramResult {
         .ok_or(fail(E::ArithmeticOverflow))?;
     close(ra, payout)?;
     m.write(&mut ma.try_borrow_mut()?);
+    Ok(())
+}
+
+fn request_release(id: &Address, accounts: &[AccountView], d: &[u8]) -> ProgramResult {
+    let [submitter, ma, ra, relay_account] = accounts else {
+        return Err(ProgramError::NotEnoughAccountKeys);
+    };
+    if !d.is_empty() {
+        return Err(ProgramError::InvalidInstructionData);
+    }
+    signer(submitter)?;
+    writable(ra)?;
+    let m = machine(id, ma)?;
+    let mut r = reservation(id, ra, ma.address().as_array())?;
+    if r.release_requested {
+        return Err(fail(E::ReleaseAlreadyRequested));
+    }
+    let rd = relay_account.try_borrow()?;
+    let view = RelayStatus::parse_allow_halted(
+        &owner(relay_account),
+        relay_account.address().as_array(),
+        &m.relay,
+        &rd,
+    )
+    .map_err(|e| fail(view_error(e)))?;
+    let now = Clock::get()?.unix_timestamp;
+    can_request_release(
+        view.tip_height(),
+        view.finality_depth(),
+        view.is_halted(),
+        r.expiry_height,
+        r.created_at,
+        now,
+    )
+    .map_err(fail)?;
+    r.release_requested = true;
+    r.release_requested_at = now;
+    r.write(&mut ra.try_borrow_mut()?);
     Ok(())
 }

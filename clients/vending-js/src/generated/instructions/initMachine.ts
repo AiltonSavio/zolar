@@ -17,16 +17,16 @@ export function getInitMachineDiscriminatorBytes(): ReadonlyUint8Array { return 
 export type InitMachineInstruction<TProgram extends string = typeof VENDING_PROGRAM_ADDRESS, TAccountPayee extends string | AccountMeta<string> = string, TAccountMachine extends string | AccountMeta<string> = string, TAccountMint extends string | AccountMeta<string> = string, TAccountMintAuthority extends string | AccountMeta<string> = string, TAccountRelay extends string | AccountMeta<string> = string, TAccountTokenProgram extends string | AccountMeta<string> = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", TAccountSystemProgram extends string | AccountMeta<string> = "11111111111111111111111111111111", TRemainingAccounts extends readonly AccountMeta<string>[] = []> =
 Instruction<TProgram> & InstructionWithData<ReadonlyUint8Array> & InstructionWithAccounts<[TAccountPayee extends string ? WritableSignerAccount<TAccountPayee> & AccountSignerMeta<TAccountPayee> : TAccountPayee, TAccountMachine extends string ? WritableAccount<TAccountMachine> : TAccountMachine, TAccountMint extends string ? WritableSignerAccount<TAccountMint> & AccountSignerMeta<TAccountMint> : TAccountMint, TAccountMintAuthority extends string ? ReadonlyAccount<TAccountMintAuthority> : TAccountMintAuthority, TAccountRelay extends string ? ReadonlyAccount<TAccountRelay> : TAccountRelay, TAccountTokenProgram extends string ? ReadonlyAccount<TAccountTokenProgram> : TAccountTokenProgram, TAccountSystemProgram extends string ? ReadonlyAccount<TAccountSystemProgram> : TAccountSystemProgram, ...TRemainingAccounts]>;
 
-export type InitMachineInstructionData = { discriminator: number; seed: ReadonlyUint8Array; priceZat: bigint; stock: number; diversifier: ReadonlyUint8Array; svkHash: ReadonlyUint8Array; relayAddress: Address; vkeyHash: ReadonlyUint8Array; reservationBlocks: number;  };
+export type InitMachineInstructionData = { discriminator: number; seed: ReadonlyUint8Array; priceZat: bigint; stock: number; diversifier: ReadonlyUint8Array; svk: ReadonlyUint8Array; relayAddress: Address; vkeyHash: ReadonlyUint8Array; reservationBlocks: number;  };
 
-export type InitMachineInstructionDataArgs = { seed: ReadonlyUint8Array; priceZat: number | bigint; stock: number; diversifier: ReadonlyUint8Array; svkHash: ReadonlyUint8Array; relayAddress: Address | HasAddress; vkeyHash: ReadonlyUint8Array; reservationBlocks: number;  };
+export type InitMachineInstructionDataArgs = { seed: ReadonlyUint8Array; priceZat: number | bigint; stock: number; diversifier: ReadonlyUint8Array; svk: ReadonlyUint8Array; relayAddress: Address | HasAddress; vkeyHash: ReadonlyUint8Array; reservationBlocks: number;  };
 
 export function getInitMachineInstructionDataEncoder(): FixedSizeEncoder<InitMachineInstructionDataArgs> {
-    return transformEncoder(getStructEncoder([['discriminator', getU8Encoder()], ['seed', fixEncoderSize(getBytesEncoder(), 32)], ['priceZat', getU64Encoder()], ['stock', getU32Encoder()], ['diversifier', fixEncoderSize(getBytesEncoder(), 11)], ['svkHash', fixEncoderSize(getBytesEncoder(), 32)], ['relayAddress', getAddressEncoder()], ['vkeyHash', fixEncoderSize(getBytesEncoder(), 32)], ['reservationBlocks', getU32Encoder()]]), (value) => ({ ...value, discriminator: INIT_MACHINE_DISCRIMINATOR }));
+    return transformEncoder(getStructEncoder([['discriminator', getU8Encoder()], ['seed', fixEncoderSize(getBytesEncoder(), 32)], ['priceZat', getU64Encoder()], ['stock', getU32Encoder()], ['diversifier', fixEncoderSize(getBytesEncoder(), 11)], ['svk', fixEncoderSize(getBytesEncoder(), 64)], ['relayAddress', getAddressEncoder()], ['vkeyHash', fixEncoderSize(getBytesEncoder(), 32)], ['reservationBlocks', getU32Encoder()]]), (value) => ({ ...value, discriminator: INIT_MACHINE_DISCRIMINATOR }));
 }
 
 export function getInitMachineInstructionDataDecoder(): FixedSizeDecoder<InitMachineInstructionData> {
-    return getStructDecoder([['discriminator', getU8Decoder()], ['seed', fixDecoderSize(getBytesDecoder(), 32)], ['priceZat', getU64Decoder()], ['stock', getU32Decoder()], ['diversifier', fixDecoderSize(getBytesDecoder(), 11)], ['svkHash', fixDecoderSize(getBytesDecoder(), 32)], ['relayAddress', getAddressDecoder()], ['vkeyHash', fixDecoderSize(getBytesDecoder(), 32)], ['reservationBlocks', getU32Decoder()]]);
+    return getStructDecoder([['discriminator', getU8Decoder()], ['seed', fixDecoderSize(getBytesDecoder(), 32)], ['priceZat', getU64Decoder()], ['stock', getU32Decoder()], ['diversifier', fixDecoderSize(getBytesDecoder(), 11)], ['svk', fixDecoderSize(getBytesDecoder(), 64)], ['relayAddress', getAddressDecoder()], ['vkeyHash', fixDecoderSize(getBytesDecoder(), 32)], ['reservationBlocks', getU32Decoder()]]);
 }
 
 export function getInitMachineInstructionDataCodec(): FixedSizeCodec<InitMachineInstructionDataArgs, InitMachineInstructionData> {
@@ -45,7 +45,7 @@ seed: InitMachineInstructionDataArgs["seed"];
 priceZat: InitMachineInstructionDataArgs["priceZat"];
 stock: InitMachineInstructionDataArgs["stock"];
 diversifier: InitMachineInstructionDataArgs["diversifier"];
-svkHash: InitMachineInstructionDataArgs["svkHash"];
+svk: InitMachineInstructionDataArgs["svk"];
 relayAddress: InitMachineInstructionDataArgs["relayAddress"];
 vkeyHash: InitMachineInstructionDataArgs["vkeyHash"];
 reservationBlocks: InitMachineInstructionDataArgs["reservationBlocks"];

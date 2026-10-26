@@ -20,6 +20,8 @@ pub struct Reservation {
     pub price_zat: u64,
     pub expiry_height: u32,
     pub created_at: i64,
+    pub release_requested: bool,
+    pub release_requested_at: i64,
 }
 
 pub const RESERVATION_DISCRIMINATOR: u8 = 2;

@@ -22,4 +22,8 @@ pub enum VendingError {
     ArithmeticOverflow = 18,
     BadTokenAccount = 19,
     AlreadyInitialized = 20,
+    WrongPayout = 21,
+    ReleaseAlreadyRequested = 22,
+    ReleaseNotRequested = 23,
+    ClaimWindowOpen = 24,
 }

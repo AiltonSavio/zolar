@@ -9,4 +9,5 @@
 export * from './claim';
 export * from './initMachine';
 export * from './releaseReservation';
+export * from './requestRelease';
 export * from './reserve';

@@ -135,7 +135,7 @@ impl World {
             price_zat: 2_500_000,
             stock,
             diversifier: [5; 11],
-            svk_hash: [6; 32],
+            svk: [6; 64],
             relay_address: self.relay,
             vkey_hash: [7; 32],
             reservation_blocks: 2,
@@ -171,6 +171,26 @@ impl World {
         let meta = self.h.send(&[ix], &[&self.payer]);
         if let Ok(m) = &meta {
             println!("CU Reserve {}", m.compute_units_consumed);
+        }
+        meta
+    }
+    pub fn request_release_ix(&self, nonce: [u8; 32]) -> Instruction {
+        RequestRelease {
+            submitter: self.h.payer.pubkey(),
+            machine: self.machine,
+            reservation: self.reservation(nonce),
+            relay: self.relay,
+        }
+        .instruction()
+    }
+    pub fn request_release(
+        &mut self,
+        nonce: [u8; 32],
+    ) -> Result<TransactionMetadata, FailedTransactionMetadata> {
+        let ix = self.request_release_ix(nonce);
+        let meta = self.h.send(&[ix], &[]);
+        if let Ok(m) = &meta {
+            println!("CU RequestRelease {}", m.compute_units_consumed);
         }
         meta
     }
@@ -218,8 +238,9 @@ impl World {
         public_values[109..141].copy_from_slice(&self.root());
         public_values[141..145].copy_from_slice(&self.tip().to_le_bytes());
         public_values[145..156].fill(5);
-        public_values[156..188].fill(6);
+        public_values[156..188].copy_from_slice(&self.machine_state().svk_hash);
         public_values[188] = 3;
+        public_values[189..221].copy_from_slice(self.payer.pubkey().as_ref());
         Claim {
             submitter: self.h.payer.pubkey(),
             machine: self.machine,

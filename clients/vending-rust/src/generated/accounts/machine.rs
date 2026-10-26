@@ -26,6 +26,7 @@ pub struct Machine {
     pub svk_hash: [u8; 32],
     pub vkey_hash: [u8; 32],
     pub reservation_blocks: u32,
+    pub svk: [u8; 64],
 }
 
 pub const MACHINE_DISCRIMINATOR: u8 = 1;

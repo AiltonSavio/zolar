@@ -99,7 +99,7 @@ pub struct InitMachineInstructionArgs {
     pub price_zat: u64,
     pub stock: u32,
     pub diversifier: [u8; 11],
-    pub svk_hash: [u8; 32],
+    pub svk: [u8; 64],
     pub relay_address: Address,
     pub vkey_hash: [u8; 32],
     pub reservation_blocks: u32,
@@ -135,7 +135,7 @@ pub struct InitMachineBuilder {
     price_zat: Option<u64>,
     stock: Option<u32>,
     diversifier: Option<[u8; 11]>,
-    svk_hash: Option<[u8; 32]>,
+    svk: Option<[u8; 64]>,
     relay_address: Option<Address>,
     vkey_hash: Option<[u8; 32]>,
     reservation_blocks: Option<u32>,
@@ -204,8 +204,8 @@ impl InitMachineBuilder {
         self
     }
     #[inline(always)]
-    pub fn svk_hash(&mut self, svk_hash: [u8; 32]) -> &mut Self {
-        self.svk_hash = Some(svk_hash);
+    pub fn svk(&mut self, svk: [u8; 64]) -> &mut Self {
+        self.svk = Some(svk);
         self
     }
     #[inline(always)]
@@ -258,7 +258,7 @@ impl InitMachineBuilder {
             price_zat: self.price_zat.clone().expect("price_zat is not set"),
             stock: self.stock.clone().expect("stock is not set"),
             diversifier: self.diversifier.clone().expect("diversifier is not set"),
-            svk_hash: self.svk_hash.clone().expect("svk_hash is not set"),
+            svk: self.svk.clone().expect("svk is not set"),
             relay_address: self
                 .relay_address
                 .clone()
@@ -445,7 +445,7 @@ impl<'a, 'b> InitMachineCpiBuilder<'a, 'b> {
             price_zat: None,
             stock: None,
             diversifier: None,
-            svk_hash: None,
+            svk: None,
             relay_address: None,
             vkey_hash: None,
             reservation_blocks: None,
@@ -518,8 +518,8 @@ impl<'a, 'b> InitMachineCpiBuilder<'a, 'b> {
         self
     }
     #[inline(always)]
-    pub fn svk_hash(&mut self, svk_hash: [u8; 32]) -> &mut Self {
-        self.instruction.svk_hash = Some(svk_hash);
+    pub fn svk(&mut self, svk: [u8; 64]) -> &mut Self {
+        self.instruction.svk = Some(svk);
         self
     }
     #[inline(always)]
@@ -584,11 +584,7 @@ impl<'a, 'b> InitMachineCpiBuilder<'a, 'b> {
                 .diversifier
                 .clone()
                 .expect("diversifier is not set"),
-            svk_hash: self
-                .instruction
-                .svk_hash
-                .clone()
-                .expect("svk_hash is not set"),
+            svk: self.instruction.svk.clone().expect("svk is not set"),
             relay_address: self
                 .instruction
                 .relay_address
@@ -653,7 +649,7 @@ struct InitMachineCpiBuilderInstruction<'a, 'b> {
     price_zat: Option<u64>,
     stock: Option<u32>,
     diversifier: Option<[u8; 11]>,
-    svk_hash: Option<[u8; 32]>,
+    svk: Option<[u8; 64]>,
     relay_address: Option<Address>,
     vkey_hash: Option<[u8; 32]>,
     reservation_blocks: Option<u32>,

@@ -1,9 +1,10 @@
 //! Fixed-width account layouts. Integers are little endian, no padding.
 pub const VERSION: u8 = 1;
-pub const MACHINE_LEN: usize = 227;
-pub const RESERVATION_LEN: usize = 119;
+pub const MACHINE_LEN: usize = 291;
+pub const RESERVATION_LEN: usize = 128;
 pub const TAG_LEN: usize = 2;
 pub const BACKSTOP_SECS: i64 = 86_400;
+pub const CLAIM_WINDOW_SECS: i64 = 900;
 pub const NU7_BRANCH_ID: u32 = 0x7719_0ad9;
 pub const TOKEN_PROGRAM: [u8; 32] = [
     6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172, 28, 180, 133, 237,
@@ -24,6 +25,7 @@ pub struct Machine {
     pub svk_hash: [u8; 32],
     pub vkey_hash: [u8; 32],
     pub reservation_blocks: u32,
+    pub svk: [u8; 64],
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reservation {
@@ -34,6 +36,8 @@ pub struct Reservation {
     pub price_zat: u64,
     pub expiry_height: u32,
     pub created_at: i64,
+    pub release_requested: bool,
+    pub release_requested_at: i64,
 }
 
 fn array<const N: usize>(d: &[u8], at: usize) -> [u8; N] {
@@ -58,6 +62,7 @@ impl Machine {
             svk_hash: array(d, 159),
             vkey_hash: array(d, 191),
             reservation_blocks: u32::from_le_bytes(array(d, 223)),
+            svk: array(d, 227),
         })
     }
     pub fn write(&self, d: &mut [u8]) {
@@ -74,6 +79,7 @@ impl Machine {
             &self.svk_hash,
             &self.vkey_hash,
             &self.reservation_blocks.to_le_bytes(),
+            &self.svk,
         ];
         let mut at = 0;
         for f in fields {
@@ -84,7 +90,12 @@ impl Machine {
 }
 impl Reservation {
     pub fn read(d: &[u8]) -> Option<Self> {
-        if d.len() != RESERVATION_LEN || d[0] != 2 || d[1] != VERSION {
+        if d.len() != RESERVATION_LEN
+            || d[0] != 2
+            || d[1] != VERSION
+            || d[119] > 1
+            || (d[119] == 0 && d[120..128] != [0; 8])
+        {
             return None;
         }
         Some(Self {
@@ -95,6 +106,8 @@ impl Reservation {
             price_zat: u64::from_le_bytes(array(d, 99)),
             expiry_height: u32::from_le_bytes(array(d, 107)),
             created_at: i64::from_le_bytes(array(d, 111)),
+            release_requested: d[119] == 1,
+            release_requested_at: i64::from_le_bytes(array(d, 120)),
         })
     }
     pub fn write(&self, d: &mut [u8]) {
@@ -106,6 +119,8 @@ impl Reservation {
             &self.price_zat.to_le_bytes(),
             &self.expiry_height.to_le_bytes(),
             &self.created_at.to_le_bytes(),
+            &[u8::from(self.release_requested)],
+            &self.release_requested_at.to_le_bytes(),
         ];
         let mut at = 0;
         for f in fields {

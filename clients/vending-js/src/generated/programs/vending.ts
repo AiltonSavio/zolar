@@ -9,7 +9,7 @@
 import { assertIsInstructionWithAccounts, containsBytes, extendClient, getU8Encoder, SOLANA_ERROR__PROGRAM_CLIENTS__FAILED_TO_IDENTIFY_ACCOUNT, SOLANA_ERROR__PROGRAM_CLIENTS__FAILED_TO_IDENTIFY_INSTRUCTION, SOLANA_ERROR__PROGRAM_CLIENTS__UNRECOGNIZED_INSTRUCTION_TYPE, SolanaError, type Address, type ClientWithRpc, type ClientWithTransactionPlanning, type ClientWithTransactionSending, type ExtendedClient, type GetAccountInfoApi, type GetMultipleAccountsApi, type HasAddress, type Instruction, type InstructionWithData, type ReadonlyUint8Array } from '@solana/kit';
 import { addSelfFetchFunctions, addSelfPlanAndSendFunctions, type SelfFetchFunctions, type SelfPlanAndSendFunctions } from '@solana/program-client-core';
 import { getMachineCodec, getPaymentTagCodec, getReservationCodec, type Machine, type MachineArgs, type PaymentTag, type PaymentTagArgs, type Reservation, type ReservationArgs } from '../accounts';
-import { getClaimInstruction, getInitMachineInstruction, getReleaseReservationInstruction, getReserveInstruction, parseClaimInstruction, parseInitMachineInstruction, parseReleaseReservationInstruction, parseReserveInstruction, type ClaimInput, type InitMachineInput, type ParsedClaimInstruction, type ParsedInitMachineInstruction, type ParsedReleaseReservationInstruction, type ParsedReserveInstruction, type ReleaseReservationInput, type ReserveInput } from '../instructions';
+import { getClaimInstruction, getInitMachineInstruction, getReleaseReservationInstruction, getRequestReleaseInstruction, getReserveInstruction, parseClaimInstruction, parseInitMachineInstruction, parseReleaseReservationInstruction, parseRequestReleaseInstruction, parseReserveInstruction, type ClaimInput, type InitMachineInput, type ParsedClaimInstruction, type ParsedInitMachineInstruction, type ParsedReleaseReservationInstruction, type ParsedRequestReleaseInstruction, type ParsedReserveInstruction, type ReleaseReservationInput, type RequestReleaseInput, type ReserveInput } from '../instructions';
 import { findMachinePda, findMintAuthorityPda, findPaymentTagPda, findReservationPda } from '../pdas';
 
 export const VENDING_PROGRAM_ADDRESS = '8XqWKHQiesY5o2eDKyewb9ZHwAZ5gdDMtWGuJogvQ5X5' as Address<'8XqWKHQiesY5o2eDKyewb9ZHwAZ5gdDMtWGuJogvQ5X5'>;
@@ -24,13 +24,14 @@ if (containsBytes(data, getU8Encoder().encode(3), 0)) { return VendingAccount.Pa
     throw new SolanaError(SOLANA_ERROR__PROGRAM_CLIENTS__FAILED_TO_IDENTIFY_ACCOUNT, { accountData: data, programName: "vending" });
 }
 
-export enum VendingInstruction { InitMachine, Reserve, Claim, ReleaseReservation }
+export enum VendingInstruction { InitMachine, Reserve, Claim, RequestRelease, ReleaseReservation }
 
 export function identifyVendingInstruction(instruction: { data: ReadonlyUint8Array } | ReadonlyUint8Array): VendingInstruction {
     const data = 'data' in instruction ? instruction.data : instruction;
     if (containsBytes(data, getU8Encoder().encode(0), 0)) { return VendingInstruction.InitMachine; }
 if (containsBytes(data, getU8Encoder().encode(1), 0)) { return VendingInstruction.Reserve; }
 if (containsBytes(data, getU8Encoder().encode(2), 0)) { return VendingInstruction.Claim; }
+if (containsBytes(data, getU8Encoder().encode(4), 0)) { return VendingInstruction.RequestRelease; }
 if (containsBytes(data, getU8Encoder().encode(3), 0)) { return VendingInstruction.ReleaseReservation; }
     throw new SolanaError(SOLANA_ERROR__PROGRAM_CLIENTS__FAILED_TO_IDENTIFY_INSTRUCTION, { instructionData: data, programName: "vending" });
 }
@@ -39,6 +40,7 @@ export type ParsedVendingInstruction<TProgram extends string = '8XqWKHQiesY5o2eD
 | { instructionType: VendingInstruction.InitMachine } & ParsedInitMachineInstruction<TProgram>
 | { instructionType: VendingInstruction.Reserve } & ParsedReserveInstruction<TProgram>
 | { instructionType: VendingInstruction.Claim } & ParsedClaimInstruction<TProgram>
+| { instructionType: VendingInstruction.RequestRelease } & ParsedRequestReleaseInstruction<TProgram>
 | { instructionType: VendingInstruction.ReleaseReservation } & ParsedReleaseReservationInstruction<TProgram>
 
 
@@ -54,6 +56,8 @@ case VendingInstruction.Reserve: { assertIsInstructionWithAccounts(instruction);
 return { instructionType: VendingInstruction.Reserve, ...parseReserveInstruction(instruction) }; }
 case VendingInstruction.Claim: { assertIsInstructionWithAccounts(instruction);
 return { instructionType: VendingInstruction.Claim, ...parseClaimInstruction(instruction) }; }
+case VendingInstruction.RequestRelease: { assertIsInstructionWithAccounts(instruction);
+return { instructionType: VendingInstruction.RequestRelease, ...parseRequestReleaseInstruction(instruction) }; }
 case VendingInstruction.ReleaseReservation: { assertIsInstructionWithAccounts(instruction);
 return { instructionType: VendingInstruction.ReleaseReservation, ...parseReleaseReservationInstruction(instruction) }; }
                 default: throw new SolanaError(SOLANA_ERROR__PROGRAM_CLIENTS__UNRECOGNIZED_INSTRUCTION_TYPE, { instructionType: instructionType as string, programName: "vending" });
@@ -64,7 +68,7 @@ export type VendingPlugin = { accounts: VendingPluginAccounts; instructions: Ven
 
 export type VendingPluginAccounts = { machine: ReturnType<typeof getMachineCodec> & SelfFetchFunctions<MachineArgs, Machine>; reservation: ReturnType<typeof getReservationCodec> & SelfFetchFunctions<ReservationArgs, Reservation>; paymentTag: ReturnType<typeof getPaymentTagCodec> & SelfFetchFunctions<PaymentTagArgs, PaymentTag>; }
 
-export type VendingPluginInstructions = { initMachine: (input: InitMachineInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getInitMachineInstruction> & SelfPlanAndSendFunctions; reserve: (input: ReserveInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getReserveInstruction> & SelfPlanAndSendFunctions; claim: (input: ClaimInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getClaimInstruction> & SelfPlanAndSendFunctions; releaseReservation: (input: ReleaseReservationInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getReleaseReservationInstruction> & SelfPlanAndSendFunctions; }
+export type VendingPluginInstructions = { initMachine: (input: InitMachineInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getInitMachineInstruction> & SelfPlanAndSendFunctions; reserve: (input: ReserveInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getReserveInstruction> & SelfPlanAndSendFunctions; claim: (input: ClaimInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getClaimInstruction> & SelfPlanAndSendFunctions; requestRelease: (input: RequestReleaseInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getRequestReleaseInstruction> & SelfPlanAndSendFunctions; releaseReservation: (input: ReleaseReservationInput, config?: { programAddress?: Address | HasAddress }) => ReturnType<typeof getReleaseReservationInstruction> & SelfPlanAndSendFunctions; }
 
 export type VendingPluginPdas = { machine: typeof findMachinePda; mintAuthority: typeof findMintAuthorityPda; reservation: typeof findReservationPda; paymentTag: typeof findPaymentTagPda; }
 
@@ -72,6 +76,6 @@ export type VendingPluginRequirements = ClientWithRpc<GetAccountInfoApi & GetMul
 
 export function vendingProgram(config: { programAddress?: Address | HasAddress } = {}) {
     return <T extends VendingPluginRequirements>(client: T): ExtendedClient<T, { vending: VendingPlugin }> => {
-        return extendClient(client, { vending: <VendingPlugin>{ accounts: { machine: addSelfFetchFunctions(client, getMachineCodec()), reservation: addSelfFetchFunctions(client, getReservationCodec()), paymentTag: addSelfFetchFunctions(client, getPaymentTagCodec()) }, instructions: { initMachine: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getInitMachineInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })), reserve: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getReserveInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })), claim: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getClaimInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })), releaseReservation: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getReleaseReservationInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })) }, pdas: { machine: (seeds, pdaConfig) => findMachinePda(seeds, { programAddress: pdaConfig?.programAddress ?? config.programAddress }), mintAuthority: (seeds, pdaConfig) => findMintAuthorityPda(seeds, { programAddress: pdaConfig?.programAddress ?? config.programAddress }), reservation: (seeds, pdaConfig) => findReservationPda(seeds, { programAddress: pdaConfig?.programAddress ?? config.programAddress }), paymentTag: (seeds, pdaConfig) => findPaymentTagPda(seeds, { programAddress: pdaConfig?.programAddress ?? config.programAddress }) }, identifyAccount: identifyVendingAccount, identifyInstruction: identifyVendingInstruction, parseInstruction: parseVendingInstruction } });
+        return extendClient(client, { vending: <VendingPlugin>{ accounts: { machine: addSelfFetchFunctions(client, getMachineCodec()), reservation: addSelfFetchFunctions(client, getReservationCodec()), paymentTag: addSelfFetchFunctions(client, getPaymentTagCodec()) }, instructions: { initMachine: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getInitMachineInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })), reserve: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getReserveInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })), claim: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getClaimInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })), requestRelease: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getRequestReleaseInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })), releaseReservation: (input, instructionConfig) => addSelfPlanAndSendFunctions(client, getReleaseReservationInstruction(input, { programAddress: instructionConfig?.programAddress ?? config.programAddress })) }, pdas: { machine: (seeds, pdaConfig) => findMachinePda(seeds, { programAddress: pdaConfig?.programAddress ?? config.programAddress }), mintAuthority: (seeds, pdaConfig) => findMintAuthorityPda(seeds, { programAddress: pdaConfig?.programAddress ?? config.programAddress }), reservation: (seeds, pdaConfig) => findReservationPda(seeds, { programAddress: pdaConfig?.programAddress ?? config.programAddress }), paymentTag: (seeds, pdaConfig) => findPaymentTagPda(seeds, { programAddress: pdaConfig?.programAddress ?? config.programAddress }) }, identifyAccount: identifyVendingAccount, identifyInstruction: identifyVendingInstruction, parseInstruction: parseVendingInstruction } });
     };
 }

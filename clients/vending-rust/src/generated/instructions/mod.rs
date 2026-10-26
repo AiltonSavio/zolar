@@ -8,9 +8,11 @@
 pub(crate) mod r#claim;
 pub(crate) mod r#init_machine;
 pub(crate) mod r#release_reservation;
+pub(crate) mod r#request_release;
 pub(crate) mod r#reserve;
 
 pub use self::r#claim::*;
 pub use self::r#init_machine::*;
 pub use self::r#release_reservation::*;
+pub use self::r#request_release::*;
 pub use self::r#reserve::*;

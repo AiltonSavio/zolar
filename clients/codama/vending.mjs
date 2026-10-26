@@ -1,5 +1,6 @@
 import {
   accountNode,
+  booleanTypeNode,
   bytesTypeNode,
   constantPdaSeedNodeFromString,
   errorNode,
@@ -59,6 +60,7 @@ const accounts = [
     f('svkHash', bytes(32)),
     f('vkeyHash', bytes(32)),
     f('reservationBlocks', u32),
+    f('svk', bytes(64)),
   ]),
   account('reservation', 2, [
     f('bump', u8),
@@ -68,6 +70,8 @@ const accounts = [
     f('priceZat', u64),
     f('expiryHeight', u32),
     f('createdAt', i64),
+    f('releaseRequested', booleanTypeNode()),
+    f('releaseRequestedAt', i64),
   ]),
   account('paymentTag', 3, []),
 ];
@@ -153,7 +157,7 @@ const instructions = [
       ['priceZat', u64],
       ['stock', u32],
       ['diversifier', bytes(11)],
-      ['svkHash', bytes(32)],
+      ['svk', bytes(64)],
       ['relayAddress', publicKeyTypeNode()],
       ['vkeyHash', bytes(32)],
       ['reservationBlocks', u32],
@@ -193,6 +197,12 @@ const instructions = [
       ['publicValues', bytes(249)],
     ],
   ),
+  ix('requestRelease', 4, [
+    a('submitter', false, true),
+    a('machine'),
+    a('reservation', true),
+    a('relay'),
+  ]),
   ix('releaseReservation', 3, [
     a('submitter', false, true),
     a('machine', true),
@@ -222,6 +232,10 @@ const names = [
   'ArithmeticOverflow',
   'BadTokenAccount',
   'AlreadyInitialized',
+  'WrongPayout',
+  'ReleaseAlreadyRequested',
+  'ReleaseNotRequested',
+  'ClaimWindowOpen',
 ];
 const errors = names.map((name, i) =>
   errorNode({

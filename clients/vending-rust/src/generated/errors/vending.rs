@@ -70,6 +70,18 @@ pub enum VendingError {
     /// 20 - AlreadyInitialized
     #[error("AlreadyInitialized")]
     AlreadyInitialized = 0x14,
+    /// 21 - WrongPayout
+    #[error("WrongPayout")]
+    WrongPayout = 0x15,
+    /// 22 - ReleaseAlreadyRequested
+    #[error("ReleaseAlreadyRequested")]
+    ReleaseAlreadyRequested = 0x16,
+    /// 23 - ReleaseNotRequested
+    #[error("ReleaseNotRequested")]
+    ReleaseNotRequested = 0x17,
+    /// 24 - ClaimWindowOpen
+    #[error("ClaimWindowOpen")]
+    ClaimWindowOpen = 0x18,
 }
 
 impl From<VendingError> for solana_program_error::ProgramError {

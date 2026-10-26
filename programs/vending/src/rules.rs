@@ -55,6 +55,9 @@ pub fn validate_claim(p: &PublicValues, a: ClaimAccounts<'_>) -> Result<ClaimPla
     if p.nonce != r.nonce {
         return Err(E::MissingReservation);
     }
+    if p.payout != r.payout {
+        return Err(E::WrongPayout);
+    }
     if p.height > r.expiry_height {
         return Err(E::PaymentExpired);
     }
@@ -71,7 +74,7 @@ pub fn validate_claim(p: &PublicValues, a: ClaimAccounts<'_>) -> Result<ClaimPla
         close_reservation: true,
     })
 }
-pub fn can_release(
+pub fn can_request_release(
     tip: u32,
     depth: u16,
     halted: bool,
@@ -79,15 +82,28 @@ pub fn can_release(
     created: i64,
     now: i64,
 ) -> Result<(), E> {
-    let allowed = if halted {
-        now.checked_sub(created)
-            .is_some_and(|elapsed| elapsed >= BACKSTOP_SECS)
-    } else {
-        u64::from(tip) > u64::from(expiry) + u64::from(depth)
-    };
+    let allowed = u64::from(tip) > u64::from(expiry) + u64::from(depth)
+        || (halted
+            && now
+                .checked_sub(created)
+                .is_some_and(|elapsed| elapsed >= BACKSTOP_SECS));
     if allowed {
         Ok(())
     } else {
         Err(E::ReleaseTooEarly)
     }
+}
+
+pub fn can_release(reservation: &Reservation, now: i64) -> Result<(), E> {
+    if !reservation.release_requested {
+        return Err(E::ReleaseNotRequested);
+    }
+    let end = reservation
+        .release_requested_at
+        .checked_add(CLAIM_WINDOW_SECS)
+        .ok_or(E::ArithmeticOverflow)?;
+    if now < end {
+        return Err(E::ClaimWindowOpen);
+    }
+    Ok(())
 }

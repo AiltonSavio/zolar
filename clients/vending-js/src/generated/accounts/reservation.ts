@@ -6,24 +6,24 @@
  * @see https://github.com/codama-idl/codama
  */
 
-import { assertAccountExists, assertAccountsExist, combineCodec, decodeAccount, fetchEncodedAccount, fetchEncodedAccounts, fixDecoderSize, fixEncoderSize, getAddressDecoder, getAddressEncoder, getBytesDecoder, getBytesEncoder, getI64Decoder, getI64Encoder, getStructDecoder, getStructEncoder, getU32Decoder, getU32Encoder, getU64Decoder, getU64Encoder, getU8Decoder, getU8Encoder, transformEncoder, type Account, type Address, type EncodedAccount, type FetchAccountConfig, type FetchAccountsConfig, type FixedSizeCodec, type FixedSizeDecoder, type FixedSizeEncoder, type HasAddress, type MaybeAccount, type MaybeEncodedAccount, type ReadonlyUint8Array } from '@solana/kit';
+import { assertAccountExists, assertAccountsExist, combineCodec, decodeAccount, fetchEncodedAccount, fetchEncodedAccounts, fixDecoderSize, fixEncoderSize, getAddressDecoder, getAddressEncoder, getBooleanDecoder, getBooleanEncoder, getBytesDecoder, getBytesEncoder, getI64Decoder, getI64Encoder, getStructDecoder, getStructEncoder, getU32Decoder, getU32Encoder, getU64Decoder, getU64Encoder, getU8Decoder, getU8Encoder, transformEncoder, type Account, type Address, type EncodedAccount, type FetchAccountConfig, type FetchAccountsConfig, type FixedSizeCodec, type FixedSizeDecoder, type FixedSizeEncoder, type HasAddress, type MaybeAccount, type MaybeEncodedAccount, type ReadonlyUint8Array } from '@solana/kit';
 
 export const RESERVATION_DISCRIMINATOR = 2;
 
 export function getReservationDiscriminatorBytes(): ReadonlyUint8Array { return getU8Encoder().encode(RESERVATION_DISCRIMINATOR); }
 
-export type Reservation = { discriminator: number; version: number; bump: number; machine: Address; nonce: ReadonlyUint8Array; payout: Address; priceZat: bigint; expiryHeight: number; createdAt: bigint;  };
+export type Reservation = { discriminator: number; version: number; bump: number; machine: Address; nonce: ReadonlyUint8Array; payout: Address; priceZat: bigint; expiryHeight: number; createdAt: bigint; releaseRequested: boolean; releaseRequestedAt: bigint;  };
 
-export type ReservationArgs = { version: number; bump: number; machine: Address | HasAddress; nonce: ReadonlyUint8Array; payout: Address | HasAddress; priceZat: number | bigint; expiryHeight: number; createdAt: number | bigint;  };
+export type ReservationArgs = { version: number; bump: number; machine: Address | HasAddress; nonce: ReadonlyUint8Array; payout: Address | HasAddress; priceZat: number | bigint; expiryHeight: number; createdAt: number | bigint; releaseRequested: boolean; releaseRequestedAt: number | bigint;  };
 
 /** Gets the encoder for {@link ReservationArgs} account data. */
 export function getReservationEncoder(): FixedSizeEncoder<ReservationArgs> {
-    return transformEncoder(getStructEncoder([['discriminator', getU8Encoder()], ['version', getU8Encoder()], ['bump', getU8Encoder()], ['machine', getAddressEncoder()], ['nonce', fixEncoderSize(getBytesEncoder(), 32)], ['payout', getAddressEncoder()], ['priceZat', getU64Encoder()], ['expiryHeight', getU32Encoder()], ['createdAt', getI64Encoder()]]), (value) => ({ ...value, discriminator: RESERVATION_DISCRIMINATOR }));
+    return transformEncoder(getStructEncoder([['discriminator', getU8Encoder()], ['version', getU8Encoder()], ['bump', getU8Encoder()], ['machine', getAddressEncoder()], ['nonce', fixEncoderSize(getBytesEncoder(), 32)], ['payout', getAddressEncoder()], ['priceZat', getU64Encoder()], ['expiryHeight', getU32Encoder()], ['createdAt', getI64Encoder()], ['releaseRequested', getBooleanEncoder()], ['releaseRequestedAt', getI64Encoder()]]), (value) => ({ ...value, discriminator: RESERVATION_DISCRIMINATOR }));
 }
 
 /** Gets the decoder for {@link Reservation} account data. */
 export function getReservationDecoder(): FixedSizeDecoder<Reservation> {
-    return getStructDecoder([['discriminator', getU8Decoder()], ['version', getU8Decoder()], ['bump', getU8Decoder()], ['machine', getAddressDecoder()], ['nonce', fixDecoderSize(getBytesDecoder(), 32)], ['payout', getAddressDecoder()], ['priceZat', getU64Decoder()], ['expiryHeight', getU32Decoder()], ['createdAt', getI64Decoder()]]);
+    return getStructDecoder([['discriminator', getU8Decoder()], ['version', getU8Decoder()], ['bump', getU8Decoder()], ['machine', getAddressDecoder()], ['nonce', fixDecoderSize(getBytesDecoder(), 32)], ['payout', getAddressDecoder()], ['priceZat', getU64Decoder()], ['expiryHeight', getU32Decoder()], ['createdAt', getI64Decoder()], ['releaseRequested', getBooleanDecoder()], ['releaseRequestedAt', getI64Decoder()]]);
 }
 
 /** Gets the codec for {@link Reservation} account data. */

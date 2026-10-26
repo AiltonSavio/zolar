@@ -22,6 +22,7 @@ impl Fixture {
             stock: 2,
             diversifier: [5; 11],
             svk_hash: [6; 32],
+            svk: [6; 64],
             vkey_hash: [7; 32],
             reservation_blocks: 20,
         };
@@ -33,6 +34,8 @@ impl Fixture {
             price_zat: 50,
             expiry_height: 120,
             created_at: 1000,
+            release_requested: false,
+            release_requested_at: 0,
         };
         let p = PublicValues {
             version: 1,
@@ -46,6 +49,7 @@ impl Fixture {
             diversifier: m.diversifier,
             svk_hash: m.svk_hash,
             pool: 3,
+            payout: r.payout,
         };
         let mut relay = vec![0; RELAY_LEN];
         relay[R_DISC] = DISC_RELAY;
@@ -197,21 +201,22 @@ fn version_and_pool() {
 #[test]
 fn release_boundaries_and_overflow() {
     assert_eq!(
-        can_release(130, 10, false, 120, 1000, 1000),
+        can_request_release(130, 10, false, 120, 1000, 1000),
         Err(E::ReleaseTooEarly)
     );
-    assert!(can_release(131, 10, false, 120, 1000, 1000).is_ok());
+    assert!(can_request_release(131, 10, false, 120, 1000, 1000).is_ok());
+    assert!(can_request_release(131, 10, true, 120, 1000, 1000).is_ok());
     assert_eq!(
-        can_release(500, 10, true, 120, 1000, 87399),
+        can_request_release(130, 10, true, 120, 1000, 87399),
         Err(E::ReleaseTooEarly)
     );
-    assert!(can_release(0, 10, true, 120, 1000, 87400).is_ok());
+    assert!(can_request_release(0, 10, true, 120, 1000, 87400).is_ok());
     assert_eq!(
-        can_release(u32::MAX, 10, false, u32::MAX, 0, 100000),
+        can_request_release(u32::MAX, 10, false, u32::MAX, 0, 100000),
         Err(E::ReleaseTooEarly)
     );
     assert_eq!(
-        can_release(0, 10, true, 120, i64::MAX, i64::MAX),
+        can_request_release(0, 10, true, 120, i64::MAX, i64::MAX),
         Err(E::ReleaseTooEarly)
     );
 }
@@ -220,21 +225,72 @@ fn account_layout_roundtrip_and_bad_lengths() {
     let f = Fixture::new();
     let mut m = [0; MACHINE_LEN];
     f.m.write(&mut m);
-    assert_eq!(Machine::read(&m), Some(f.m));
-    assert!(Machine::read(&m[..226]).is_none());
+    assert_eq!(Machine::read(&m).as_ref(), Some(&f.m));
+    assert!(Machine::read(&m[..227]).is_none());
+    assert_eq!(&m[227..291], &f.m.svk);
     let mut r = [0; RESERVATION_LEN];
     f.r.write(&mut r);
     assert_eq!(Reservation::read(&r), Some(f.r));
+    assert!(Reservation::read(&r[..119]).is_none());
+    r[119] = 2;
+    assert!(Reservation::read(&r).is_none());
+    r[119] = 0;
+    r[120] = 1;
+    assert!(Reservation::read(&r).is_none());
     r[0] = 0;
     assert!(Reservation::read(&r).is_none());
 }
 
 #[test]
-fn contract_nonce_recreation_allows_old_unclaimed_payment_for_new_payout() {
-    // Regression witness for the shared-contract issue: closing is not permanent nonce consumption.
+fn nonce_recreation_cannot_redirect_old_unclaimed_payment() {
     let mut f = Fixture::new();
     f.r.created_at += BACKSTOP_SECS;
     f.r.expiry_height += 100;
     f.r.payout = [99; 32];
-    assert_eq!(f.check().unwrap().payout, [99; 32]);
+    assert_eq!(f.check(), Err(E::WrongPayout));
+}
+
+#[test]
+fn wrong_proven_payout_is_rejected() {
+    let mut f = Fixture::new();
+    f.p.payout[0] ^= 1;
+    assert_eq!(f.check(), Err(E::WrongPayout));
+}
+
+#[test]
+fn release_requires_request_and_full_claim_window() {
+    let mut f = Fixture::new();
+    assert_eq!(can_release(&f.r, 10000), Err(E::ReleaseNotRequested));
+    f.r.release_requested = true;
+    f.r.release_requested_at = 1000;
+    assert_eq!(can_release(&f.r, 1899), Err(E::ClaimWindowOpen));
+    assert_eq!(can_release(&f.r, 1900), Ok(()));
+    assert_eq!(can_release(&f.r, 1901), Ok(()));
+    assert_eq!(can_release(&f.r, 999), Err(E::ClaimWindowOpen));
+    f.r.release_requested_at = i64::MAX;
+    assert_eq!(can_release(&f.r, i64::MAX), Err(E::ArithmeticOverflow));
+    f.r.release_requested_at = 0;
+    assert_eq!(can_release(&f.r, 900), Ok(()));
+}
+
+#[test]
+fn claim_inside_window_and_after_window_until_release_succeeds() {
+    let mut f = Fixture::new();
+    f.r.release_requested = true;
+    f.r.release_requested_at = 1000;
+    for now in [1000, 1899, 1900, 2000] {
+        assert_eq!(can_release(&f.r, now).is_ok(), now >= 1900);
+        let plan = f.check().unwrap();
+        assert_eq!(plan.payout, f.p.payout);
+        assert_eq!(plan.tickets, 1);
+        assert!(plan.close_reservation);
+    }
+}
+
+#[test]
+fn same_payout_can_reserve_released_nonce_and_claim_old_payment() {
+    let mut f = Fixture::new();
+    f.r.created_at += BACKSTOP_SECS;
+    f.r.expiry_height += 100;
+    assert_eq!(f.check().unwrap().payout, f.p.payout);
 }

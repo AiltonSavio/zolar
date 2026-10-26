@@ -7,6 +7,36 @@ use vending_client::{
 use vending_tests::*;
 
 #[test]
+fn eligible_release_cannot_skip_request_and_claim_window() {
+    let mut w = World::new();
+    w.init(1);
+    w.reserve([1; 32]).unwrap();
+    w.mine(4);
+    assert_error(w.release([1; 32]), E::ReleaseNotRequested);
+    assert_eq!(w.machine_state().available, 0);
+    assert_eq!(w.reservation_state([1; 32]).created_at, START);
+}
+
+#[test]
+fn init_revision2_stores_full_viewing_key_and_computes_sha256() {
+    let mut w = World::new();
+    w.init(1);
+    let m = w.machine_state();
+    assert_eq!(m.svk, [6; 64]);
+    assert_eq!(
+        m.svk_hash,
+        [
+            0x13, 0x52, 0x28, 0x6f, 0x7d, 0xdd, 0xf6, 0x5e, 0xfc, 0xe5, 0x2c, 0x78, 0x94, 0x76,
+            0xc7, 0xe9, 0x17, 0xec, 0xdd, 0x98, 0xd1, 0xc1, 0xca, 0x9a, 0xb2, 0xdd, 0xe1, 0xe4,
+            0x96, 0x4c, 0xae, 0xfe,
+        ]
+    );
+    let decoded =
+        ClientMachine::from_bytes(&w.h.svm.get_account(&w.machine).unwrap().data).unwrap();
+    assert_eq!(decoded.svk, m.svk);
+}
+
+#[test]
 fn init_config_is_immutable_and_mint_authority_is_pda() {
     let mut w = World::new();
     w.init(2);
@@ -14,7 +44,7 @@ fn init_config_is_immutable_and_mint_authority_is_pda() {
     assert_eq!(m.available, 2);
     assert_eq!(m.price_zat, 2_500_000);
     assert_eq!(m.diversifier, [5; 11]);
-    assert_eq!(m.svk_hash, [6; 32]);
+    assert_eq!(m.svk, [6; 64]);
     assert_eq!(m.vkey_hash, [7; 32]);
     assert_eq!(m.relay, *w.relay.as_array());
     let mint = w.h.svm.get_account(&w.mint.pubkey()).unwrap();
@@ -31,7 +61,7 @@ fn init_config_is_immutable_and_mint_authority_is_pda() {
     assert_error(w.h.send(&[ix], &[&w.payee, &w.mint]), E::AlreadyInitialized);
     assert_eq!(w.h.svm.get_account(&w.machine).unwrap(), before);
     let mut unknown = w.init_ix(1);
-    unknown.data = vec![4];
+    unknown.data = vec![255];
     assert!(w.h.send(&[unknown], &[&w.payee, &w.mint]).is_err());
     let decoded = ClientMachine::from_bytes(&before.data).unwrap();
     assert_eq!(decoded.price_zat, m.price_zat);
@@ -50,10 +80,14 @@ fn reserve_decrements_stock_rejects_duplicate_nonce_and_sold_out() {
     assert_eq!(r.payout, *w.payer.pubkey().as_array());
     assert_eq!(r.created_at, START);
     assert_eq!(r.price_zat, 2_500_000);
+    assert!(!r.release_requested);
+    assert_eq!(r.release_requested_at, 0);
     let a = w.h.svm.get_account(&w.reservation([1; 32])).unwrap();
     let decoded = ClientReservation::from_bytes(&a.data).unwrap();
     assert_eq!(decoded.nonce, [1; 32]);
     assert_eq!(decoded.expiry_height, r.expiry_height);
+    assert!(!decoded.release_requested);
+    assert_eq!(decoded.release_requested_at, 0);
     assert_error(w.reserve([1; 32]), E::AlreadyInitialized);
     assert_eq!(w.machine_state().available, 1);
     w.reserve([2; 32]).unwrap();
@@ -68,10 +102,22 @@ fn release_exact_boundary_returns_rent_and_stock_and_closes() {
     let r = w.reservation([1; 32]);
     let rent = w.h.svm.get_account(&r).unwrap().lamports;
     let payout_before = w.h.svm.get_account(&w.payer.pubkey()).unwrap().lamports;
-    assert_error(w.release([1; 32]), E::ReleaseTooEarly);
+    assert_error(w.request_release([1; 32]), E::ReleaseTooEarly);
     w.mine(3);
-    assert_error(w.release([1; 32]), E::ReleaseTooEarly);
+    assert_error(w.request_release([1; 32]), E::ReleaseTooEarly);
     w.mine(1);
+    w.request_release([1; 32]).unwrap();
+    let pending = w.reservation_state([1; 32]);
+    assert!(pending.release_requested);
+    assert_eq!(pending.release_requested_at, START);
+    assert_eq!(w.machine_state().available, 0);
+    w.time(START + 123);
+    assert_error(w.request_release([1; 32]), E::ReleaseAlreadyRequested);
+    assert_eq!(w.reservation_state([1; 32]), pending);
+    assert_error(w.release([1; 32]), E::ClaimWindowOpen);
+    w.time(START + CLAIM_WINDOW_SECS - 1);
+    assert_error(w.release([1; 32]), E::ClaimWindowOpen);
+    w.time(START + CLAIM_WINDOW_SECS);
     w.release([1; 32]).unwrap();
     assert_eq!(w.machine_state().available, 1);
     assert!(w.h.svm.get_account(&r).is_none());
@@ -83,15 +129,17 @@ fn release_exact_boundary_returns_rent_and_stock_and_closes() {
     assert_eq!(w.machine_state().available, 1);
 }
 #[test]
-fn halt_requires_full_24_hours_even_if_height_allows_release() {
+fn halt_below_height_threshold_requires_full_24_hours_then_claim_window() {
     let mut w = World::new();
     w.init(1);
     w.reserve([1; 32]).unwrap();
-    w.mine(4);
     w.halt();
     w.time(START + BACKSTOP_SECS - 1);
-    assert_error(w.release([1; 32]), E::ReleaseTooEarly);
+    assert_error(w.request_release([1; 32]), E::ReleaseTooEarly);
     w.time(START + BACKSTOP_SECS);
+    w.request_release([1; 32]).unwrap();
+    assert_error(w.release([1; 32]), E::ClaimWindowOpen);
+    w.time(START + BACKSTOP_SECS + CLAIM_WINDOW_SECS);
     w.release([1; 32]).unwrap();
     assert_eq!(w.machine_state().available, 1);
 }
@@ -141,6 +189,11 @@ fn release_rejects_account_substitutions_and_reserve_rejects_halt() {
     let mut ix = w.release_ix([1; 32]);
     ix.accounts[3].pubkey = w.machine;
     assert_error(w.h.send(&[ix], &[]), E::WrongAccount);
+    let mut ix = w.request_release_ix([1; 32]);
+    ix.accounts[3].pubkey = w.machine;
+    assert_error(w.h.send(&[ix], &[]), E::WrongAccount);
+    w.request_release([1; 32]).unwrap();
+    w.time(START + CLAIM_WINDOW_SECS);
     w.release([1; 32]).unwrap();
     w.halt();
     assert_error(w.reserve([2; 32]), E::RelayHalted);
@@ -224,4 +277,94 @@ fn claim_checks_all_destination_and_program_bindings_before_verification() {
         w.reservation_state([1; 32]).payout,
         *w.payer.pubkey().as_array()
     );
+}
+
+#[test]
+fn halt_after_request_does_not_restart_claim_window() {
+    let mut w = World::new();
+    w.init(1);
+    w.reserve([1; 32]).unwrap();
+    w.mine(4);
+    w.request_release([1; 32]).unwrap();
+    w.time(START + CLAIM_WINDOW_SECS - 1);
+    w.halt();
+    assert_error(w.release([1; 32]), E::ClaimWindowOpen);
+    w.time(START + CLAIM_WINDOW_SECS);
+    w.release([1; 32]).unwrap();
+    assert_eq!(w.machine_state().available, 1);
+}
+
+#[test]
+fn high_tip_allows_request_even_when_halted_per_contract_or_condition() {
+    let mut w = World::new();
+    w.init(1);
+    w.reserve([1; 32]).unwrap();
+    w.mine(4);
+    w.halt();
+    w.request_release([1; 32]).unwrap();
+    assert_eq!(w.reservation_state([1; 32]).release_requested_at, START);
+}
+
+#[test]
+fn running_stalled_relay_does_not_enable_halt_backstop() {
+    let mut w = World::new();
+    w.init(1);
+    w.reserve([1; 32]).unwrap();
+    w.time(START + BACKSTOP_SECS);
+    assert_error(w.request_release([1; 32]), E::ReleaseTooEarly);
+    assert_eq!(w.machine_state().available, 0);
+}
+
+#[test]
+fn claim_during_window_reaches_verifier_and_preserves_reservation_on_invalid_proof() {
+    let mut w = World::new();
+    w.init(1);
+    w.reserve([1; 32]).unwrap();
+    w.mine(4);
+    w.request_release([1; 32]).unwrap();
+    w.time(START + CLAIM_WINDOW_SECS - 1);
+    let before = w.reservation_state([1; 32]);
+    let ix = w.claim_ix([1; 32]);
+    assert_error(w.h.send(&[ix], &[]), E::InvalidProof);
+    assert_eq!(w.reservation_state([1; 32]), before);
+    assert_eq!(w.machine_state().available, 0);
+}
+
+#[test]
+fn claim_rejects_wrong_proven_payout_before_verifier() {
+    let mut w = World::new();
+    w.init(1);
+    w.reserve([1; 32]).unwrap();
+    let mut ix = w.claim_ix([1; 32]);
+    let public_at = 3 + 388;
+    ix.data[public_at + 189] ^= 1;
+    assert_error(w.h.send(&[ix], &[]), E::WrongPayout);
+}
+
+#[test]
+fn request_at_unix_zero_is_still_a_request() {
+    let mut w = World::new();
+    w.time(0);
+    w.init(1);
+    w.reserve([1; 32]).unwrap();
+    w.mine(4);
+    w.request_release([1; 32]).unwrap();
+    assert!(w.reservation_state([1; 32]).release_requested);
+    assert_error(w.request_release([1; 32]), E::ReleaseAlreadyRequested);
+    w.time(CLAIM_WINDOW_SECS);
+    w.release([1; 32]).unwrap();
+    assert_eq!(w.machine_state().available, 1);
+}
+
+#[test]
+fn legacy_init_wire_and_legacy_account_lengths_are_rejected() {
+    let mut w = World::new();
+    let mut ix = w.init_ix(1);
+    ix.data.drain(88..120);
+    assert!(w.h.send(&[ix], &[&w.payee, &w.mint]).is_err());
+    w.init(1);
+    let mut a = w.h.svm.get_account(&w.machine).unwrap();
+    a.data.truncate(227);
+    w.h.svm.set_account(w.machine, a).unwrap();
+    assert_error(w.reserve([1; 32]), E::WrongAccount);
 }
