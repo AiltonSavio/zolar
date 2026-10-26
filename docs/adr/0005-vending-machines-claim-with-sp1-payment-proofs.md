@@ -6,13 +6,16 @@ testnet ZEC to Ben and separately pays her wallet's transaction fee. A Payment
 Proof lets anyone mint her ticket to the payout wallet in her Reservation.
 Ben runs nothing after setup; permissionless header relaying and a prover
 service still need to run.
-Ana pays the Reservation's rent, recovered when it closes, and needs SOL for
-transactions. Whoever submits the Claim also funds its permanent Payment Tag
-account and any missing associated token account; v1 has no reimbursement pool.
+Ana needs devnet SOL for Reserve's fee and rent; the rent returns when the
+Reservation closes.
+Whoever submits the Claim (Ana or a prover service) pays its fee and funds
+its permanent Payment Tag account and any missing associated token account;
+v1 has no fee pool or reimbursement.
 
-This records the ticket 16 design on October 26, 2026. Implementation and
-end-to-end verification are in progress. It is scoped to Zcash NU7 testnet
-v6/Ironwood payments and Solana devnet tickets with no monetary value.
+This records revision 2 of the ticket 16 contract on October 26, 2026.
+Implementation and end-to-end verification are in progress. It is scoped
+to Zcash NU7 testnet v6/Ironwood payments and Solana devnet tickets with no
+monetary value.
 
 ## Decision
 
@@ -47,13 +50,14 @@ cannot choose a transparent or Sapling receiver. The key exposes incoming
 values, memos, and payment timing for the account's external addresses. It
 does not grant spending authority or disclose the Payer's viewing key.
 
-The machine pins the price, initial stock, shop diversifier, SHA-256 hash of
-the Shop Viewing Key, Header Relay, guest verification-key hash, and
-Reservation duration. Stock availability changes through Reserve and
-ReleaseReservation; the configuration cannot be updated or withdrawn in v1.
-Key rotation or a changed guest requires a new machine. The public key and
-address must remain available to the page and prover; a key hash alone is
-not enough to recover them.
+The machine stores the full 64-byte Shop Viewing Key (`dk || ivk`) on chain
+and computes and stores its SHA-256 hash during InitMachine. The page and
+prover read the key from the machine; the hash binds Claims to it. The machine
+also pins the price, initial stock, shop diversifier, Header Relay, guest
+verification-key hash, and Reservation duration. Stock availability changes
+through Reserve and ReleaseReservation; the configuration cannot be updated
+or withdrawn in v1.
+Key rotation or a changed guest requires a new machine.
 
 Program configuration immutability does not remove trust in an upgrade
 authority. The devnet programs are unaudited, and this decision makes no
@@ -67,21 +71,23 @@ tip plus the machine's Reservation duration. A failed Reserve means Ana
 must not pay. The link requests exactly the price; the Claim accepts an
 output worth at least that price and returns no excess ZEC.
 
-The 512-byte memo is ZIP-302 arbitrary data with exactly this encoding:
+The memo is exactly the ASCII ZIP-302 text
+`zv1:<machine>:<nonce>:<payout>`, zero-padded to 512 bytes with nothing else.
+Each field is the canonical base58 encoding of exactly 32 bytes: the machine
+public key, Ana's random nonce, and her Solana payout public key. The guest
+rejects any other content, including changes in case, spaces, extra fields,
+or non-canonical base58 values. Text replaces binary memos because Vizor
+cannot carry binary memos and text is the safe format across wallets.
 
-| Byte range | Meaning |
-|---|---|
-| `0` | `0xFF`, arbitrary data |
-| `1` | `0x01`, version 1 |
-| `2..34` | Machine public key, 32 bytes |
-| `34..66` | Reservation nonce, 32 bytes |
-| `66..512` | Zero padding |
+The ZIP-321 `zcash:` link carries the UTF-8 text as base64url without padding
+in its `memo` parameter and requests exactly the price in `amount`. The
+machine key binds the payment to one machine. V1 is devnet-only and has no
+explicit Solana cluster identifier in the memo.
 
-The ZIP-321 `zcash:` link carries the memo as base64url without padding.
-Other versions, encodings, or trailing data are rejected. The nonce identifies
-the Reservation; the payout comes from that account, not a wallet-supplied
-memo address. The machine key binds the payment to one machine. V1 is
-devnet-only and has no explicit Solana cluster identifier in the memo.
+Binding the payout in both the memo and public values, and requiring it to
+equal the Reservation's payout, prevents Mallory from claiming Ana's payment
+by re-reserving her released nonce with Mallory's payout. Ana can Reserve
+the same nonce again and claim her payment if stock remains.
 
 ### Payment Proof and Claim
 
@@ -99,22 +105,39 @@ commitment `cmx`, and binds the recipient to the configured diversifier
 must not satisfy a different note commitment. The guest also checks the
 exact memo and derives the Payment Tag from the same paying action.
 
-Version 1 public values are a fixed 249-byte record: version, branch ID,
-machine, nonce, note value, Payment Tag, Final Block Tree root, payment
-height, diversifier, Shop Viewing Key hash, Ironwood pool byte `0x03`, and
-60 zero reserved bytes. Integers are little-endian; roots retain the relay's
-byte order. The SP1 v6 Solana verifier must bind the guest verification-key
-hash and the hash of these exact public-value bytes.
+Version 1 public values are a fixed 249-byte record in SP1 commit order.
+Integers are little-endian; roots retain the relay's byte order:
+
+| Offset | Bytes | Field |
+|---|---|---|
+| 0 | 1 | version = 1 |
+| 1 | 4 | consensus branch id (u32 LE) used in the txid personalization |
+| 5 | 32 | machine pubkey (from memo) |
+| 37 | 32 | reservation nonce (from memo) |
+| 69 | 8 | note value in zatoshi (u64 LE) |
+| 77 | 32 | Payment Tag = nullifier of the action containing the paying output |
+| 109 | 32 | Final Block Tree root the proof is against (Relay byte order) |
+| 141 | 4 | block height of the payment (u32 LE) |
+| 145 | 11 | shop diversifier `d` |
+| 156 | 32 | SHA-256 of the 64-byte Shop Viewing Key (`dk || ivk`) |
+| 188 | 1 | pool byte: 0x03 = Ironwood |
+| 189 | 32 | payout pubkey (from memo) |
+| 221 | 28 | reserved, zero |
+
+The SP1 v6 Solana verifier must bind the guest verification-key hash and
+SHA-256 of these exact public-value bytes.
 
 Claim checks the running Header Relay's owner and configured address, the
-known tree root, the branch ID, machine, diversifier, key hash, Reservation,
-payment height at or below expiry, and value at least the reserved price.
+known tree root, version, pool, branch ID, machine, diversifier, key hash,
+Reservation, `reservation.payout == payout`, payment height at or below
+expiry, and value at least the reserved price.
 There is one Finality Depth for the relay, as in [ADR 0003](0003-relay-wide-finality-depth-and-halt-on-deep-reorgs.md).
 The Payment Tag account is permanent and scoped to the machine; creation
 fails on reuse. Anyone may submit a valid proof, but minting always pays
-the current Reservation account's payout wallet. The program alone controls
-the ticket mint authority. Claim closes the Reservation and returns its rent
-to that payout wallet.
+the payout bound by the proof and Reservation. The program alone controls
+the ticket mint authority. Claim creates that payout's associated token
+account if missing, closes the Reservation, and returns its rent to the
+payout wallet.
 
 ReleaseReservation returns stock and rent once the relay tip is strictly
 above expiry plus Finality Depth, or once the relay is Halted and 24 hours
@@ -144,8 +167,25 @@ least 32 GB RAM or suitable GPU hardware; complete-proof resource
 requirements remain unverified. Proving in Ana's browser is not the plan.
 Someone must fund and operate the stateless prover and header relaying.
 Prover censorship, queues, or downtime can prevent a timely Claim. Services
-cannot change the payout of an existing live Reservation; nonce reuse after
-closure still needs a protocol fix, as described below.
+cannot change the payout bound by the payment's memo and proof.
+
+### Prover HTTP API
+
+The prover's stateless `serve` mode holds no keys and accepts JSON with open
+CORS. It reads the Shop Viewing Key from the machine account to scan shop
+outputs. The page calls it to find a payment, request a proof, and poll the
+job before submitting Claim:
+
+- `GET /find-payment?machine=<b58>&nonce=<b58>` returns
+  `{ "status": "pending" }` or
+  `{ "status": "found", "txid": "<hex, explorer order>", "height": <u32>, "value_zat": <u64>, "payout": "<b58>" }`.
+- `POST /prove` with
+  `{ "machine": "<b58>", "nonce": "<b58>", "txid": "<hex>" }` returns
+  `{ "job": "<id>" }`.
+- `GET /prove/<id>` returns
+  `{ "status": "waiting_finality" | "proving" | "failed", "error"?: "<text>" }`
+  or
+  `{ "status": "done", "proof": "<hex>", "public_values": "<hex>" }`.
 
 ## Consequences
 
@@ -194,24 +234,14 @@ without paying ZEC and recover the rent after release, then repeat for
 transaction fees. Reserving stock prevents a sold-out race for a live
 Reservation; it does not guarantee shop availability.
 
-Contract review also found an unresolved payment-redirection defect. A
-released Reservation closes, but nothing forbids reserving its nonce again.
-After Ana pays and her Reservation becomes releasable, Mallory can release
-it, reserve the same nonce with Mallory's payout, and claim Ana's still-unused
-payment. The proof binds the nonce, not the original payout or Reservation
-generation, and only an upper payment-height bound is checked. This must be
-resolved before accepting payments; the current interface cannot guarantee
-that an unclaimed payment stays bound to the original Payer after release.
-No alternative memo or public-values layout is selected by this record.
-
 ZIP-229 and ZIP-230 are Draft. Format changes, guest changes, or SP1 release
 changes can require a new guest hash and a new machine. The October 26
 spikes measured about 15.9M cycles for decode and decryption and another
 8.0M for a synthetic Poseidon path in a separate guest. Their combined cost
 is an estimate; neither a complete Payment Proof nor equality with a real
-relay root was demonstrated. Wallet NU7 sending and exact binary-memo
-preservation also require validation; the survey found Vizor's binary-memo
-handoff unsupported. Existing-wallet compatibility is not yet established.
+relay root was demonstrated. Wallet NU7 sending and exact text-memo
+preservation also require validation. Existing-wallet compatibility is not
+yet established.
 
 ## Considered Options
 

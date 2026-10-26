@@ -17,11 +17,18 @@ The demo shop exchanges shielded Zcash testnet ZEC for a ticket token on Solana 
 
 The planned Vending Machine lets the Payee set up stock once. The Payer
 reserves a ticket before paying from a Zcash wallet; an SP1 Payment Proof
-then authorizes minting without a per-sale Payee service. The proof,
-Solana verifier, and checkout integration are not yet verified end to end;
-wallet support for NU7 and the exact binary memo also needs validation.
-Reservation identity after expiry still needs a protocol fix before payments
-can safely be accepted.
+then authorizes minting without a per-sale Payee service. The machine stores
+the full 64-byte public Shop Viewing Key and its SHA-256 hash on chain.
+The ZIP-321 link requests the exact price and the ZIP-302 text memo
+`zv1:<machine>:<nonce>:<payout>`, zero-padded to 512 bytes. Each field is a
+canonical base58 encoding of 32 bytes. The proof's 249-byte public values
+include that payout, and Claim requires it to match the Reservation's
+payout, preventing payment redirection after release and nonce reuse.
+Ana can reserve the same nonce again to claim her payment if stock remains.
+The proof, Solana verifier, and checkout integration are not yet verified
+end to end; wallet support for NU7 and exact text-memo preservation still
+need validation. A stateless prover HTTP service holds no keys and provides
+payment discovery, proof jobs, and job polling for the page.
 See [ADR 0005](docs/adr/0005-vending-machines-claim-with-sp1-payment-proofs.md).
 
 This mode makes shop sales public through a dedicated Shop Viewing Key.
@@ -30,6 +37,15 @@ Reservation returns stock and rent, not ZEC. The guest does not check the
 Halo2 transaction proof and relies on proof of work over the relay's
 Finality Depth. Testnet tickets would mint without an extra settlement
 delay; this design is for Zcash testnet and Solana devnet only.
+
+Release has no Claim window: after the relay tip exceeds expiry plus
+Finality Depth (or the relay is Halted and 24 hours have passed since
+creation), stock can be released while a valid payment still awaits proof.
+A running but stalled relay can block release. Unpaid Reservations can tie
+up all stock and repeat after release. Payers need devnet SOL for Reserve's
+fee and refundable rent; v1 has no fee pool. The Claim submitter (Payer or
+prover service) pays the Claim fee, permanent Payment Tag rent, and any
+missing associated token account's rent.
 
 ## Live on Solana devnet
 
