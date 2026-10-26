@@ -1,0 +1,24 @@
+[package]
+name = "sp1-v6-test-program"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.84"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+pinocchio = { version = "=0.10.2", default-features = false, features = ["copy"] }
+sp1-solana-v6 = { path = "../.." }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
