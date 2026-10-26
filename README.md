@@ -241,7 +241,8 @@ Ana reserves one of Ben's tickets, paying the Reservation's Solana rent. The Res
 snapshots the price and expiry, and records Ana as payout. A verified Payment Proof
 creates a permanent Payment Tag, mints one ticket into Ana's associated token account
 (creating it if missing), and returns the Reservation rent to Ana. The Claim submitter
-pays for the Tag and any new token account. Release returns stock and Reservation rent;
+pays for the Tag and any new token account. RequestRelease starts a 15-minute Claim
+window; ReleaseReservation then returns stock and Reservation rent;
 it does not refund Zcash. Mint decimals are zero, mint authority is the PDA, and freeze
 authority is absent. Testnet v1 tickets are immediately transferable: there is **no
 non-transferable settlement window**.
@@ -252,7 +253,8 @@ The two dependencies are integration stubs in separate commits. `sp1-solana-v6` 
 `vending-types` exposes `PublicValues::decode(&[u8]) -> Result<PublicValues, Error>` and
 `PUBLIC_VALUES_LEN = 249`. Its fields are `version: u8`, `branch_id: u32`, `machine:
 [u8;32]`, `nonce: [u8;32]`, `value: u64`, `payment_tag: [u8;32]`, `root: [u8;32]`,
-`height: u32`, `diversifier: [u8;11]`, `svk_hash: [u8;32]`, and `pool: u8`. It checks
+`height: u32`, `diversifier: [u8;11]`, `svk_hash: [u8;32]`, `pool: u8`, and
+`payout: [u8;32]` (bytes `189..221`); only bytes `221..249` are reserved. It checks
 exact length, version 1, pool 3 and the zero reserved suffix. Replace these stubs with
 the real crates before attempting any payment.
 
@@ -264,39 +266,49 @@ proof bypass in the program. The current SBF binary cannot reach Tag creation, A
 creation, MintTo or Claim closure; these effects require a valid integrated proof to
 verify in LiteSVM. Release closure and rent return are verified in LiteSVM.
 
-Two shared-contract issues **block deployment** (see [ADR 0004](docs/adr/0004-vending-payment-proofs.md)):
+Revision 2 binds the memo and proof to the payout: the text memo is exactly
+`zv1:<machine>:<nonce>:<payout>` with canonical base58 encodings of three 32-byte
+values, zero-padded to 512 bytes. Claim requires the proven payout to equal the
+Reservation's payout. After release, the same Payer can reserve the nonce again and
+claim an old unclaimed payment while stock remains; another payout cannot use it.
+The full 64-byte Shop Viewing Key is stored publicly, and InitMachine computes its
+SHA-256 hash with the Solana syscall.
 
-- Closing a Reservation allows its public nonce to be reserved again with a different
-  payout. An old, unclaimed payment then satisfies the recreated Reservation. Permanent
-  nonce consumption needs a shared-contract revision. The native suite contains an
-  explicit witness for this behavior.
-- Immediate release above expiry plus Finality Depth can race a paid Payer still
-  generating a proof. A two-step release with a Claim window needs a contract revision.
-
-Release uses the height condition only while the Relay is running. A Halt always
-requires 24 hours since Reservation creation, even if the frozen tip was high enough.
+RequestRelease is permissionless when `relay_tip > expiry_height + finality_depth`
+**or** when the Relay is Halted and 24 hours have passed since Reservation creation.
+It records Solana time once; duplicate requests fail without resetting the window.
+ReleaseReservation is permissionless at or after `release_requested_at + 900`.
+A Claim remains eligible during the window and afterwards until release closes the
+Reservation. A later Halt does not reset or extend an existing release window.
+A running Relay stalled below the height threshold does not qualify for the Halt
+backstop and can leave stock reserved indefinitely. Releasing stock never refunds ZEC.
 Claims use `RelayView` for owner/address/Halt and recent-root checks. The program accepts
 only the testnet network and NU7 branch ID `0x77190ad9`.
 
 ### Vending wire interface
 
 All integers are little-endian. Instructions start with one byte: InitMachine `0`,
-Reserve `1`, Claim `2`, ReleaseReservation `3`. `seed` and `nonce` are exactly 32 bytes.
+Reserve `1`, Claim `2`, ReleaseReservation `3`, RequestRelease `4`.
+`seed` and `nonce` are exactly 32 bytes.
 Init arguments follow the shared contract, in this order:
-`seed32, price_zat u64, stock u32, diversifier11, svk_hash32, relay32, vkey_hash32,
-reservation_blocks u32` (155 bytes). The generated argument for `relay` is named
+`seed32, price_zat u64, stock u32, diversifier11, svk64, relay32, vkey_hash32,
+reservation_blocks u32` (187 argument bytes; 188 including discriminator).
+The generated argument for `relay` is named
 `relayAddress` / `relay_address`, to distinguish it from the account. Reserve carries
-only `nonce32`; Release carries no arguments. Claim carries
+only `nonce32`; RequestRelease and ReleaseReservation carry no arguments. Claim carries
 `proof_len u16, proof[proof_len], public_values[249]`, with no extra prefix on public
 values and no trailing data.
 
 | Account | Bytes | Fields as `offset:name` |
 |---|---:|---|
-| Machine | 227 | `0:disc=1, 1:version, 2:bump, 3:mint_bump, 4:payee32, 36:seed32, 68:mint32, 100:relay32, 132:price_zat u64, 140:available u32, 144:stock u32, 148:diversifier11, 159:svk_hash32, 191:vkey_hash32, 223:reservation_blocks u32` |
-| Reservation | 119 | `0:disc=2, 1:version, 2:bump, 3:machine32, 35:nonce32, 67:payout32, 99:price_zat u64, 107:expiry_height u32, 111:created_at i64` |
+| Machine | 291 | `0:disc=1, 1:version, 2:bump, 3:mint_bump, 4:payee32, 36:seed32, 68:mint32, 100:relay32, 132:price_zat u64, 140:available u32, 144:stock u32, 148:diversifier11, 159:svk_hash32, 191:vkey_hash32, 223:reservation_blocks u32, 227:svk64` |
+| Reservation | 128 | `0:disc=2, 1:version, 2:bump, 3:machine32, 35:nonce32, 67:payout32, 99:price_zat u64, 107:expiry_height u32, 111:created_at i64, 119:release_requested bool(u8), 120:release_requested_at i64` |
 | Payment Tag | 2 | `0:disc=3, 1:version` |
 
-All versions are `1`. PDAs are `["machine", payee, seed]`, `["mint", machine]`,
+All versions are `1`; legacy 227/119-byte accounts and 155-byte Init arguments are
+rejected. No Vending deployment needs migration. `release_requested` distinguishes
+a request at Unix time zero from no request. PDAs are `["machine", payee, seed]`,
+`["mint", machine]`,
 `["reservation", machine, nonce]`, `["tag", machine, payment_tag]`.
 
 Account order (w = writable, s = signer):
@@ -304,10 +316,13 @@ Account order (w = writable, s = signer):
 - InitMachine: `payee(ws), machine(w), mint(ws), mintAuthority, relay, tokenProgram, systemProgram`.
 - Reserve: `payer(ws), machine(w), reservation(w), relay, systemProgram`.
 - Claim: `submitter(ws), machine(w), reservation(w), relay, payout(w), mint(w), mintAuthority, payoutToken(w), paymentTag(w), tokenProgram, associatedTokenProgram, systemProgram`.
+- RequestRelease: `submitter(s), machine, reservation(w), relay`.
 - ReleaseReservation: `submitter(s), machine(w), reservation(w), relay, payout(w)`.
 
 The numbered errors are defined in `programs/vending/src/error.rs` and mirrored in
-Codama. A 388-byte proof payload with 249 public bytes produces a **1226-byte legacy
+Codama. New errors: WrongPayout `21`, ReleaseAlreadyRequested `22`,
+ReleaseNotRequested `23`, ClaimWindowOpen `24`. A 388-byte proof payload with 249 public
+bytes produces a **1226-byte legacy
 transaction** including compute-limit and compute-price instructions, with submitter as
 fee payer. A separate fee payer exceeds the 1232-byte packet limit with both budget
 instructions; use the submitter as fee payer or an address lookup table.
@@ -321,8 +336,11 @@ Check `free -g` first and wait for at least 3 GiB available. Run cargo commands 
 cargo build-sbf --manifest-path programs/vending/Cargo.toml -- --locked
 cargo fmt --all --check
 cargo fmt --manifest-path programs/vending/Cargo.toml --check
+cargo fmt --manifest-path crates/vending-types/Cargo.toml --check
 cargo clippy --locked -p vending-tests -p vending-client --all-targets -- -D warnings
 cargo clippy --locked --manifest-path programs/vending/Cargo.toml --all-targets -- -D warnings
+cargo clippy --locked --manifest-path crates/vending-types/Cargo.toml --all-targets -- -D warnings
+cargo test --locked --manifest-path crates/vending-types/Cargo.toml
 cargo test --locked --manifest-path programs/vending/Cargo.toml
 cargo test --locked -p vending-tests -- --nocapture --test-threads=1
 ```
@@ -330,5 +348,9 @@ cargo test --locked -p vending-tests -- --nocapture --test-threads=1
 The LiteSVM harness reuses `relay-tests` to initialize and advance a real Relay with
 known Final Block Tree roots. Synthetic headers isolate consumer behavior; they do not
 test Equihash. Halt tests inject the frozen Relay state to exercise the consumer's
-24-hour path. Successful Claim settlement, a real SP1 proof, devnet deployment and wallet
+24-hour path. The suite also checks the syscall hash, payout binding, strict height
+threshold, request idempotence, the exact 900-second boundary, a later Halt, and
+Unix time zero. Native policy tests accept a Claim during and after the window; the
+LiteSVM Claim still fails at the verifier stub. Successful Claim settlement, a real SP1
+proof, devnet deployment and wallet
 payment behavior have not been verified by this work.

@@ -67,7 +67,7 @@ The Payee taking an unclaimed Escrow and its Bond back, in two steps: a request 
 _Avoid_: Withdrawal, cancel
 
 **Claim window**:
-The 15 minutes of Solana time between a refund request and the Refund, in which a Claim still settles, so a Payer whose payment finalises late is not raced.
+The 15 minutes of Solana time between a refund or release request and the Refund or Reservation release, in which a Claim still settles, so a Payer whose payment finalises late is not raced.
 _Avoid_: Grace period, timeout
 
 ## Vending checkout
@@ -76,7 +76,7 @@ _Avoid_: Grace period, timeout
 The Solana account holding one shop's immutable config and stock.
 
 **Shop Viewing Key**:
-The Ironwood/Orchard external incoming viewing key of a dedicated ZIP-32 account, published for the shop. Reveals the shop's incoming payments only; its hash is stored in the Vending Machine.
+The Ironwood/Orchard external incoming viewing key of a dedicated ZIP-32 account, published for the shop. Reveals the shop's incoming payments only; the full 64-byte key and its SHA-256 hash are stored in the Vending Machine.
 
 **Reservation**:
 A Solana account the Payer creates before paying; holds one unit of stock for them.
