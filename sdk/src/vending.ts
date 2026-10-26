@@ -13,6 +13,8 @@ export interface VendingReservation {
   nonce: Uint8Array;
   expiryHeight: number;
   createdAt: number;
+  releaseRequested: boolean;
+  releaseRequestedAt: number;
 }
 export interface VendingPayment {
   txid: string;

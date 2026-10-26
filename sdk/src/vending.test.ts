@@ -6,7 +6,7 @@ const machine = Uint8Array.from({ length: 32 }, (_, i) => i);
 const payout = new Uint8Array(32).fill(42);
 const nonce = Uint8Array.from({ length: 32 }, (_, i) => 255 - i);
 const relay = { tip: 110, finalHeight: 100, finalityDepth: 10, halted: false, updatedAt: 1_000 };
-const reservation = { nonce, expiryHeight: 120, createdAt: 0 };
+const reservation = { releaseRequested: false, releaseRequestedAt: 0, nonce, expiryHeight: 120, createdAt: 0 };
 
 describe('vending wire values', () => {
   it('encodes canonical zv1 text and zero pads the exact ZIP-302 bytes', () => {

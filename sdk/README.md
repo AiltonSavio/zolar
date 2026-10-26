@@ -209,6 +209,8 @@ for what the Payee and network services still learn.
 ## Checks
 
 ```sh
+pnpm --dir clients/vending-js install --frozen-lockfile
+pnpm --dir clients/vending-js build
 pnpm --dir sdk install --frozen-lockfile
 pnpm --dir sdk typecheck
 pnpm --dir sdk test
@@ -246,48 +248,69 @@ string); unsafe JavaScript numeric integers are rejected.
 
 ### Deployment binding
 
-All handwritten instruction encoding and account decoding lives in
-`src/vendingInstructions.ts`. Replace it with the generated Codama client
-when available. `createVendingChain(deployment)` reads the Vending Machine
-and Header Relay directly from RPC, constructs Reserve/Claim/Release,
-checks the devnet genesis hash, and waits for confirmed transaction status.
-`VendingConnection` is `{ address: string, send(transaction: Uint8Array):
+`createVendingChain(deployment)` uses the Codama-generated client in
+`clients/vending-js/src/generated` for all vending instruction builders and
+Machine/Reservation decoding. Those 20 generated files were copied unchanged
+from the program branch at `54bfbb07c42850d69820151a24c3d9c9cc29af89`.
+The local package adds a TypeScript build and an ESM bundle; it does not change
+the generated source. Build it before installing the SDK:
+
+```sh
+pnpm --dir clients/vending-js install --frozen-lockfile
+pnpm --dir clients/vending-js build
+pnpm --dir sdk install --frozen-lockfile
+```
+
+The adapter checks the devnet genesis hash and waits for confirmed transaction
+status. `VendingConnection` is `{ address: string, send(transaction: Uint8Array):
 Promise<string> }`; `send` signs and broadcasts serialized Solana transaction
 bytes and returns a base58 signature. The shop binds it to Wallet Standard's
-`solana:signAndSendTransaction` on `solana:devnet`.
+`solana:signAndSendTransaction` on `solana:devnet`. Kit's no-op signer only marks
+the generated instruction's signer account; Wallet Standard signs the actual
+serialized transaction.
 
-The shared interface has no authoritative instruction selectors, ordered
-account metas, or Machine/Reservation offsets. The SDK therefore requires
-a public **deployment-owned `VendingAbi` JSON artifact** at `abiUrl` instead
-of guessing these values. Its TypeScript schema is exported. It contains:
+The former `VendingAbi` is replaced by `VendingBinding`: the JSON at `abiUrl`
+now supplies only `version: 1`, `machineAddress`, `programAddress`,
+`shopReceiver` (43 bytes), and `shopViewingKeyHash` (32 bytes). Existing artifacts
+can retain extra fields, but selectors, account order and offsets are ignored;
+the generated client is authoritative.
 
-- `version: 1`, `machineAddress`, `programAddress`.
-- `shopReceiver`: the exact 43-byte receiver; `shopViewingKeyHash`: 32 bytes.
-- `selectors.reserve/claim/release`: byte prefixes; `claimFields`: the exact
-  order of `proof`, `public_values`, and optional `proof_len_u32` and
-  `public_values_len_u32` fields (lengths are little-endian).
-- `machine` and `reservation`: account length, discriminator/version byte
-  prefix, and byte offsets for every named field. Price is u64 LE; stock,
-  available, and expiry are u32 LE; creation time is i64 LE Unix seconds.
-- `accounts.reserve/claim/release`: ordered `{ name, writable, signer }`
-  entries. The exported type enumerates every available account role.
+Machine is 291 bytes (full Shop Viewing Key at 227); Reservation is 128 bytes,
+including `releaseRequested` at 119 and `releaseRequestedAt` (i64 LE) at 120.
+Claim is `2 || proof_len_u16_LE || proof || public_values[249]`.
+RequestRelease is `4`; ReleaseReservation is `3`. Account order follows Codama,
+including Claim's `relay` before `payout`, and `paymentTag` after `payoutToken`.
+Errors WrongPayout, ReleaseAlreadyRequested, ReleaseNotRequested and
+ClaimWindowOpen are 21, 22, 23 and 24.
+
+`VendingSession` includes `releaseRequested: boolean` and
+`releaseRequestedAt: number` (Unix seconds). `requestRelease(wallet, session)`
+returns a refreshed `Promise<VendingSession>`; `release(wallet, session)` returns
+`Promise<void>`. A request is allowed strictly after expiry plus Finality Depth,
+or after 24 hours while Halted. `releaseSecondsRemaining(session, nowSeconds)`
+returns `null` before a request, then the seconds remaining until 900 seconds
+have passed (zero once ready). Release rereads the stored request before signing.
+Claim remains available during the window and until the Reservation closes;
+release does not refund Zcash.
 
 Machine setup must produce and audit the receiver/viewing-key association
 as one artifact. The browser verifies the entire configured receiver
 against the pin, SHA-256 of the on-chain 64-byte Shop Viewing Key against
 both the machine and the pin, and the diversifier against the receiver.
 It does **not** derive Pallas public keys in JavaScript. Missing bindings,
-wrong identities, invalid offsets, wrong account owners, pending relays,
-and mainnet relays fail closed. The fixture ABI is illustrative test data,
-never a deployment artifact. No deployed program/ABI conformance is claimed
-by these fixtures.
+wrong identities, invalid account sizes/versions, wrong account owners,
+pending relays, and mainnet relays fail closed. Fixture accounts use the
+program’s real layouts with deterministic test data; their receiver binding
+is not a deployment artifact. These fixtures do not prove a deployed program
+accepts the transactions.
 
-`VendingChain` exposes `read`, `reserve`, `restore`, `release`, `claim`,
-and `transactionStatus`. The shop saves a nonce before Reserve and retains
+`VendingChain` exposes `read`, `reserve`, `restore`, `requestRelease`,
+`release`, `claim`, and `transactionStatus`. The shop saves a nonce before Reserve and retains
 Claim signatures across ambiguous confirmations; reuse the same nonce for
-recovery. Release requires `tip > expiry + Finality Depth`, or a halted
-relay and 24 hours of Solana time on-chain. Client time only controls the
-button; the program enforces the rule.
+recovery. RequestRelease requires `tip > expiry + Finality Depth`, or a
+halted relay and 24 hours since creation. Release then requires 900 seconds
+of Solana time since the stored request, even if the Relay later Halts.
+Client time controls button readiness; the program enforces both rules.
 
 Vending publishes the shop's incoming payment information. It does not
 have the Escrow Private Claim's txid-hiding guarantee. Proof creation needs

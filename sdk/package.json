@@ -34,7 +34,9 @@
   "dependencies": {
     "@noble/hashes": "1.8.0",
     "@scure/base": "1.2.6",
+    "@solana/kit": "8.5.0",
     "@solana/web3.js": "1.98.4",
+    "@zolar/vending-client": "file:../clients/vending-js",
     "buffer": "6.0.3"
   }
 }

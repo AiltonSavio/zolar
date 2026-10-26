@@ -1,13 +1,15 @@
 /** Deterministic test-only RPC/prover transport. No network, keys, or real proofs. */
-import { Transaction } from '@solana/web3.js';
+import { Transaction, type TransactionInstruction } from '@solana/web3.js';
 import { base58 } from '@scure/base';
 import { Buffer } from 'buffer';
-import type { VendingAbi, VendingConnection } from '../vendingInstructions';
+import type { VendingBinding, VendingConnection } from '../vendingInstructions';
 import { PublicKey } from '../vendingInstructions';
 import { hex } from '../vending';
 
-export const fixtureMachine = '11111111111111111111111111111111';
+export const fixtureMachine = 'Stake11111111111111111111111111111111111111';
 export const fixtureProgram = 'BPFLoaderUpgradeab1e11111111111111111111111';
+export const fixtureWallet = 'SysvarC1ock11111111111111111111111111111111';
+export const fixtureMint = 'SysvarEpochSchedu1e111111111111111111111111';
 export const fixtureRelay = 'SysvarRent111111111111111111111111111111111';
 export const fixtureAddress =
   'utest1hap277en6ayclu5027232d44kv0s6nd0tacmnj07v0avarpuv4vzyfjreu3qexw05v9jvpx8ce37lpt5j4qexyrwhrlrma9msypee8x4';
@@ -15,68 +17,19 @@ const hash = [
   34, 94, 186, 121, 222, 27, 135, 136, 85, 84, 193, 107, 42, 172, 107, 59, 248, 115, 182, 32, 130, 167, 159, 26, 115,
   66, 14, 1, 188, 68, 12, 163,
 ];
-const meta = (name: VendingAbi['accounts']['reserve'][number]['name'], writable = false, signer = false) => ({
-  name,
-  writable,
-  signer,
-});
-/** Illustrative fixture ABI only: never use this artifact as a deployment ABI. */
-export const fixtureAbi: VendingAbi = {
+export const fixtureBinding: VendingBinding = {
   version: 1,
   machineAddress: fixtureMachine,
   programAddress: fixtureProgram,
   shopReceiver: new Array(43).fill(7),
   shopViewingKeyHash: hash,
-  selectors: { reserve: [1], claim: [2], release: [3], claimFields: ['proof_len_u32', 'proof', 'public_values'] },
-  machine: {
-    length: 189,
-    prefix: [1, 1],
-    price: 2,
-    stock: 10,
-    available: 14,
-    relay: 18,
-    mint: 50,
-    diversifier: 82,
-    svk: 93,
-    svkHash: 157,
-  },
-  reservation: {
-    length: 118,
-    prefix: [2, 1],
-    machine: 2,
-    nonce: 34,
-    payout: 66,
-    price: 98,
-    expiry: 106,
-    createdAt: 110,
-  },
-  accounts: {
-    reserve: [
-      meta('signer', true, true),
-      meta('machine', true),
-      meta('reservation', true),
-      meta('relay'),
-      meta('systemProgram'),
-    ],
-    claim: [
-      meta('signer', true, true),
-      meta('machine', true),
-      meta('reservation', true),
-      meta('payout', true),
-      meta('tag', true),
-      meta('relay'),
-      meta('mint', true),
-      meta('mintAuthority'),
-      meta('ticketAccount', true),
-      meta('tokenProgram'),
-      meta('associatedTokenProgram'),
-      meta('systemProgram'),
-    ],
-    release: [meta('machine', true), meta('reservation', true), meta('payout', true), meta('relay')],
-  },
 };
 export function mockVendingTransport(state: string) {
   let reserved = false;
+  let releaseRequested = false;
+  let releaseRequestedAt = 0;
+  const now = () => Math.floor(Date.now() / 1000);
+  const instructions: TransactionInstruction[] = [];
   let nonce = new Uint8Array(32);
   let relayReads = 0;
   let sends = 0;
@@ -93,11 +46,11 @@ export function mockVendingTransport(state: string) {
     new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
-    if (url.endsWith('/abi.json')) return response(fixtureAbi);
+    if (url.endsWith('/abi.json')) return response(fixtureBinding);
     if (url.includes('/find-payment'))
       return response(
         ['finality', 'proving', 'claiming', 'success', 'proof-failed', 'claim-failed'].includes(state) && reserved
-          ? { status: 'found', txid: 'a'.repeat(64), height: 105, value_zat: 100_000, payout: fixtureMachine }
+          ? { status: 'found', txid: 'a'.repeat(64), height: 105, value_zat: 100_000, payout: fixtureWallet }
           : { status: 'pending' },
       );
     if (url.endsWith('/prove')) return response({ job: 'fixture-job' });
@@ -110,7 +63,7 @@ export function mockVendingTransport(state: string) {
       values[188] = 3;
       values.set(machine, 5);
       values.set(nonce, 37);
-      values.set(machine, 189);
+      values.set(new PublicKey(fixtureWallet).toBytes(), 189);
       return response({ status: 'done', proof: '00'.repeat(356), public_values: hex(values) });
     }
     const call = JSON.parse(String(init?.body)) as { id: string; method: string; params: string[] };
@@ -133,16 +86,17 @@ export function mockVendingTransport(state: string) {
     else if (call.method === 'getAccountInfo') {
       let value: unknown = null;
       if (call.params[0] === fixtureMachine) {
-        const data = new Uint8Array(189);
+        const data = new Uint8Array(291);
         const view = new DataView(data.buffer);
         data.set([1, 1]);
-        view.setBigUint64(2, 100_000n, true);
-        view.setUint32(10, 100, true);
-        view.setUint32(14, state === 'sold-out' ? 0 : 42, true);
-        data.set(new PublicKey(fixtureRelay).toBytes(), 18);
-        data.fill(7, 82, 93);
-        data.fill(8, 93, 157);
-        data.set(hash, 157);
+        view.setBigUint64(132, 100_000n, true);
+        view.setUint32(144, 100, true);
+        view.setUint32(140, state === 'sold-out' ? 0 : 42, true);
+        data.set(new PublicKey(fixtureRelay).toBytes(), 100);
+        data.set(new PublicKey(fixtureMint).toBytes(), 68);
+        data.fill(7, 148, 159);
+        data.fill(8, 227, 291);
+        data.set(hash, 159);
         value = rpcAccount(data, fixtureProgram);
       } else if (call.params[0] === fixtureRelay) {
         const data = new Uint8Array(5914);
@@ -152,7 +106,9 @@ export function mockVendingTransport(state: string) {
         data[96] = 10;
         view.setUint32(
           36,
-          state === 'expired' && reserved ? 150 : 110 + (state === 'stalled' ? 0 : Math.min(relayReads++, 1)),
+          ['expired', 'release-window', 'release-ready'].includes(state) && reserved
+            ? 150
+            : 110 + (state === 'stalled' ? 0 : Math.min(relayReads++, 1)),
           true,
         );
         view.setUint32(
@@ -162,15 +118,17 @@ export function mockVendingTransport(state: string) {
         );
         value = rpcAccount(data, '6F4o7Fphgz5MS4BZrqbE4NyaLUKiAprDNdYTxif4sg9D');
       } else if (reserved && !claimed) {
-        const data = new Uint8Array(118);
+        const data = new Uint8Array(128);
         const view = new DataView(data.buffer);
         data.set([2, 1]);
-        data.set(machine, 2);
-        data.set(nonce, 34);
-        data.set(machine, 66);
-        view.setBigUint64(98, 100_000n, true);
-        view.setUint32(106, 120, true);
-        view.setBigInt64(110, BigInt(Math.floor(Date.now() / 1000)), true);
+        data.set(machine, 3);
+        data.set(nonce, 35);
+        data.set(new PublicKey(fixtureWallet).toBytes(), 67);
+        view.setBigUint64(99, 100_000n, true);
+        view.setUint32(107, 120, true);
+        view.setBigInt64(111, BigInt(now()), true);
+        data[119] = releaseRequested ? 1 : 0;
+        view.setBigInt64(120, BigInt(releaseRequestedAt), true);
         value = rpcAccount(data, fixtureProgram);
       }
       result = { context: { slot: 1 }, value };
@@ -178,22 +136,34 @@ export function mockVendingTransport(state: string) {
     return response({ jsonrpc: '2.0', id: call.id, result });
   };
   const wallet: VendingConnection = {
-    address: fixtureMachine,
+    address: fixtureWallet,
     async send(bytes) {
       const tx = Transaction.from(bytes);
       const ix = tx.instructions.find((ix) => ix.programId.toBase58() === fixtureProgram)!;
       sends++;
+      instructions.push(ix);
       if (ix.data[0] === 1) {
         nonce = new Uint8Array(ix.data.subarray(1));
         reserved = true;
+        releaseRequested = ['release-window', 'release-ready'].includes(state);
+        releaseRequestedAt = releaseRequested ? now() - (state === 'release-ready' ? 900 : 60) : 0;
       }
       if (ix.data[0] === 2) {
         if (state === 'claiming') await new Promise((resolve) => setTimeout(resolve, 600_000));
         if (state !== 'claim-failed') claimed = true;
       }
+      if (ix.data[0] === 4) {
+        releaseRequested = true;
+        releaseRequestedAt = now();
+      }
       if (ix.data[0] === 3) reserved = false;
       return base58.encode(new Uint8Array(64).fill(sends));
     },
   };
-  return { fetchImpl, wallet, sentCount: () => sends };
+  return {
+    fetchImpl,
+    wallet,
+    sentCount: () => sends,
+    instructions: () => instructions,
+  };
 }
