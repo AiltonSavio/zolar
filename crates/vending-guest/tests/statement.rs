@@ -92,3 +92,47 @@ fn leaf_hashes_match_the_existing_independent_circomlibjs_fixture() {
         );
     }
 }
+
+#[test]
+fn guest_folds_nonzero_tree_indices_with_the_shared_tree_builder() {
+    let mut w = fixture("valid");
+    let reference: serde_json::Value = serde_json::from_str(include_str!(
+        "../../relay-tests/fixtures/final-block-tree-nu7-4465014-4465270.json"
+    ))
+    .unwrap();
+    let mut leaves: Vec<[u8; 32]> = reference["leaves"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| {
+            hex::decode(l["leaf"].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap()
+        })
+        .collect();
+    w.tree_index = 77;
+    leaves[77] = zolar_claim::block_leaf(w.height, &w.block_merkle_root).unwrap();
+    let size = leaves.len();
+    let tree = zolar_claim::FinalBlockTree::new(leaves);
+    w.tree_path = tree.path(77, size).try_into().unwrap();
+    w.root = tree.root(size);
+    assert_eq!(verify(&w).unwrap().root, w.root);
+    w.tree_index = 76;
+    assert_eq!(verify(&w), Err(Error::TreePath));
+}
+
+#[test]
+fn transaction_paths_bind_right_directions_and_odd_duplication() {
+    let mut w = fixture("valid");
+    let tx = Transaction::read(w.tx.as_slice(), BranchId::Nu7).unwrap();
+    let txid = *tx.txid().as_ref();
+    let txids = [[1; 32], [2; 32], txid];
+    w.tx_index = 2;
+    w.tx_count = 3;
+    w.tx_path = zolar_claim::tx_merkle_path(&txids, 2);
+    w.block_merkle_root = zolar_claim::tx_merkle_root(&txids);
+    assert!(vending_guest::check_tx_path(&txid, &w).is_ok());
+    w.tx_path[0] = [9; 32];
+    assert_eq!(vending_guest::check_tx_path(&txid, &w), Err(Error::TxPath));
+}
