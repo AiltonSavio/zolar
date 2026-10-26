@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/zcash-header", "crates/header-relay-interface", "crates/relay-tests", "crates/relayer", "clients/rust", "clients/escrow-rust", "crates/escrow-tests", "crates/zolar-claim", "tools/forge-header", "tools/dev-groth16"]
+members = ["crates/zcash-header", "crates/header-relay-interface", "crates/relay-tests", "crates/relayer", "clients/rust", "clients/escrow-rust", "crates/escrow-tests", "crates/zolar-claim", "tools/forge-header", "tools/dev-groth16", "clients/vending-rust", "crates/vending-tests"]
 # The SBF program has its own workspace and lockfile so `cargo build-sbf` (an older
 # toolchain) resolves a minimal dependency set.
-exclude = ["programs/header-relay", "programs/escrow"]
+exclude = ["programs/header-relay", "programs/escrow", "programs/vending", "crates/sp1-solana-v6", "crates/vending-types"]

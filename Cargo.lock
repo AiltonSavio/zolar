@@ -4131,6 +4131,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sp1-solana-v6"
+version = "0.1.0"
+
+[[package]]
 name = "spki"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4464,6 +4468,56 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+
+[[package]]
+name = "vending"
+version = "0.1.0"
+dependencies = [
+ "header-relay-interface",
+ "pinocchio",
+ "sp1-solana-v6",
+ "vending-types",
+]
+
+[[package]]
+name = "vending-client"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "num-derive",
+ "num-traits",
+ "solana-account-info",
+ "solana-address 2.9.0",
+ "solana-cpi",
+ "solana-instruction 3.5.1",
+ "solana-program-error",
+ "spl-collections",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "vending-tests"
+version = "0.1.0"
+dependencies = [
+ "header-relay-interface",
+ "litesvm",
+ "relay-tests",
+ "solana-account",
+ "solana-address 2.9.0",
+ "solana-clock 3.2.1",
+ "solana-instruction 3.5.1",
+ "solana-keypair",
+ "solana-message",
+ "solana-signer",
+ "solana-transaction",
+ "solana-transaction-error",
+ "vending",
+ "vending-client",
+]
+
+[[package]]
+name = "vending-types"
+version = "0.1.0"
 
 [[package]]
 name = "version_check"
