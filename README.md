@@ -38,9 +38,15 @@ Halo2 transaction proof and relies on proof of work over the relay's
 Finality Depth. Testnet tickets would mint without an extra settlement
 delay; this design is for Zcash testnet and Solana devnet only.
 
-Release has no Claim window: after the relay tip exceeds expiry plus
-Finality Depth (or the relay is Halted and 24 hours have passed since
-creation), stock can be released while a valid payment still awaits proof.
+Release takes two steps. Any signer can call RequestRelease after the relay
+tip exceeds expiry plus Finality Depth, or when the relay is Halted and
+24 hours of Solana time have passed since Reservation creation. It records
+the Solana time and rejects a second request. A valid Claim still succeeds
+during the next 15 minutes, giving Ana time to finish her Payment Proof;
+a Halt still blocks Claims. Any signer can then call ReleaseReservation
+to return stock and refund Reservation rent to the payout wallet, once
+`release_requested_at + 900 <= now` in Solana seconds. A proof delayed past
+this Claim window can still lose to release.
 A running but stalled relay can block release. Unpaid Reservations can tie
 up all stock and repeat after release. Payers need devnet SOL for Reserve's
 fee and refundable rent; v1 has no fee pool. The Claim submitter (Payer or

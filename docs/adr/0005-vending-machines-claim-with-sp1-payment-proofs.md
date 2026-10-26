@@ -139,12 +139,24 @@ the ticket mint authority. Claim creates that payout's associated token
 account if missing, closes the Reservation, and returns its rent to the
 payout wallet.
 
-ReleaseReservation returns stock and rent once the relay tip is strictly
-above expiry plus Finality Depth, or once the relay is Halted and 24 hours
-of Solana time have passed since Reservation creation. This is a single
-release step, with no Escrow-style 15-minute Claim window. A running relay
-that stalls below the height threshold does not satisfy either release
-condition. Releasing stock never refunds a Zcash payment.
+Release takes two steps, matching the Escrow's RequestRefund then Refund.
+Anyone signing RequestRelease may request it once
+`relay_tip > expiry_height + finality_depth`, or once the relay is Halted
+and 24 hours of Solana time have passed since Reservation creation.
+RequestRelease records `release_requested_at` as Solana unix time and fails
+if release was already requested. It does not return stock or close the
+Reservation.
+
+The request starts a 15-minute Claim window. A valid Claim still succeeds
+normally during that window, minting Ana's ticket and closing her
+Reservation even if her Payment Proof was still being made when release
+was requested. Claim still requires a running relay; a Halt blocks Claims.
+Anyone signing ReleaseReservation may return the unit to available stock
+and close the unclaimed Reservation, refunding rent to its payout wallet,
+only when `release_requested_at + 900 <= now` in Solana seconds.
+A running relay that stalls below the height threshold does not satisfy
+either RequestRelease condition. Releasing stock never refunds a Zcash
+payment.
 
 ### Why SP1 here
 
@@ -225,8 +237,9 @@ This is accepted for testnet demo tokens only.
 
 Roots rotate through the relay's 128-root history. A proof queued beyond
 that history must be made again against a fresh root, and release can win
-while a valid payment is still awaiting proof. Permanent Payment Tag rent
-grows with sales. There is no sponsored zero-SOL purchase in v1.
+after the 15-minute Claim window if a valid payment is still awaiting proof.
+Permanent Payment Tag rent grows with sales. There is no sponsored zero-SOL
+purchase in v1.
 
 Reserve publishes the nonce before payment. There is no nonce commitment,
 Reservation bond, per-Payer cap, or forfeiture. Someone can hold all stock

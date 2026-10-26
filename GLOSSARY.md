@@ -67,7 +67,7 @@ The Payee taking an unclaimed Escrow and its Bond back, in two steps: a request 
 _Avoid_: Withdrawal, cancel
 
 **Claim window**:
-The 15 minutes of Solana time between an Escrow refund request and the Refund, in which a Claim still settles, so a Payer whose payment finalises late is not raced. Vending Reservations have no Claim window.
+The 15 minutes of Solana time between an Escrow refund request and the Refund, or a Reservation's RequestRelease and ReleaseReservation. A valid Claim still settles during this window, so a Payer whose payment finalises or proof finishes late is not raced; a Halt still blocks Claims.
 _Avoid_: Grace period, timeout
 
 ## Vending checkout
