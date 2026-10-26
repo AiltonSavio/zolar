@@ -1,4 +1,4 @@
-//! Canonical vending v1 public values and ZIP-302 arbitrary-data memo.
+//! Canonical vending v1 public values and ZIP-302 text memo.
 //! Integers are little-endian; hashes retain their protocol byte order.
 #![no_std]
 
@@ -27,6 +27,7 @@ pub struct PublicValues {
     pub height: u32,
     pub diversifier: [u8; 11],
     pub svk_hash: [u8; 32],
+    pub payout: [u8; 32],
 }
 
 impl PublicValues {
@@ -43,6 +44,7 @@ impl PublicValues {
         b[145..156].copy_from_slice(&self.diversifier);
         b[156..188].copy_from_slice(&self.svk_hash);
         b[188] = IRONWOOD_POOL;
+        b[189..221].copy_from_slice(&self.payout);
         b
     }
 
@@ -56,7 +58,7 @@ impl PublicValues {
         if b[188] != IRONWOOD_POOL {
             return Err(DecodeError::Pool);
         }
-        if b[189..].iter().any(|x| *x != 0) {
+        if b[221..].iter().any(|x| *x != 0) {
             return Err(DecodeError::Reserved);
         }
         Ok(Self {
@@ -69,6 +71,7 @@ impl PublicValues {
             height: u32::from_le_bytes(b[141..145].try_into().unwrap()),
             diversifier: b[145..156].try_into().unwrap(),
             svk_hash: b[156..188].try_into().unwrap(),
+            payout: b[189..221].try_into().unwrap(),
         })
     }
 }
@@ -77,27 +80,63 @@ impl PublicValues {
 pub struct Memo {
     pub machine: [u8; 32],
     pub nonce: [u8; 32],
+    pub payout: [u8; 32],
 }
 
 impl Memo {
     pub fn encode(&self) -> [u8; MEMO_LEN] {
         let mut b = [0; MEMO_LEN];
-        b[0] = 0xff;
-        b[1] = VERSION;
-        b[2..34].copy_from_slice(&self.machine);
-        b[34..66].copy_from_slice(&self.nonce);
+        b[..4].copy_from_slice(b"zv1:");
+        let mut at = 4;
+        for (i, field) in [&self.machine, &self.nonce, &self.payout]
+            .iter()
+            .enumerate()
+        {
+            if i > 0 {
+                b[at] = b':';
+                at += 1;
+            }
+            at += bs58::encode(field)
+                .onto(&mut b[at..])
+                .expect("32-byte base58 fits memo");
+        }
         b
     }
     pub fn decode(b: &[u8]) -> Result<Self, DecodeError> {
         if b.len() != MEMO_LEN {
             return Err(DecodeError::Length);
         }
-        if b[..2] != [0xff, VERSION] || b[66..].iter().any(|x| *x != 0) {
+        let end = b.iter().position(|x| *x == 0).ok_or(DecodeError::Memo)?;
+        if !b[..end].starts_with(b"zv1:") || b[end..].iter().any(|x| *x != 0) {
             return Err(DecodeError::Memo);
         }
-        Ok(Self {
-            machine: b[2..34].try_into().unwrap(),
-            nonce: b[34..66].try_into().unwrap(),
-        })
+        let mut fields = b[4..end].split(|x| *x == b':');
+        let mut read = || -> Result<[u8; 32], DecodeError> {
+            let field = fields.next().ok_or(DecodeError::Memo)?;
+            let mut bytes = [0; 32];
+            let len = bs58::decode(field)
+                .onto(&mut bytes[..])
+                .map_err(|_| DecodeError::Memo)?;
+            if len != 32 {
+                return Err(DecodeError::Memo);
+            }
+            let mut canonical = [0; 44];
+            let len = bs58::encode(bytes)
+                .onto(&mut canonical[..])
+                .map_err(|_| DecodeError::Memo)?;
+            if canonical[..len] != *field {
+                return Err(DecodeError::Memo);
+            }
+            Ok(bytes)
+        };
+        let memo = Self {
+            machine: read()?,
+            nonce: read()?,
+            payout: read()?,
+        };
+        if fields.next().is_some() {
+            return Err(DecodeError::Memo);
+        }
+        Ok(memo)
     }
 }
