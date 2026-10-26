@@ -134,3 +134,10 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--ink); outline-o
   .privacy-panel { flex-direction: column; }
   .brand-large .brand-word { height: 28px; }
 }
+
+/* Vending uses the same ticket stub, type and yellow as the original checkout. */
+.payment-qr { display: block; width: min(100%, 320px); height: auto; margin: 12px 0; image-rendering: pixelated; }
+.payment-address { overflow-wrap: anywhere; margin: 12px 0; }
+.payment-open { display: flex; align-items: center; justify-content: center; min-height: 56px; padding: 10px 20px; background: var(--yellow); border: 2px solid var(--yellow); border-radius: 10px; font: 800 22px var(--display); text-decoration: none; }
+.payment-open:hover { border-color: var(--ink); }
+.payment-link { width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--ink); border-radius: 6px; }

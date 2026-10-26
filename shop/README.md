@@ -99,3 +99,49 @@ pnpm --dir shop test
 npx --prefix shop --no-install tsc --noEmit -p shop
 pnpm --dir shop build
 ```
+
+## Vending mode
+
+Set `VITE_CHECKOUT_MODE=vending`; the default `checkout` mode keeps the
+existing merchant/wallet flow. Configure `VITE_VENDING_MACHINE`,
+`VITE_VENDING_PROGRAM`, `VITE_VENDING_ADDRESS` (testnet Ironwood-only UA),
+`VITE_VENDING_RPC`, `VITE_PROVER_URL`, and `VITE_VENDING_ABI_URL`.
+The last URL must serve the authoritative machine-setup artifact described
+in the [SDK deployment binding](../sdk/README.md#deployment-binding).
+The page disables payment until it observes the testnet relay advance;
+120 seconds without progress disables it again.
+
+Connect a devnet Solana wallet, Reserve, then scan or open the ZIP-321
+request in an Ironwood-capable testnet wallet. Keep the exact amount and
+memo; pay once from shielded funds. Fees are extra. The page watches for
+the payment, reuses the existing finality calculation, requests a proof,
+and asks the Solana wallet to submit Claim. The success panel describes
+the minted ticket without an Escrow transaction-ID privacy claim.
+
+Nonce, detected payment, and submitted Claim signature are saved locally
+for recovery. After reload, reconnect the same wallet and use **Check
+reservation**. A pending Claim must be checked before another submission.
+Do not clear browser storage during a purchase. Proof failures can be
+retried without another Zcash payment. Release returns Solana rent and
+stock; it cannot refund Zcash. If the program's release conditions have
+not been reached, the button remains disabled.
+
+### Browser fixtures
+
+The dev-only `/fixture.html?state=payment` harness uses mocked Solana RPC,
+a mock Wallet Standard transport, and the revision-2 prover API. It sends
+no transactions and produces no real proofs. Other states are `connect`,
+`reserve`, `finality`, `proving`, `claiming`, `success`, `sold-out`, `expired`,
+`halted`, `stalled`, `proof-failed`, and `claim-failed`.
+
+```sh
+devserve --name zolar-vending-shop --port 5188 --mem 500M --force -- \
+  pnpm --dir shop dev --host 127.0.0.1 --port 5188 --strictPort
+python3 shop/scripts/check-vending-browser.py --url http://127.0.0.1:5188
+```
+
+The script uses one agent-browser session, checks every state at 1440 and
+390 pixels, writes screenshots under `.zolar-work/screenshots/`, and closes
+the session. Clipboard permission denial exercises the selectable-link
+fallback. Unit tests separately verify a successful clipboard write.
+The fixture page is excluded from the production Vite entry points.

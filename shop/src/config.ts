@@ -1,4 +1,14 @@
+export interface VendingConfig {
+  machine: string;
+  program: string;
+  address: string;
+  rpcUrl: string;
+  proverUrl: string;
+  abiUrl: string;
+}
 export interface ShopConfig {
+  mode?: 'checkout' | 'vending';
+  vending?: VendingConfig;
   merchantUrl: string;
   walletUrl: string;
   itemId: string;
@@ -7,6 +17,18 @@ export interface ShopConfig {
 
 export function readConfig(env: Record<string, string | undefined> = import.meta.env): ShopConfig {
   return {
+    mode: env.VITE_CHECKOUT_MODE === 'vending' ? 'vending' : 'checkout',
+    vending:
+      env.VITE_CHECKOUT_MODE === 'vending'
+        ? {
+            abiUrl: env.VITE_VENDING_ABI_URL || '/vending-abi.json',
+            machine: env.VITE_VENDING_MACHINE || '',
+            program: env.VITE_VENDING_PROGRAM || '',
+            address: env.VITE_VENDING_ADDRESS || '',
+            rpcUrl: env.VITE_VENDING_RPC || 'https://api.devnet.solana.com',
+            proverUrl: env.VITE_PROVER_URL || 'http://127.0.0.1:8080',
+          }
+        : undefined,
     merchantUrl: env.VITE_MERCHANT_URL || 'http://127.0.0.1:7979',
     walletUrl: env.VITE_WALLET_URL || 'http://127.0.0.1:7878',
     itemId: env.VITE_ITEM_ID || 'ga',
