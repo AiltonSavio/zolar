@@ -1,0 +1,93 @@
+//! Pure post-verification policy. No verifier bypass exists in the instruction processor.
+use crate::{error::VendingError as E, state::*};
+use header_relay_interface::{RelayView, ViewError, NETWORK_TESTNET};
+use vending_types::PublicValues;
+
+pub struct ClaimAccounts<'a> {
+    pub machine_key: &'a [u8; 32],
+    pub machine: &'a Machine,
+    pub reservation: Option<&'a Reservation>,
+    pub relay_owner: &'a [u8; 32],
+    pub relay_key: &'a [u8; 32],
+    pub relay_data: &'a [u8],
+    pub tag_exists: bool,
+}
+#[derive(Debug, PartialEq, Eq)]
+pub struct ClaimPlan {
+    pub payout: [u8; 32],
+    pub payment_tag: [u8; 32],
+    pub tickets: u64,
+    pub close_reservation: bool,
+}
+pub fn view_error(e: ViewError) -> E {
+    match e {
+        ViewError::WrongOwner | ViewError::WrongAddress => E::WrongAccount,
+        ViewError::Halted(_) => E::RelayHalted,
+        _ => E::RelayNotReadable,
+    }
+}
+pub fn validate_claim(p: &PublicValues, a: ClaimAccounts<'_>) -> Result<ClaimPlan, E> {
+    let m = a.machine;
+    if p.version != 1 || p.pool != 3 {
+        return Err(E::BadPublicValues);
+    }
+    if &p.machine != a.machine_key {
+        return Err(E::WrongMachine);
+    }
+    if p.diversifier != m.diversifier {
+        return Err(E::WrongDiversifier);
+    }
+    if p.svk_hash != m.svk_hash {
+        return Err(E::WrongViewingKey);
+    }
+    let relay =
+        RelayView::parse(a.relay_owner, a.relay_key, &m.relay, a.relay_data).map_err(view_error)?;
+    if relay.network() != NETWORK_TESTNET || p.branch_id != NU7_BRANCH_ID {
+        return Err(E::WrongBranch);
+    }
+    if !relay.is_known_root(&p.root) {
+        return Err(E::UnknownRoot);
+    }
+    let r = a.reservation.ok_or(E::MissingReservation)?;
+    if &r.machine != a.machine_key {
+        return Err(E::WrongMachine);
+    }
+    if p.nonce != r.nonce {
+        return Err(E::MissingReservation);
+    }
+    if p.height > r.expiry_height {
+        return Err(E::PaymentExpired);
+    }
+    if p.value < r.price_zat {
+        return Err(E::Underpaid);
+    }
+    if a.tag_exists {
+        return Err(E::TagUsed);
+    }
+    Ok(ClaimPlan {
+        payout: r.payout,
+        payment_tag: p.payment_tag,
+        tickets: 1,
+        close_reservation: true,
+    })
+}
+pub fn can_release(
+    tip: u32,
+    depth: u16,
+    halted: bool,
+    expiry: u32,
+    created: i64,
+    now: i64,
+) -> Result<(), E> {
+    let allowed = if halted {
+        now.checked_sub(created)
+            .is_some_and(|elapsed| elapsed >= BACKSTOP_SECS)
+    } else {
+        u64::from(tip) > u64::from(expiry) + u64::from(depth)
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(E::ReleaseTooEarly)
+    }
+}
