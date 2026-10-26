@@ -214,3 +214,86 @@ pnpm --dir sdk typecheck
 pnpm --dir sdk test
 pnpm --dir sdk build
 ```
+
+## Vending checkout (testnet / devnet)
+
+Ana connects her Solana wallet and reserves one ticket at 100,000 zatoshi.
+The SDK builds a ZIP-321 request for exactly `0.001` testnet ZEC; wallet
+fees are extra. After payment reaches the Header Relay's Final Block Tree,
+the stateless prover creates a Payment Proof and Ana signs the Claim that
+mints her ticket. She needs devnet SOL for rent and Solana fees. The Payee
+runs no per-sale merchant service in this mode.
+
+`encodeVendingMemo(machineBytes, nonceBytes, payoutBytes)` returns the
+512-byte ZIP-302 memo: canonical ASCII
+`zv1:<machine-base58>:<nonce-base58>:<payout-base58>`, followed by zeros.
+All three inputs are exactly 32 bytes. `paymentLink(address, priceBigInt,
+machineBytes, nonceBytes, payoutBytes)` puts the UTF-8 text (without ZIP-302
+padding) in unpadded base64url and formats the amount using integer
+arithmetic. `ironwoodReceiver(address)` checks the testnet single-receiver
+UA checksum, F4Jumble encoding, padding, and sole type-3 receiver. Ironwood
+uses that receiver's address format.
+
+`VendingProverClient.findPayment(machine, nonce)` calls
+`GET /find-payment?machine=<base58>&nonce=<base58>`. It accepts `pending`
+or `found` with txid, block height, value, and payout.
+`prove(machine, nonce, txid)` posts `/prove`, then polls `/prove/<job>`
+through `waiting_finality` and `proving` to `done` or `failed`.
+Proof/public-values strings are hexadecimal. The public values are 249
+bytes, with payout at 189..221 and zero reserved bytes at 221..249.
+The scanner's `value_zat` must be an exact JSON integer (or a decimal
+string); unsafe JavaScript numeric integers are rejected.
+
+### Deployment binding
+
+All handwritten instruction encoding and account decoding lives in
+`src/vendingInstructions.ts`. Replace it with the generated Codama client
+when available. `createVendingChain(deployment)` reads the Vending Machine
+and Header Relay directly from RPC, constructs Reserve/Claim/Release,
+checks the devnet genesis hash, and waits for confirmed transaction status.
+`VendingConnection` is `{ address: string, send(transaction: Uint8Array):
+Promise<string> }`; `send` signs and broadcasts serialized Solana transaction
+bytes and returns a base58 signature. The shop binds it to Wallet Standard's
+`solana:signAndSendTransaction` on `solana:devnet`.
+
+The shared interface has no authoritative instruction selectors, ordered
+account metas, or Machine/Reservation offsets. The SDK therefore requires
+a public **deployment-owned `VendingAbi` JSON artifact** at `abiUrl` instead
+of guessing these values. Its TypeScript schema is exported. It contains:
+
+- `version: 1`, `machineAddress`, `programAddress`.
+- `shopReceiver`: the exact 43-byte receiver; `shopViewingKeyHash`: 32 bytes.
+- `selectors.reserve/claim/release`: byte prefixes; `claimFields`: the exact
+  order of `proof`, `public_values`, and optional `proof_len_u32` and
+  `public_values_len_u32` fields (lengths are little-endian).
+- `machine` and `reservation`: account length, discriminator/version byte
+  prefix, and byte offsets for every named field. Price is u64 LE; stock,
+  available, and expiry are u32 LE; creation time is i64 LE Unix seconds.
+- `accounts.reserve/claim/release`: ordered `{ name, writable, signer }`
+  entries. The exported type enumerates every available account role.
+
+Machine setup must produce and audit the receiver/viewing-key association
+as one artifact. The browser verifies the entire configured receiver
+against the pin, SHA-256 of the on-chain 64-byte Shop Viewing Key against
+both the machine and the pin, and the diversifier against the receiver.
+It does **not** derive Pallas public keys in JavaScript. Missing bindings,
+wrong identities, invalid offsets, wrong account owners, pending relays,
+and mainnet relays fail closed. The fixture ABI is illustrative test data,
+never a deployment artifact. No deployed program/ABI conformance is claimed
+by these fixtures.
+
+`VendingChain` exposes `read`, `reserve`, `restore`, `release`, `claim`,
+and `transactionStatus`. The shop saves a nonce before Reserve and retains
+Claim signatures across ambiguous confirmations; reuse the same nonce for
+recovery. Release requires `tip > expiry + Finality Depth`, or a halted
+relay and 24 hours of Solana time on-chain. Client time only controls the
+button; the program enforces the rule.
+
+Vending publishes the shop's incoming payment information. It does not
+have the Escrow Private Claim's txid-hiding guarantee. Proof creation needs
+a working external prover; the browser never proves. These testnet tickets
+are transferable immediately, with no extra settlement window, and are
+not mainnet-safe.
+
+Address/request encoding references: [ZIP 316](https://zips.z.cash/zip-0316)
+and [ZIP 321](https://zips.z.cash/zip-0321).

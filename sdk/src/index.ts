@@ -11,3 +11,6 @@ export {
 } from './checkout';
 export { ZolarError } from './http';
 export * from './types';
+export * from './vending';
+export { ironwoodReceiver } from './vendingAddress';
+export * from './vendingInstructions';
