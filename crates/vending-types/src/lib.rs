@@ -6,6 +6,20 @@ pub const PUBLIC_VALUES_LEN: usize = 249;
 #[cfg(test)]
 mod tests {
     #[test]
+    fn payout_occupies_old_reserved_bytes_and_suffix_stays_zero() {
+        let mut b = [0; super::PUBLIC_VALUES_LEN];
+        b[0] = 1;
+        b[188] = 3;
+        b[189..221].fill(42);
+        assert_eq!(super::PublicValues::decode(&b).unwrap().payout, [42; 32]);
+        for offset in 221..249 {
+            b[offset] = 1;
+            assert!(super::PublicValues::decode(&b).is_err());
+            b[offset] = 0;
+        }
+    }
+
+    #[test]
     fn decode_checks_length_version_pool_and_reserved() {
         let mut b = [0; super::PUBLIC_VALUES_LEN];
         assert!(super::PublicValues::decode(&b).is_err());
@@ -31,13 +45,14 @@ pub struct PublicValues {
     pub diversifier: [u8; 11],
     pub svk_hash: [u8; 32],
     pub pool: u8,
+    pub payout: [u8; 32],
 }
 impl PublicValues {
     pub fn decode(b: &[u8]) -> Result<Self, Error> {
         if b.len() != PUBLIC_VALUES_LEN
             || b[0] != 1
             || b[188] != 3
-            || b[189..].iter().any(|v| *v != 0)
+            || b[221..].iter().any(|v| *v != 0)
         {
             return Err(Error);
         }
@@ -53,6 +68,7 @@ impl PublicValues {
             diversifier: b[145..156].try_into().map_err(|_| Error)?,
             svk_hash: b[156..188].try_into().map_err(|_| Error)?,
             pool: b[188],
+            payout: b[189..221].try_into().map_err(|_| Error)?,
         })
     }
 }
