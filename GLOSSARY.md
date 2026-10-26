@@ -51,7 +51,7 @@ The hash of a transaction ID and a secret salt stored in an Escrow, so Solana ne
 _Avoid_: Expected txid, payment hash
 
 **Claim**:
-The Payer's request to release an Escrow by proving its committed transaction is final.
+The request to release an Escrow by proving its committed transaction is final, or to mint a Vending Machine ticket with a Payment Proof for a Reservation. A Claim always pays the recorded payout wallet.
 _Avoid_: Withdraw, redeem
 
 **Private Claim**:
@@ -69,3 +69,25 @@ _Avoid_: Withdrawal, cancel
 **Claim window**:
 The 15 minutes of Solana time between a refund request and the Refund, in which a Claim still settles, so a Payer whose payment finalises late is not raced.
 _Avoid_: Grace period, timeout
+
+## Vending checkout
+
+**Vending Machine**:
+The Solana account holding one shop's immutable configuration and stock, with tickets reserved before payment and minted after a valid Claim.
+_Avoid_: Vend, shop Escrow, vending contract
+
+**Shop Viewing Key**:
+The public external incoming viewing key for a dedicated shop account, used to recognize its Ironwood payments. It reveals incoming payments, not spending authority.
+_Avoid_: Full viewing key, spending key, wallet key
+
+**Reservation**:
+A Payer's hold on one unit of a Vending Machine's stock before payment, with a fixed price, payout wallet, and expiry height.
+_Avoid_: Order, invoice, Escrow
+
+**Payment Proof**:
+An SP1 v6 Groth16 proof that a Zcash payment in the Final Block Tree paid a Reservation at the configured shop address. Its payment data is public, unlike a Private Claim's secret witness.
+_Avoid_: Private Claim, payment receipt, attestation
+
+**Payment Tag**:
+The nullifier of the Ironwood action containing the paying output, used to prevent that output from claiming twice at a Vending Machine.
+_Avoid_: Transaction ID, payment hash, Payment Commitment

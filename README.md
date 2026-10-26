@@ -13,6 +13,24 @@ Built for ZECATHON (Cross-Chain track). Vocabulary: [`GLOSSARY.md`](GLOSSARY.md)
 
 The demo shop exchanges shielded Zcash testnet ZEC for a ticket token on Solana devnet. A merchant service locks the ticket; the Payer's local wallet helper asks for approval, pays and makes a Private Claim. The helper stands in for wallet support. See [Build on Zolar](sdk/README.md) for the SDK and [the shop README](shop/README.md) to run the demo.
 
+### Vending checkout (in progress)
+
+The planned Vending Machine lets the Payee set up stock once. The Payer
+reserves a ticket before paying from a Zcash wallet; an SP1 Payment Proof
+then authorizes minting without a per-sale Payee service. The proof,
+Solana verifier, and checkout integration are not yet verified end to end;
+wallet support for NU7 and the exact binary memo also needs validation.
+Reservation identity after expiry still needs a protocol fix before payments
+can safely be accepted.
+See [ADR 0005](docs/adr/0005-vending-machines-claim-with-sp1-payment-proofs.md).
+
+This mode makes shop sales public through a dedicated Shop Viewing Key.
+Wallet misuse or a relay failure can strand the Payer's ZEC: releasing a
+Reservation returns stock and rent, not ZEC. The guest does not check the
+Halo2 transaction proof and relies on proof of work over the relay's
+Finality Depth. Testnet tickets would mint without an extra settlement
+delay; this design is for Zcash testnet and Solana devnet only.
+
 ## Live on Solana devnet
 
 | What | Address |
