@@ -26,7 +26,8 @@ jobs:
             target
             programs/header-relay/target
             programs/escrow/target
-          key: cargo-${{ hashFiles('Cargo.lock', 'programs/header-relay/Cargo.lock', 'programs/escrow/Cargo.lock') }}
+            programs/vending/target
+          key: cargo-${{ hashFiles('Cargo.lock', 'programs/header-relay/Cargo.lock', 'programs/escrow/Cargo.lock', 'programs/vending/Cargo.lock') }}
       - name: Install Solana toolchain (cargo build-sbf)
         run: |
           curl -sSfL -o solana-release.tar.bz2 https://github.com/anza-xyz/agave/releases/download/v2.3.11/solana-release-x86_64-unknown-linux-gnu.tar.bz2
@@ -38,21 +39,25 @@ jobs:
           cargo fmt --all --check
           cargo fmt --manifest-path programs/header-relay/Cargo.toml --check
           cargo fmt --manifest-path programs/escrow/Cargo.toml --check
+          cargo fmt --manifest-path programs/vending/Cargo.toml --check
       - name: Clippy
         run: |
           cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo clippy --locked --manifest-path programs/header-relay/Cargo.toml --all-targets -- -D warnings
           cargo clippy --locked --manifest-path programs/escrow/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path programs/vending/Cargo.toml --all-targets -- -D warnings
       - name: SBF build
         run: |
           cargo build-sbf --manifest-path programs/header-relay/Cargo.toml -- --locked
           cargo build-sbf --manifest-path programs/escrow/Cargo.toml -- --locked
+          cargo build-sbf --manifest-path programs/vending/Cargo.toml -- --locked
       - name: Tests (crate and LiteSVM)
         run: cargo test --locked --workspace
       - name: Tests (program unit tests)
         run: |
           cargo test --locked --manifest-path programs/header-relay/Cargo.toml
           cargo test --locked --manifest-path programs/escrow/Cargo.toml
+          cargo test --locked --manifest-path programs/vending/Cargo.toml
 
   pczt:
     runs-on: ubuntu-latest

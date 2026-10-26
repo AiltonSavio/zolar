@@ -69,3 +69,20 @@ _Avoid_: Withdrawal, cancel
 **Claim window**:
 The 15 minutes of Solana time between a refund request and the Refund, in which a Claim still settles, so a Payer whose payment finalises late is not raced.
 _Avoid_: Grace period, timeout
+
+## Vending checkout
+
+**Vending Machine**:
+The Solana account holding one shop's immutable config and stock.
+
+**Shop Viewing Key**:
+The Ironwood/Orchard external incoming viewing key of a dedicated ZIP-32 account, published for the shop. Reveals the shop's incoming payments only; its hash is stored in the Vending Machine.
+
+**Reservation**:
+A Solana account the Payer creates before paying; holds one unit of stock for them.
+
+**Payment Proof**:
+An SP1 v6.10.0 Groth16 proof that a Relay-final Zcash payment paid the Reservation.
+
+**Payment Tag**:
+The paying Ironwood action's nullifier; claims once per Vending Machine.
