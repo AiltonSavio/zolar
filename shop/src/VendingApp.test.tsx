@@ -28,6 +28,7 @@ function setup(
     expired?: boolean;
     payment?: boolean;
     proofFail?: boolean;
+    releaseRequestedAt?: number;
   } = {},
 ) {
   const snapshot: VendingSnapshot = {
@@ -54,6 +55,13 @@ function setup(
       priceZat: 100_000n,
       expiryHeight: 120,
       createdAt: Date.now() / 1000,
+      releaseRequested: options.releaseRequestedAt !== undefined,
+      releaseRequestedAt: options.releaseRequestedAt ?? 0,
+    })),
+    requestRelease: vi.fn(async (_wallet, session) => ({
+      ...session,
+      releaseRequested: true,
+      releaseRequestedAt: Math.floor(Date.now() / 1000),
     })),
     release: vi.fn(async () => {}),
     claim: vi.fn(async () => 'claim-signature'),
@@ -104,12 +112,30 @@ describe('vending checkout', () => {
     expect(screen.queryByRole('link', { name: 'Open in wallet' })).toBeNull();
     expect((screen.getByRole('button', { name: 'Pay with Zcash' }) as HTMLButtonElement).disabled).toBe(true);
   });
-  it('offers Release only after the finality release boundary and keeps it separate from a Zcash refund', async () => {
+  it('requests release first and shows the Claim window countdown', async () => {
     const { chain } = setup({ expired: true });
     await reserve();
     expect(await screen.findByText('Reservation expired')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Release reservation' }));
+    expect(screen.queryByRole('button', { name: 'Release' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Request release' }));
+    expect(await screen.findByText(/Release in 15:00/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Release' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(chain.requestRelease).toHaveBeenCalledOnce();
+    expect(chain.release).not.toHaveBeenCalled();
+    expect(screen.getByText(/A Claim can still mint your ticket/)).toBeTruthy();
+  });
+  it('enables Release at the end of the Claim window', async () => {
+    const { chain } = setup({ expired: true, releaseRequestedAt: Math.floor(Date.now() / 1000) - 900 });
+    await reserve();
+    fireEvent.click(await screen.findByRole('button', { name: 'Release' }));
     await waitFor(() => expect(chain.release).toHaveBeenCalledOnce());
+  });
+  it('still Claims a payment while release is requested', async () => {
+    const { chain } = setup({ payment: true, releaseRequestedAt: Math.floor(Date.now() / 1000) - 100 });
+    await reserve();
+    expect(await screen.findByText('You’re in.')).toBeTruthy();
+    expect(chain.claim).toHaveBeenCalledOnce();
+    expect(chain.release).not.toHaveBeenCalled();
   });
   it('keeps a failed proof retryable without asking for a second payment', async () => {
     const { prover } = setup({ payment: true, proofFail: true });
@@ -118,6 +144,10 @@ describe('vending checkout', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry proof' }));
     await waitFor(() => expect(prover.prove).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole('link', { name: 'Open in wallet' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pay with Zcash' })).toBeNull();
+    expect(screen.queryByText(/Wallet fees are extra/)).toBeNull();
+    expect(screen.queryByText(/Ironwood-capable/)).toBeNull();
+    expect(screen.queryByText(/Pay by Zcash height/)).toBeNull();
   });
   it('submits Claim and reuses the success screen without an Escrow privacy claim', async () => {
     const { chain } = setup({ payment: true });
@@ -142,6 +172,44 @@ describe('payment recovery', () => {
     expect(await screen.findByText('Waiting for finality')).toBeTruthy();
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(screen.queryByRole('link', { name: 'Open in wallet' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pay with Zcash' })).toBeNull();
+    expect(screen.queryByText(/Wallet fees are extra/)).toBeNull();
+  });
+  it.each(['halted', 'stalled', 'expired'] as const)(
+    'hides payment controls after a detected payment when %s',
+    async (failure) => {
+      const { snapshot, prover } = setup();
+      await reserve();
+      await screen.findByRole('link', { name: 'Open in wallet' });
+      vi.mocked(prover.findPayment).mockResolvedValue({
+        txid: 'a'.repeat(64),
+        height: failure === 'expired' ? 121 : 105,
+        valueZat: 100_000n,
+        payout: address,
+      });
+      if (failure === 'halted') snapshot.relay.halted = true;
+      if (failure === 'stalled') snapshot.relay.updatedAt = 0;
+      await waitFor(() =>
+        expect(localStorage.getItem(`zolar-vending:${address}:${address}:payment`)).toContain('valueZat'),
+      );
+      expect(screen.queryByRole('button', { name: 'Pay with Zcash' })).toBeNull();
+      expect(screen.queryByText(/Wallet fees are extra/)).toBeNull();
+      expect(screen.queryByText(/Ironwood-capable/)).toBeNull();
+      expect(screen.queryByText(/Pay by Zcash height/)).toBeNull();
+    },
+  );
+  it('refreshes a release requested by another signer and restores its countdown', async () => {
+    const { chain } = setup({ expired: true });
+    await reserve();
+    await screen.findByRole('button', { name: 'Request release' });
+    const session = await vi.mocked(chain.reserve).mock.results[0]!.value;
+    vi.mocked(chain.restore).mockResolvedValue({
+      ...session,
+      releaseRequested: true,
+      releaseRequestedAt: Math.floor(Date.now() / 1000) - 60,
+    });
+    expect(await screen.findByText(/Release in 14:/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Request release' })).toBeNull();
   });
   it('persists the nonce before submitting Reserve, retaining it when confirmation fails', async () => {
     const { chain } = setup();
@@ -157,12 +225,27 @@ describe('payment recovery', () => {
 });
 
 describe('copy request', () => {
+  it('shows a copy error only after a failed copy and clears it on success', async () => {
+    const writeText = vi.fn().mockRejectedValueOnce(new Error('denied')).mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    setup();
+    await reserve();
+    const button = await screen.findByRole('button', { name: 'Copy payment link' });
+    expect(screen.queryByText(/Could not copy/)).toBeNull();
+    fireEvent.click(button);
+    expect(await screen.findByText(/Could not copy/)).toBeTruthy();
+    fireEvent.click(button);
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeTruthy();
+    expect(screen.queryByText(/Could not copy/)).toBeNull();
+    Reflect.deleteProperty(navigator, 'clipboard');
+  });
   it('copies the same link that opens the wallet', async () => {
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
     setup();
     await reserve();
     const link = await screen.findByRole('link', { name: 'Open in wallet' });
+    expect(screen.queryByText(/Could not copy/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Copy payment link' }));
     expect(await screen.findByRole('button', { name: 'Copied' })).toBeTruthy();
     expect(writeText).toHaveBeenCalledWith(link.getAttribute('href'));

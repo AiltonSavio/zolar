@@ -36,6 +36,7 @@ states = {
     'halted': 'The relay is halted. Do not pay.',
     'stalled': 'The relay has stopped advancing. Do not pay.',
     'proof-failed': 'Proof failed', 'claim-failed': 'Claim failed',
+    'release-window': 'Release in', 'release-ready': 'Reservation expired',
 }
 started = time.monotonic()
 try:
@@ -53,9 +54,11 @@ try:
         wait_for(f'document.body.innerText.includes({json.dumps(expected)})')
         if state == 'payment':
             wait_for('!!document.querySelector(".payment-qr")')
-            browser('click', 'button:has-text("Copy payment link")')
-            wait_for('document.body.innerText.includes("Copied") || document.body.innerText.includes("Could not copy. Select the payment link below.")')
+            assert browser('eval', '!document.body.innerText.includes("Could not copy")') == 'true'
             assert browser('eval', 'document.querySelector(".payment-open").href === document.querySelector(".payment-link").value') == 'true'
+        if state in ['finality', 'proving', 'claiming', 'success', 'proof-failed', 'claim-failed']:
+            assert browser('eval', '!document.querySelector(".payment-open") && ![...document.querySelectorAll("button")].some(b => b.textContent.includes("Pay with Zcash"))') == 'true'
+            assert browser('eval', '!/Wallet fees are extra|Ironwood-capable|Pay by Zcash height|Could not copy/.test(document.body.innerText)') == 'true'
         if state in ['sold-out', 'halted', 'stalled', 'expired', 'proof-failed', 'claim-failed']:
             assert browser('eval', '!document.querySelector(".payment-open")') == 'true'
         for width, height, suffix in [(1440, 1100, ''), (390, 844, '-phone')]:
@@ -63,10 +66,17 @@ try:
             assert browser('eval', 'document.documentElement.scrollWidth <= innerWidth') == 'true'
             browser('screenshot', str(out / f'{state}{suffix}.png'), '--full')
         if state == 'expired':
-            browser('click', 'button:has-text("Release reservation")')
+            browser('click', 'button:has-text("Request release")')
+            wait_for('document.body.innerText.includes("Release in")')
+            assert browser('eval', '[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Release").disabled') == 'true'
+            browser('screenshot', str(out / 'release-requested-phone.png'), '--full')
+        if state == 'release-window':
+            assert browser('eval', '[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Release").disabled') == 'true'
+        if state == 'release-ready':
+            browser('click', 'button:text-is("Release")')
             wait_for('!![...document.querySelectorAll("button")].find(b => b.textContent === "Reserve ticket")')
         assert not browser('errors'), f'Browser errors in {state}'
         print(f'PASS {state}: {args.url}/fixture.html?state={state}')
-    print(f'PASS {len(states)} states, {len(states) * 2} screenshots, {time.monotonic() - started:.1f}s')
+    print(f'PASS {len(states)} states, {len(states) * 2 + 1} screenshots, {time.monotonic() - started:.1f}s')
 finally:
     browser('close')

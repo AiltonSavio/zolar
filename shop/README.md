@@ -46,6 +46,8 @@ wallets and service data outside the repository.
 3. Install the page dependencies and configure its public URLs:
 
    ```sh
+   pnpm --dir clients/vending-js install --frozen-lockfile
+   pnpm --dir clients/vending-js build
    pnpm --dir sdk install --frozen-lockfile
    pnpm --dir shop install --frozen-lockfile
    cp shop/.env.example shop/.env.local
@@ -123,8 +125,11 @@ for recovery. After reload, reconnect the same wallet and use **Check
 reservation**. A pending Claim must be checked before another submission.
 Do not clear browser storage during a purchase. Proof failures can be
 retried without another Zcash payment. Release returns Solana rent and
-stock; it cannot refund Zcash. If the program's release conditions have
-not been reached, the button remains disabled.
+stock; it cannot refund Zcash. **Request release** first becomes available
+after expiry plus Finality Depth (or the Halt backstop). It starts a 15-minute
+Claim window, shown as a countdown. **Release** becomes available when that
+window ends. A detected payment can still Claim during the window. The page
+refreshes stored release requests, including requests made by another signer.
 
 ### Browser fixtures
 
@@ -132,7 +137,8 @@ The dev-only `/fixture.html?state=payment` harness uses mocked Solana RPC,
 a mock Wallet Standard transport, and the revision-2 prover API. It sends
 no transactions and produces no real proofs. Other states are `connect`,
 `reserve`, `finality`, `proving`, `claiming`, `success`, `sold-out`, `expired`,
-`halted`, `stalled`, `proof-failed`, and `claim-failed`.
+`halted`, `stalled`, `proof-failed`, `claim-failed`, `release-window`, and
+`release-ready`.
 
 ```sh
 devserve --name zolar-vending-shop --port 5188 --mem 500M --force -- \
@@ -142,6 +148,8 @@ python3 shop/scripts/check-vending-browser.py --url http://127.0.0.1:5188
 
 The script uses one agent-browser session, checks every state at 1440 and
 390 pixels, writes screenshots under `.zolar-work/screenshots/`, and closes
-the session. Clipboard permission denial exercises the selectable-link
-fallback. Unit tests separately verify a successful clipboard write.
+the session. Payment screenshots are taken before any clipboard interaction;
+they must have no copy error. Unit tests verify clipboard success, denial and
+recovery. Once payment is detected, payment controls and pre-payment notes
+are hidden through finality, proof, Claim and failure states.
 The fixture page is excluded from the production Vite entry points.

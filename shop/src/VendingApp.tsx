@@ -4,6 +4,8 @@ import {
   finalityProgress,
   paymentLink,
   vendingStatus,
+  canRequestRelease,
+  releaseSecondsRemaining,
   VendingProverClient,
   zatoshiAmount,
 } from '@zolar/sdk';
@@ -73,6 +75,8 @@ function VendingCheckout({
   const [claim, setClaim] = useState('');
   const [qr, setQr] = useState<{ link: string; data: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState('');
+  const [releaseBusy, setReleaseBusy] = useState(false);
   const [now, setNow] = useState(Date.now());
   const working = useRef(false);
   const mounted = useRef(true);
@@ -89,9 +93,18 @@ function VendingCheckout({
     async function poll() {
       try {
         const value = await chain.read();
+        const restored = session ? await chain.restore(session.nonce) : null;
         const found = session ? await prover.findPayment(settings.machine, session.nonce) : null;
         if (live) {
           setSnapshot(value);
+          if (restored)
+            setSession((previous) =>
+              previous &&
+              previous.releaseRequested === restored.releaseRequested &&
+              previous.releaseRequestedAt === restored.releaseRequestedAt
+                ? previous
+                : restored,
+            );
           if (found) {
             localStorage.setItem(
               `${storageKey}:payment`,
@@ -133,7 +146,11 @@ function VendingCheckout({
         staleMs: 120_000,
       })
     : null;
-  const allowed = !readError && status === 'payment' && phase === 'idle';
+  const paid =
+    !!payment ||
+    !!saved?.claim ||
+    ['proving', 'claiming', 'proof_failed', 'claim_failed', 'claim_pending', 'done'].includes(phase);
+  const allowed = !paid && !session?.releaseRequested && !readError && status === 'payment' && phase === 'idle';
   const link =
     session && snapshot && allowed
       ? paymentLink(
@@ -145,6 +162,8 @@ function VendingCheckout({
         )
       : '';
   useEffect(() => {
+    setCopied(false);
+    setCopyError('');
     let live = true;
     if (link)
       QRCode.toDataURL(link, { width: 320, margin: 4, errorCorrectionLevel: 'M' })
@@ -229,9 +248,25 @@ function VendingCheckout({
       working.current = false;
     }
   }
+  async function requestRelease() {
+    if (!wallet || !session || working.current) return;
+    working.current = true;
+    setReleaseBusy(true);
+    setError('');
+    try {
+      setSession(await chain.requestRelease(wallet, session));
+      setNow(Date.now());
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      working.current = false;
+      setReleaseBusy(false);
+    }
+  }
   async function release() {
     if (!wallet || !session || working.current) return;
     working.current = true;
+    setReleaseBusy(true);
     try {
       await chain.release(wallet, session);
       save(null);
@@ -244,6 +279,7 @@ function VendingCheckout({
       setError((e as Error).message);
     } finally {
       working.current = false;
+      setReleaseBusy(false);
     }
   }
   async function recover() {
@@ -271,6 +307,8 @@ function VendingCheckout({
             priceZat: snapshot?.priceZat ?? 0n,
             expiryHeight: 0,
             createdAt: 0,
+            releaseRequested: false,
+            releaseRequestedAt: 0,
           });
         } else if (status === 'failed') {
           save({ nonce: saved.nonce, payout: saved.payout });
@@ -308,11 +346,12 @@ function VendingCheckout({
       : status === 'stalled'
         ? 'The relay has stopped advancing. Do not pay.'
         : '');
-  const releasable =
-    !!snapshot &&
-    !!session &&
-    (snapshot.relay.tip > session.expiryHeight + snapshot.relay.finalityDepth ||
-      (snapshot.relay.halted && now / 1000 >= session.createdAt + 86_400));
+  const requestable = !!snapshot && !!session && canRequestRelease(snapshot.relay, session, now / 1000);
+  const releaseRemaining = session ? releaseSecondsRemaining(session, now / 1000) : null;
+  const countdown =
+    releaseRemaining === null
+      ? ''
+      : `${Math.floor(releaseRemaining / 60)}:${String(releaseRemaining % 60).padStart(2, '0')}`;
   const finality =
     snapshot && session && payment
       ? finalityProgress({
@@ -432,15 +471,17 @@ function VendingCheckout({
                             ? 'Proof failed'
                             : phase === 'claim_failed'
                               ? 'Claim failed'
-                              : status === 'sold_out'
-                                ? 'Sold out'
-                                : status === 'expired'
-                                  ? 'Reservation expired'
-                                  : status === 'finality'
-                                    ? 'Waiting for finality'
-                                    : session
-                                      ? 'Pay with Zcash'
-                                      : 'Get your ticket'}
+                              : session?.releaseRequested && !paid
+                                ? 'Reservation expired'
+                                : status === 'sold_out'
+                                  ? 'Sold out'
+                                  : status === 'expired'
+                                    ? 'Reservation expired'
+                                    : status === 'finality'
+                                      ? 'Waiting for finality'
+                                      : session
+                                        ? 'Pay with Zcash'
+                                        : 'Get your ticket'}
                 </h2>
                 {reason && (
                   <p className="mono bad" role="alert">
@@ -518,17 +559,49 @@ function VendingCheckout({
                     Retry {phase === 'proof_failed' ? 'proof' : 'claim'}
                   </button>
                 )}
-                {session && (status === 'expired' || status === 'halted') && (
+                {session && (status === 'expired' || status === 'halted' || session.releaseRequested) && (
                   <>
                     <p className="mono small">
                       Release returns your Solana rent and the ticket to stock. It cannot refund a Zcash payment.
                     </p>
-                    <button className="outline" type="button" disabled={!releasable} onClick={release}>
-                      Release reservation
-                    </button>
-                    {!releasable && (
+                    {releaseRemaining === null ? (
+                      <button
+                        className="outline"
+                        type="button"
+                        disabled={!requestable || releaseBusy}
+                        onClick={requestRelease}
+                      >
+                        Request release
+                      </button>
+                    ) : (
+                      <>
+                        <p className="mono small">
+                          A Claim can still mint your ticket until the reservation is released.
+                        </p>
+                        {releaseRemaining > 0 && (
+                          <p className="mono small" role="timer">
+                            Release in {countdown}
+                          </p>
+                        )}
+                        <button
+                          className="outline"
+                          type="button"
+                          disabled={
+                            releaseRemaining > 0 ||
+                            releaseBusy ||
+                            phase === 'proving' ||
+                            phase === 'claiming' ||
+                            phase === 'claim_pending'
+                          }
+                          onClick={release}
+                        >
+                          Release
+                        </button>
+                      </>
+                    )}
+                    {releaseRemaining === null && !requestable && (
                       <p className="mono small">
-                        Release unlocks after the expiry plus Finality Depth, or 24 hours into a halt.
+                        Request release after the expiry plus Finality Depth, or 24 hours into a halt.
                       </p>
                     )}
                   </>
@@ -550,8 +623,9 @@ function VendingCheckout({
                         try {
                           await navigator.clipboard.writeText(link);
                           setCopied(true);
+                          setCopyError('');
                         } catch {
-                          setError('Could not copy. Select the payment link below.');
+                          setCopyError('Could not copy. Select the payment link below.');
                         }
                       }}
                     >
@@ -566,17 +640,28 @@ function VendingCheckout({
                     />
                   </>
                 ) : (
-                  <button className="primary" type="button" disabled>
-                    <ShieldIcon />
-                    Pay with Zcash
-                  </button>
+                  !paid && (
+                    <button className="primary" type="button" disabled>
+                      <ShieldIcon />
+                      Pay with Zcash
+                    </button>
+                  )
                 )}
-                <p className="mono small">Wallet fees are extra. Your wallet shows the fee before you send.</p>
-                <p className="mono small">
-                  Use an Ironwood-capable testnet wallet. The shop’s incoming payments are public; your shielded address
-                  stays private.
-                </p>
-                {session && <p className="mono small">Pay by Zcash height {session.expiryHeight}.</p>}
+                {!paid && (
+                  <>
+                    <p className="mono small">Wallet fees are extra. Your wallet shows the fee before you send.</p>
+                    <p className="mono small">
+                      Use an Ironwood-capable testnet wallet. The shop’s incoming payments are public; your shielded
+                      address stays private.
+                    </p>
+                    {session && <p className="mono small">Pay by Zcash height {session.expiryHeight}.</p>}
+                  </>
+                )}
+                {copyError && link && (
+                  <p className="mono bad" role="alert">
+                    {copyError}
+                  </p>
+                )}
               </div>
             </section>
           )}
