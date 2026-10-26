@@ -3,6 +3,10 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Error;
 
+pub fn verify_proof(_: &[u8], _: &[u8], _: &[u8; 32]) -> Result<(), Error> {
+    Err(Error)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -14,8 +18,4 @@ mod tests {
             );
         }
     }
-}
-
-pub fn verify_proof(_: &[u8], _: &[u8], _: &[u8; 32]) -> Result<(), Error> {
-    Err(Error)
 }
