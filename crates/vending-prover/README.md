@@ -136,15 +136,21 @@ the payment uses fixed fixture machine/nonce/payout bytes `02`/`03`/`04` repeate
 ## Measured revision 2 execution
 
 SP1 v6.10.0 executed the **real mined fixture** on the VPS: **24,108,690
-cycles**, **13.47 s**, exit code 0, 249 bytes equal to native verification.
-The complete synthetic positive statement took **24,137,454 cycles** (13.11 s
-in the final ELF rerun).
+cycles**, **12.14 s**, exit code 0, 249 bytes equal to native verification.
+The complete synthetic positive statement took **24,137,454 cycles** (11.65 s
+in the integration ELF rerun).
 These are execution results; no Groth16 proof or vending Claim was produced.
 
 ```text
-ELF SHA-256: 878577fd6e009a3fb75060ea7977c87782f3bdfe6db2e7b50679d75bf089b77e
-SP1 vkey:   0x00ed19d5de2524a0c4e2d1cacfd4f239e39f8cb9bcd6f671db19338354531217
+ELF SHA-256: 08dd3408160a34db63ee5a086380572c1be3b68cd735393060f789c33c9137cd
+SP1 vkey:   0x000eeda101ba026e2f37c86e96abc5372ddc0330ea99d56e7ddfbef8aae711e7
 ```
+
+These identify the October 27 integration build in `worktree-integration` on the
+VPS. Its ELF and vkey differ from the earlier worker artifact, despite matching
+cycles and public values. Pin this ELF with this vkey for a future Machine;
+recompute the vkey from the exact ELF after rebuilding. No Vending Machine has
+been deployed with either artifact by this integration run.
 
 The actual HTTP server's `GET /find-payment` returned the real fixture's txid,
 height, `value_zat: 100000` and expected payout in **1.58 s**. That check used
@@ -155,46 +161,54 @@ Machine decoder and RPC source are tested against the byte-exact 291-byte
 read remains unrun.
 The test server was stopped afterwards.
 
-## Final verification
+## Integration verification (October 27)
 
-Host-only checks run locally with a 3 GiB/no-swap cap; SP1 checks run on the VPS
-with a 5 GiB/no-swap cap, two build jobs, and available-memory checks first.
-For each crate below the commands are `cargo fmt --manifest-path PATH --check`,
+Types and guest checks, plus host-only prover fmt and Clippy, ran locally under
+3 GiB/no-swap scopes with two jobs. When laptop memory stayed below 3 GiB
+available, the remaining host-only tests ran on the VPS under the same cap.
+SP1 builds and execution used 5 GiB/no-swap scopes on the VPS. Available memory
+was checked before builds.
+
+For each crate below the commands are `cargo fmt --manifest-path PATH --all --check`,
 `cargo clippy --manifest-path PATH --locked --all-targets -- -D warnings`, and
-`cargo test --manifest-path PATH --locked`, where PATH is the crate's
-`Cargo.toml`.
+`cargo test --manifest-path PATH --locked`, where PATH is its `Cargo.toml`.
 
 | Crate | fmt | Clippy | Tests |
 |---|---|---|---|
-| `crates/vending-types` | PASS, 0.19 s | PASS, 0.50 s | PASS, 4 tests, 0.61 s |
-| `crates/vending-guest` | PASS, 0.12 s | PASS, 3.28 s | PASS, 10 tests, 8.23 s |
-| `crates/vending-prover` | PASS, 0.10 s | PASS, 12.37 s | PASS, 15 tests, 7.37 s; 1 live-provider test ignored |
+| `crates/vending-types` | PASS, 0.14 s | PASS, 0.57 s | PASS, 4 tests, 0.94 s |
+| `crates/vending-guest` | PASS, 0.72 s | PASS, 25.17 s | PASS, 11 tests, 4.89 s |
+| `crates/vending-prover` | PASS, 0.60 s | PASS, 109.52 s | PASS, 15 tests, 52.35 s; 1 live-provider test ignored |
 
-VPS `crates/vending-guest/build-elf.sh`: PASS, 0.92 s.
-VPS `cargo clippy --locked --manifest-path crates/vending-prover/Cargo.toml
---features sp1 --all-targets -- -D warnings`: PASS, 34.65 s.
-VPS `cargo run --locked --manifest-path crates/vending-prover/Cargo.toml
---features sp1 -- --witness crates/vending-guest/fixtures/testnet/witness.json
---execute --out target/vending-rev2-execute`: PASS, **127.97 s** including build,
-execution and program-key setup. Output: `mode=execute cycles=24108690
-public_values=249 proof=false`; the vkey hash is recorded above. The CLI
-checks SP1's successful exit and equality with native public values before
-writing output.
+The guest tests include its real mined output encoded and decoded through the
+shared type, then checked by the program's pure Claim policy against matching
+Machine and Reservation data and the archived Relay root. Program serialization,
+prover decoding and the SDK decoder use the same 291-byte Machine fixture with
+the full Shop Viewing Key at offset 227.
 
-Native builds from the earlier full verification also passed: types 0.92 s,
-guest 61.14 s, prover 18.34 s. No on-chain vending Claim, Groth16 proof, or
-live deployed Machine read is established by these results.
+VPS checks:
 
-The final ELF rerun of `cargo test --locked --manifest-path
-crates/vending-prover/Cargo.toml --features sp1 --test execute -- --nocapture
---test-threads=1` passed **2 tests** in **210.89 s** including command overhead:
-real and synthetic positive executions, plus **16 negative executions**, each
-with exit code 1 and no committed public values. Real fixture execution alone
-took 13.47 s; synthetic positive execution took 13.11 s. Both positive outputs
-match all 249 native public-value bytes.
+| Command | Result | Time |
+|---|---|---|
+| `crates/vending-guest/build-elf.sh` | PASS | 20.22 s |
+| Prover `cargo +stable build --locked --features sp1` | PASS | 318.92 s |
+| Prover `cargo +stable clippy --locked --features sp1 --all-targets -- -D warnings` | PASS | 122.35 s |
+| Prover `cargo +stable test --locked --features sp1 -- --nocapture --test-threads=1` | PASS, 17 tests; 1 live-provider test ignored | 304.38 s |
+| Prover CLI `--witness ../vending-guest/fixtures/testnet/witness.json --execute` | PASS, execution and program-key setup | 165.28 s |
+
+Both positive SP1 executions match all 249 native public-value bytes. Real
+fixture execution took 12.14 s; synthetic execution took 11.65 s. All 16
+negative executions exited with code 1 and committed no public values.
+CLI output was `mode=execute cycles=24108690 public_values=249 proof=false`.
+The CLI checks successful exit and equality with native values before writing
+output to the directory selected by `--out`.
+
+The VPS stable compiler reports an upstream future-compiler advisory for
+`proc-macro-error2 2.0.1`, an SP1 transitive dependency. Current Clippy checks
+with `-D warnings` pass; no diagnostic was suppressed.
 
 The Machine's `vkey_hash` stores the 32 decoded bytes of the SP1 vkey above.
-The matching ELF is available on the VPS at
-`~/spikes/zolar-vending/worktree-guest/crates/vending-guest/elf/vending-guest`
-and locally at `crates/vending-guest/elf/vending-guest` (ignored build artifact).
-CLI output is in the ignored local `target/vending-rev2-execute/` directory.
+The matching ELF is on the VPS at
+`~/spikes/zolar-vending/worktree-integration/crates/vending-guest/elf/vending-guest`
+and is copied locally to `crates/vending-guest/elf/vending-guest` (ignored).
+No Groth16 vending proof, successful on-chain vending Claim, devnet deployment,
+or live deployed-Machine read is established by these checks.

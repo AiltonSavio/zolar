@@ -119,7 +119,7 @@ Integers are little-endian; roots retain the relay's byte order:
 | 109 | 32 | Final Block Tree root the proof is against (Relay byte order) |
 | 141 | 4 | block height of the payment (u32 LE) |
 | 145 | 11 | shop diversifier `d` |
-| 156 | 32 | SHA-256 of the 64-byte Shop Viewing Key (`dk || ivk`) |
+| 156 | 32 | SHA-256 of the 64-byte Shop Viewing Key (`dk \|\| ivk`) |
 | 188 | 1 | pool byte: 0x03 = Ironwood |
 | 189 | 32 | payout pubkey (from memo) |
 | 221 | 28 | reserved, zero |
@@ -212,7 +212,7 @@ job before submitting Claim:
 | Wrong amount, receiver, pool, or memo | Payee checks the PCZT before locking | Payment may be unclaimable; overpayment still buys only one ticket |
 | Proving | Local Private Claim, about 47 s and 1.8 GB in recorded runs | Server or suitable proving hardware required; full proof cost and latency unverified |
 | Trusted setup | Zolar's per-circuit setup; current key is a development key | SP1's Groth16 setup and verifier release |
-| Implementation evidence | Recorded devnet Private Claims | Native decode and SP1 execution spikes; no vending purchase proven end to end |
+| Implementation evidence | Recorded devnet Private Claims | Complete native and SP1 guest execution; no vending purchase proven end to end |
 
 Shop sales are public. Anyone with the Shop Viewing Key can correlate the
 amount, memo, paying action, and Solana payout. This does not carry the
@@ -248,13 +248,16 @@ transaction fees. Reserving stock prevents a sold-out race for a live
 Reservation; it does not guarantee shop availability.
 
 ZIP-229 and ZIP-230 are Draft. Format changes, guest changes, or SP1 release
-changes can require a new guest hash and a new machine. The October 26
-spikes measured about 15.9M cycles for decode and decryption and another
-8.0M for a synthetic Poseidon path in a separate guest. Their combined cost
-is an estimate; neither a complete Payment Proof nor equality with a real
-relay root was demonstrated. Wallet NU7 sending and exact text-memo
-preservation also require validation. Existing-wallet compatibility is not
-yet established.
+changes can require a new guest hash and a new machine. The complete guest has
+now executed a recorded, mined testnet payment in 24,108,690 cycles, producing
+249 public bytes identical to native verification. Its transaction path and
+Final Block Tree root match the recorded block and archived Relay account.
+A native cross-component test round-trips that output through the program's
+shared decoder and Claim policy with matching Machine and Reservation data.
+The Solana verifier accepts its separate SP1 fixture in LiteSVM; that fixture
+is contributor-authored and is not a vending Payment Proof. A positive vending
+Claim, ticket minting with a real Payment Proof, and wallet NU7 sending with
+exact text-memo preservation remain unverified.
 
 ## Considered Options
 

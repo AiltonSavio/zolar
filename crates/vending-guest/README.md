@@ -85,14 +85,20 @@ See `../vending-prover/README.md` for SP1 execution and negative checks.
 ## Revision 2 execution artifact
 
 The full real testnet witness executes on SP1 v6.10.0 in **24,108,690 cycles**,
-committing 249 bytes identical to native verification. The latest VPS CLI
-build/execution plus program-key setup completed in **127.97 s** with a 5 GiB
-cap. This is execution only; no Groth16 proof or on-chain Claim was produced.
+committing 249 bytes identical to native verification. The integration VPS CLI
+execution plus program-key setup completed in **165.28 s** with a 5 GiB cap.
+This is execution only; no Groth16 proof or on-chain Claim was produced.
 
 ```text
-ELF SHA-256: 878577fd6e009a3fb75060ea7977c87782f3bdfe6db2e7b50679d75bf089b77e
-SP1 vkey:   0x00ed19d5de2524a0c4e2d1cacfd4f239e39f8cb9bcd6f671db19338354531217
+ELF SHA-256: 08dd3408160a34db63ee5a086380572c1be3b68cd735393060f789c33c9137cd
+SP1 vkey:   0x000eeda101ba026e2f37c86e96abc5372ddc0330ea99d56e7ddfbef8aae711e7
 ```
+
+These identify the October 27 integration build in `worktree-integration` on the
+VPS. Its ELF and vkey differ from the earlier worker artifact, despite matching
+cycles and public values. Pin this ELF with this vkey for a future Machine;
+recompute the vkey from the exact ELF after rebuilding. No Vending Machine has
+been deployed with either artifact by this integration run.
 
 Initialize a Machine with this vkey hash for this exact guest. Rebuilding after
 any source, dependency, toolchain or feature change requires checking the hash
