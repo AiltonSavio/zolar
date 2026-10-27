@@ -21,7 +21,7 @@ import {
   variablePdaSeedNode,
 } from 'codama';
 export const VENDING_PROGRAM_ID =
-  '8XqWKHQiesY5o2eDKyewb9ZHwAZ5gdDMtWGuJogvQ5X5';
+  'J9paKuXLpRr4rmWVp8vBZ6ZMwQhrTSk6w3Rmyv5JHFW5';
 const u8 = numberTypeNode('u8'),
   u16 = numberTypeNode('u16'),
   u32 = numberTypeNode('u32'),

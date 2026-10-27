@@ -12,7 +12,7 @@ import { getMachineCodec, getPaymentTagCodec, getReservationCodec, type Machine,
 import { getClaimInstruction, getInitMachineInstruction, getReleaseReservationInstruction, getRequestReleaseInstruction, getReserveInstruction, parseClaimInstruction, parseInitMachineInstruction, parseReleaseReservationInstruction, parseRequestReleaseInstruction, parseReserveInstruction, type ClaimInput, type InitMachineInput, type ParsedClaimInstruction, type ParsedInitMachineInstruction, type ParsedReleaseReservationInstruction, type ParsedRequestReleaseInstruction, type ParsedReserveInstruction, type ReleaseReservationInput, type RequestReleaseInput, type ReserveInput } from '../instructions';
 import { findMachinePda, findMintAuthorityPda, findPaymentTagPda, findReservationPda } from '../pdas';
 
-export const VENDING_PROGRAM_ADDRESS = '8XqWKHQiesY5o2eDKyewb9ZHwAZ5gdDMtWGuJogvQ5X5' as Address<'8XqWKHQiesY5o2eDKyewb9ZHwAZ5gdDMtWGuJogvQ5X5'>;
+export const VENDING_PROGRAM_ADDRESS = 'J9paKuXLpRr4rmWVp8vBZ6ZMwQhrTSk6w3Rmyv5JHFW5' as Address<'J9paKuXLpRr4rmWVp8vBZ6ZMwQhrTSk6w3Rmyv5JHFW5'>;
 
 export enum VendingAccount { Machine, Reservation, PaymentTag }
 
@@ -36,7 +36,7 @@ if (containsBytes(data, getU8Encoder().encode(3), 0)) { return VendingInstructio
     throw new SolanaError(SOLANA_ERROR__PROGRAM_CLIENTS__FAILED_TO_IDENTIFY_INSTRUCTION, { instructionData: data, programName: "vending" });
 }
 
-export type ParsedVendingInstruction<TProgram extends string = '8XqWKHQiesY5o2eDKyewb9ZHwAZ5gdDMtWGuJogvQ5X5'> =
+export type ParsedVendingInstruction<TProgram extends string = 'J9paKuXLpRr4rmWVp8vBZ6ZMwQhrTSk6w3Rmyv5JHFW5'> =
 | { instructionType: VendingInstruction.InitMachine } & ParsedInitMachineInstruction<TProgram>
 | { instructionType: VendingInstruction.Reserve } & ParsedReserveInstruction<TProgram>
 | { instructionType: VendingInstruction.Claim } & ParsedClaimInstruction<TProgram>

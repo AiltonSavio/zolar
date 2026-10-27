@@ -14,7 +14,7 @@ nonce: ReadonlyUint8Array;
 };
 
 export async function findReservationPda(seeds: ReservationSeeds, config: { programAddress?: Address | HasAddress | undefined } = {}): Promise<ProgramDerivedAddress> {
-  const { programAddress: programAddressInput = '8XqWKHQiesY5o2eDKyewb9ZHwAZ5gdDMtWGuJogvQ5X5' as Address<'8XqWKHQiesY5o2eDKyewb9ZHwAZ5gdDMtWGuJogvQ5X5'> } = config;
+  const { programAddress: programAddressInput = 'J9paKuXLpRr4rmWVp8vBZ6ZMwQhrTSk6w3Rmyv5JHFW5' as Address<'J9paKuXLpRr4rmWVp8vBZ6ZMwQhrTSk6w3Rmyv5JHFW5'> } = config;
   const programAddress = typeof programAddressInput === 'string' ? programAddressInput : programAddressInput.address;
   return await getProgramDerivedAddress({ programAddress, seeds: [getUtf8Encoder().encode("reservation"), getAddressEncoder().encode(seeds.machine), fixEncoderSize(getBytesEncoder(), 32).encode(seeds.nonce)]});
 }

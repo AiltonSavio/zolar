@@ -9,7 +9,7 @@ and checks the root is still known after preparation. It holds no spending keys.
 
 By default, `RpcShops::shop(&self, machine: &str) -> Result<ShopConfig>` reads
 `getAccountInfo` at finalized commitment. The account must be non-executable,
-owned by vending program `8XqWKHQiesY5o2eDKyewb9ZHwAZ5gdDMtWGuJogvQ5X5`,
+owned by vending program `J9paKuXLpRr4rmWVp8vBZ6ZMwQhrTSk6w3Rmyv5JHFW5`,
 and exactly 291 bytes with discriminator/version `1,1`. The program branch's
 layout is decoded without guessing: Relay `100..132`, diversifier `148..159`,
 SVK hash `159..191`, full public `dk || ivk` at `227..291`. The decoder checks

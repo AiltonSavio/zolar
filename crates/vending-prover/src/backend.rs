@@ -80,7 +80,7 @@ impl ShopSource for StaticShops {
     }
 }
 /// Codama vending program ID from the program worker branch.
-pub const VENDING_PROGRAM_ID: &str = "8XqWKHQiesY5o2eDKyewb9ZHwAZ5gdDMtWGuJogvQ5X5";
+pub const VENDING_PROGRAM_ID: &str = "J9paKuXLpRr4rmWVp8vBZ6ZMwQhrTSk6w3Rmyv5JHFW5";
 
 /// Revision 2 Machine: exact 291 bytes; validates owner, discriminator, version and SVK hash.
 pub fn decode_machine(

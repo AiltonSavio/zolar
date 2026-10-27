@@ -23,7 +23,7 @@ export function readConfig(env: Record<string, string | undefined> = import.meta
         ? {
             abiUrl: env.VITE_VENDING_ABI_URL || '/vending-abi.json',
             machine: env.VITE_VENDING_MACHINE || '',
-            program: env.VITE_VENDING_PROGRAM || '',
+            program: env.VITE_VENDING_PROGRAM || 'J9paKuXLpRr4rmWVp8vBZ6ZMwQhrTSk6w3Rmyv5JHFW5',
             address: env.VITE_VENDING_ADDRESS || '',
             rpcUrl: env.VITE_VENDING_RPC || 'https://api.devnet.solana.com',
             proverUrl: env.VITE_PROVER_URL || 'http://127.0.0.1:8080',

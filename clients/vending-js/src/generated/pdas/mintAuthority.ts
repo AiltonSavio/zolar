@@ -13,7 +13,7 @@ machine: Address | HasAddress;
 };
 
 export async function findMintAuthorityPda(seeds: MintAuthoritySeeds, config: { programAddress?: Address | HasAddress | undefined } = {}): Promise<ProgramDerivedAddress> {
-  const { programAddress: programAddressInput = '8XqWKHQiesY5o2eDKyewb9ZHwAZ5gdDMtWGuJogvQ5X5' as Address<'8XqWKHQiesY5o2eDKyewb9ZHwAZ5gdDMtWGuJogvQ5X5'> } = config;
+  const { programAddress: programAddressInput = 'J9paKuXLpRr4rmWVp8vBZ6ZMwQhrTSk6w3Rmyv5JHFW5' as Address<'J9paKuXLpRr4rmWVp8vBZ6ZMwQhrTSk6w3Rmyv5JHFW5'> } = config;
   const programAddress = typeof programAddressInput === 'string' ? programAddressInput : programAddressInput.address;
   return await getProgramDerivedAddress({ programAddress, seeds: [getUtf8Encoder().encode("mint"), getAddressEncoder().encode(seeds.machine)]});
 }
