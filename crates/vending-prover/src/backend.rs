@@ -469,7 +469,7 @@ impl PaymentBackend for ChainBackend {
             .map_err(|_| anyhow!("viewing key length"))?;
         let key = IncomingViewingKey::from_bytes(&key_bytes).unwrap();
         let d = hex::decode(&shop.diversifier)?;
-        for height in scan_start..=view.tip_height() {
+        for height in (scan_start..=view.tip_height()).rev() {
             for tx in self.light.block(height).await?.vtx {
                 let mut matches = false;
                 for action in &tx.ironwood_actions {
