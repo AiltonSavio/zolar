@@ -7,6 +7,7 @@ import {
   VENDING_ERROR__CLAIM_WINDOW_OPEN,
 } from '@zolar/vending-client';
 import { Buffer } from 'buffer';
+import { readFileSync } from 'node:fs';
 import { PublicKey } from '@solana/web3.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -42,6 +43,21 @@ describe('program vending instruction codec', () => {
       VENDING_ERROR__RELEASE_NOT_REQUESTED,
       VENDING_ERROR__CLAIM_WINDOW_OPEN,
     ]).toEqual([21, 22, 23, 24]);
+  });
+  it('decodes the program-produced Machine used by the prover with the full Shop Viewing Key at 227', () => {
+    const data = new Uint8Array(
+      readFileSync(new URL('../../crates/vending-prover/tests/fixtures/machine-revision2.bin', import.meta.url)),
+    );
+    const witness = JSON.parse(
+      readFileSync(new URL('../../crates/vending-guest/fixtures/testnet/witness.json', import.meta.url), 'utf8'),
+    );
+    const machine = getMachineDecoder().decode(data);
+    expect(data.length).toBe(291);
+    expect(machine.svk).toEqual(new Uint8Array(witness.shop_viewing_key));
+    expect(machine.svk).toEqual(data.slice(227, 291));
+    expect(machine.svkHash).toEqual(data.slice(159, 191));
+    expect(machine.diversifier).toEqual(new Uint8Array(witness.diversifier));
+    expect(machine.priceZat).toBe(100_000n);
   });
   it('validates relay owner, active state, testnet network, length, and finality depth', () => {
     const data = new Uint8Array(5914);
