@@ -150,6 +150,7 @@ function VendingCheckout({
     !!payment ||
     !!saved?.claim ||
     ['proving', 'claiming', 'proof_failed', 'claim_failed', 'claim_pending', 'done'].includes(phase);
+  const beforePayment = !paid && status !== 'expired' && !session?.releaseRequested;
   const allowed = !paid && !session?.releaseRequested && !readError && status === 'payment' && phase === 'idle';
   const link =
     session && snapshot && allowed
@@ -640,14 +641,14 @@ function VendingCheckout({
                     />
                   </>
                 ) : (
-                  !paid && (
+                  beforePayment && (
                     <button className="primary" type="button" disabled>
                       <ShieldIcon />
                       Pay with Zcash
                     </button>
                   )
                 )}
-                {!paid && (
+                {beforePayment && (
                   <>
                     <p className="mono small">Wallet fees are extra. Your wallet shows the fee before you send.</p>
                     <p className="mono small">

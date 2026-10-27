@@ -56,7 +56,7 @@ try:
             wait_for('!!document.querySelector(".payment-qr")')
             assert browser('eval', '!document.body.innerText.includes("Could not copy")') == 'true'
             assert browser('eval', 'document.querySelector(".payment-open").href === document.querySelector(".payment-link").value') == 'true'
-        if state in ['finality', 'proving', 'claiming', 'success', 'proof-failed', 'claim-failed']:
+        if state in ['finality', 'proving', 'claiming', 'success', 'proof-failed', 'claim-failed', 'expired', 'release-window', 'release-ready']:
             assert browser('eval', '!document.querySelector(".payment-open") && ![...document.querySelectorAll("button")].some(b => b.textContent.includes("Pay with Zcash"))') == 'true'
             assert browser('eval', '!/Wallet fees are extra|Ironwood-capable|Pay by Zcash height|Could not copy/.test(document.body.innerText)') == 'true'
         if state in ['sold-out', 'halted', 'stalled', 'expired', 'proof-failed', 'claim-failed']:

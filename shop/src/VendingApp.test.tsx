@@ -112,6 +112,20 @@ describe('vending checkout', () => {
     expect(screen.queryByRole('link', { name: 'Open in wallet' })).toBeNull();
     expect((screen.getByRole('button', { name: 'Pay with Zcash' }) as HTMLButtonElement).disabled).toBe(true);
   });
+  it.each([undefined, 100, 1000])(
+    'hides payment controls and notes on expired reservations (release age %s)',
+    async (age) => {
+      setup({ expired: true, releaseRequestedAt: age === undefined ? undefined : Math.floor(Date.now() / 1000) - age });
+      await reserve();
+      expect(await screen.findByText('Reservation expired')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Pay with Zcash' })).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Open in wallet' })).toBeNull();
+      expect(screen.queryByText(/Wallet fees are extra/)).toBeNull();
+      expect(screen.queryByText(/Ironwood-capable/)).toBeNull();
+      expect(screen.queryByText(/Pay by Zcash height/)).toBeNull();
+      expect(screen.getByRole('button', { name: age === undefined ? 'Request release' : 'Release' })).toBeTruthy();
+    },
+  );
   it('requests release first and shows the Claim window countdown', async () => {
     const { chain } = setup({ expired: true });
     await reserve();
