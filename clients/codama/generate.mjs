@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { root as headerRelay } from './program.mjs';
 import { root as escrow } from './escrow.mjs';
+import { root as vending } from './vending.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const render = (root, rustDir, jsDir) => {
@@ -14,3 +15,5 @@ const render = (root, rustDir, jsDir) => {
 };
 render(headerRelay, '../rust', '../js');
 render(escrow, '../escrow-rust', '../escrow-js');
+
+render(vending, '../vending-rust', '../vending-js');
