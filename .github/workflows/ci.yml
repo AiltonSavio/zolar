@@ -147,6 +147,7 @@ jobs:
         run: |
           pnpm --dir clients/codama install --frozen-lockfile
           pnpm --dir clients/codama generate
+          git diff --check -- clients
           test -z "$(git status --porcelain --untracked-files=all -- clients)"
 
   dashboard:

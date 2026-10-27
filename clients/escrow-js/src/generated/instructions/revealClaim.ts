@@ -17,15 +17,15 @@ export function getRevealClaimDiscriminatorBytes(): ReadonlyUint8Array { return 
 export type RevealClaimInstruction<TProgram extends string = typeof ESCROW_PROGRAM_ADDRESS, TAccountEscrow extends string | AccountMeta<string> = string, TAccountRelay extends string | AccountMeta<string> = string, TAccountVault extends string | AccountMeta<string> = string, TAccountPayoutToken extends string | AccountMeta<string> = string, TAccountPayee extends string | AccountMeta<string> = string, TAccountTokenProgram extends string | AccountMeta<string> = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", TRemainingAccounts extends readonly AccountMeta<string>[] = []> =
 Instruction<TProgram> & InstructionWithData<ReadonlyUint8Array> & InstructionWithAccounts<[TAccountEscrow extends string ? WritableAccount<TAccountEscrow> : TAccountEscrow, TAccountRelay extends string ? ReadonlyAccount<TAccountRelay> : TAccountRelay, TAccountVault extends string ? WritableAccount<TAccountVault> : TAccountVault, TAccountPayoutToken extends string ? WritableAccount<TAccountPayoutToken> : TAccountPayoutToken, TAccountPayee extends string ? WritableAccount<TAccountPayee> : TAccountPayee, TAccountTokenProgram extends string ? ReadonlyAccount<TAccountTokenProgram> : TAccountTokenProgram, ...TRemainingAccounts]>;
 
-export type RevealClaimInstructionData = { discriminator: number; 
+export type RevealClaimInstructionData = { discriminator: number;
 /** Internal byte order (the order of the block Merkle tree, not the display order). */
-txid: ReadonlyUint8Array; salt: ReadonlyUint8Array; blockHeight: number; txIndex: number; root: ReadonlyUint8Array; 
+txid: ReadonlyUint8Array; salt: ReadonlyUint8Array; blockHeight: number; txIndex: number; root: ReadonlyUint8Array;
 /** Poseidon siblings from the leaf up; at most 20. Levels not sent are the empty-subtree constants. */
 treePath: Array<ReadonlyUint8Array>; txPath: Array<ReadonlyUint8Array>;  };
 
-export type RevealClaimInstructionDataArgs = { 
+export type RevealClaimInstructionDataArgs = {
 /** Internal byte order (the order of the block Merkle tree, not the display order). */
-txid: ReadonlyUint8Array; salt: ReadonlyUint8Array; blockHeight: number; txIndex: number; root: ReadonlyUint8Array; 
+txid: ReadonlyUint8Array; salt: ReadonlyUint8Array; blockHeight: number; txIndex: number; root: ReadonlyUint8Array;
 /** Poseidon siblings from the leaf up; at most 20. Levels not sent are the empty-subtree constants. */
 treePath: Array<ReadonlyUint8Array>; txPath: Array<ReadonlyUint8Array>;  };
 

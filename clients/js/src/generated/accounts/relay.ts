@@ -14,51 +14,51 @@ export const RELAY_DISCRIMINATOR = 1;
 
 export function getRelayDiscriminatorBytes(): ReadonlyUint8Array { return getU8Encoder().encode(RELAY_DISCRIMINATOR); }
 
-export type Relay = { discriminator: number; version: number; 
+export type Relay = { discriminator: number; version: number;
 /** 0 pending (checkpoint being written), 1 active. */
-state: number; 
+state: number;
 /** 0 running; otherwise the Halt reason: 1 the heaviest chain reorganised past a final block, 2 the Final Block Tree is full. */
-halted: number; creator: Address; 
+halted: number; creator: Address;
 /** Height of the heaviest known header. */
-tipHeight: number; tipSlot: number; tipSeq: number; 
+tipHeight: number; tipSlot: number; tipSeq: number;
 /** Cumulative work of the tip since the checkpoint block. */
-tipWork: bigint; tipHash: ReadonlyUint8Array; checkpoint: Checkpoint; 
+tipWork: bigint; tipHash: ReadonlyUint8Array; checkpoint: Checkpoint;
 /** Height of the newest block in the Final Block Tree (the checkpoint height before the first leaf). */
-finalizedHeight: number; finalizedHash: ReadonlyUint8Array; 
+finalizedHeight: number; finalizedHash: ReadonlyUint8Array;
 /** Leaves in the Final Block Tree: finalizedHeight - checkpoint height. */
-leafCount: number; 
+leafCount: number;
 /** Tip height when the relay Halted. */
-haltHeight: number; 
+haltHeight: number;
 /** Hash of the header whose acceptance caused the Halt. */
-haltHash: ReadonlyUint8Array; 
+haltHash: ReadonlyUint8Array;
 /** Zeroed space for later fields. */
-reserved: ReadonlyUint8Array; 
+reserved: ReadonlyUint8Array;
 /** Final Block Tree frontier: the left sibling waiting at each level. */
-filledSubtrees: Array<ReadonlyUint8Array>; 
+filledSubtrees: Array<ReadonlyUint8Array>;
 /** Ring of tree roots (32-byte big-endian field elements): the root after n appends is at roots[n % 128]; roots[0] starts as the empty-tree root. */
 roots: Array<ReadonlyUint8Array>;  };
 
-export type RelayArgs = { version: number; 
+export type RelayArgs = { version: number;
 /** 0 pending (checkpoint being written), 1 active. */
-state: number; 
+state: number;
 /** 0 running; otherwise the Halt reason: 1 the heaviest chain reorganised past a final block, 2 the Final Block Tree is full. */
-halted: number; creator: Address | HasAddress; 
+halted: number; creator: Address | HasAddress;
 /** Height of the heaviest known header. */
-tipHeight: number; tipSlot: number; tipSeq: number; 
+tipHeight: number; tipSlot: number; tipSeq: number;
 /** Cumulative work of the tip since the checkpoint block. */
-tipWork: number | bigint; tipHash: ReadonlyUint8Array; checkpoint: CheckpointArgs; 
+tipWork: number | bigint; tipHash: ReadonlyUint8Array; checkpoint: CheckpointArgs;
 /** Height of the newest block in the Final Block Tree (the checkpoint height before the first leaf). */
-finalizedHeight: number; finalizedHash: ReadonlyUint8Array; 
+finalizedHeight: number; finalizedHash: ReadonlyUint8Array;
 /** Leaves in the Final Block Tree: finalizedHeight - checkpoint height. */
-leafCount: number; 
+leafCount: number;
 /** Tip height when the relay Halted. */
-haltHeight: number; 
+haltHeight: number;
 /** Hash of the header whose acceptance caused the Halt. */
-haltHash: ReadonlyUint8Array; 
+haltHash: ReadonlyUint8Array;
 /** Zeroed space for later fields. */
-reserved: ReadonlyUint8Array; 
+reserved: ReadonlyUint8Array;
 /** Final Block Tree frontier: the left sibling waiting at each level. */
-filledSubtrees: Array<ReadonlyUint8Array>; 
+filledSubtrees: Array<ReadonlyUint8Array>;
 /** Ring of tree roots (32-byte big-endian field elements): the root after n appends is at roots[n % 128]; roots[0] starts as the empty-tree root. */
 roots: Array<ReadonlyUint8Array>;  };
 

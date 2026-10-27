@@ -13,11 +13,11 @@ export const HEADER_BUFFER_DISCRIMINATOR = 3;
 
 export function getHeaderBufferDiscriminatorBytes(): ReadonlyUint8Array { return getU8Encoder().encode(HEADER_BUFFER_DISCRIMINATOR); }
 
-export type HeaderBuffer = { discriminator: number; version: number; accepted: number; relay: Address; authority: Address; header: ReadonlyUint8Array; 
+export type HeaderBuffer = { discriminator: number; version: number; accepted: number; relay: Address; authority: Address; header: ReadonlyUint8Array;
 /** Equihash verifier state, see zcash-header equihash module. */
 verifier: ReadonlyUint8Array;  };
 
-export type HeaderBufferArgs = { version: number; accepted: number; relay: Address | HasAddress; authority: Address | HasAddress; header: ReadonlyUint8Array; 
+export type HeaderBufferArgs = { version: number; accepted: number; relay: Address | HasAddress; authority: Address | HasAddress; header: ReadonlyUint8Array;
 /** Equihash verifier state, see zcash-header equihash module. */
 verifier: ReadonlyUint8Array;  };
 

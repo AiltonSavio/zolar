@@ -17,19 +17,19 @@ export function getPrivateClaimDiscriminatorBytes(): ReadonlyUint8Array { return
 export type PrivateClaimInstruction<TProgram extends string = typeof ESCROW_PROGRAM_ADDRESS, TAccountEscrow extends string | AccountMeta<string> = string, TAccountRelay extends string | AccountMeta<string> = string, TAccountVault extends string | AccountMeta<string> = string, TAccountPayoutToken extends string | AccountMeta<string> = string, TAccountPayee extends string | AccountMeta<string> = string, TAccountTokenProgram extends string | AccountMeta<string> = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", TRemainingAccounts extends readonly AccountMeta<string>[] = []> =
 Instruction<TProgram> & InstructionWithData<ReadonlyUint8Array> & InstructionWithAccounts<[TAccountEscrow extends string ? WritableAccount<TAccountEscrow> : TAccountEscrow, TAccountRelay extends string ? ReadonlyAccount<TAccountRelay> : TAccountRelay, TAccountVault extends string ? WritableAccount<TAccountVault> : TAccountVault, TAccountPayoutToken extends string ? WritableAccount<TAccountPayoutToken> : TAccountPayoutToken, TAccountPayee extends string ? WritableAccount<TAccountPayee> : TAccountPayee, TAccountTokenProgram extends string ? ReadonlyAccount<TAccountTokenProgram> : TAccountTokenProgram, ...TRemainingAccounts]>;
 
-export type PrivateClaimInstructionData = { discriminator: number; 
+export type PrivateClaimInstructionData = { discriminator: number;
 /** Proof point A already negated (y -> q - y), big-endian x || y. */
-proofA: ReadonlyUint8Array; 
+proofA: ReadonlyUint8Array;
 /** x_c1 || x_c0 || y_c1 || y_c0, each 32 bytes big-endian. */
-proofB: ReadonlyUint8Array; proofC: ReadonlyUint8Array; 
+proofB: ReadonlyUint8Array; proofC: ReadonlyUint8Array;
 /** A Final Block Tree root in the relay's recent history. */
 root: ReadonlyUint8Array;  };
 
-export type PrivateClaimInstructionDataArgs = { 
+export type PrivateClaimInstructionDataArgs = {
 /** Proof point A already negated (y -> q - y), big-endian x || y. */
-proofA: ReadonlyUint8Array; 
+proofA: ReadonlyUint8Array;
 /** x_c1 || x_c0 || y_c1 || y_c0, each 32 bytes big-endian. */
-proofB: ReadonlyUint8Array; proofC: ReadonlyUint8Array; 
+proofB: ReadonlyUint8Array; proofC: ReadonlyUint8Array;
 /** A Final Block Tree root in the relay's recent history. */
 root: ReadonlyUint8Array;  };
 

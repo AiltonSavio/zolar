@@ -14,59 +14,59 @@ export const ESCROW_DISCRIMINATOR = 1;
 export function getEscrowDiscriminatorBytes(): ReadonlyUint8Array { return getU8Encoder().encode(ESCROW_DISCRIMINATOR); }
 
 /** SPL tokens a Payee locked for a Payer, released by a Claim. 300 bytes, PDA ["escrow", payee, commitment]. */
-export type Escrow = { discriminator: number; version: number; 
+export type Escrow = { discriminator: number; version: number;
 /** 0 open; 1 refund requested (a Claim still settles until the Refund closes the account). */
-state: number; bump: number; 
+state: number; bump: number;
 /** Created the Escrow; gets the rent back and, with refunds, the tokens. */
-payee: Address; 
+payee: Address;
 /** The Payer wallet that receives the tokens. */
-payout: Address; mint: Address; 
+payout: Address; mint: Address;
 /** Token account holding the tokens, owned by the Escrow PDA. */
-vault: Address; 
+vault: Address;
 /** The Header Relay this Escrow trusts. */
-relay: Address; 
+relay: Address;
 /** Payment Commitment: Poseidon(txid_hi, txid_lo, salt). */
-commitment: ReadonlyUint8Array; amount: bigint; 
+commitment: ReadonlyUint8Array; amount: bigint;
 /** Tokens of the mint the Payer must lock before a Claim can settle. */
-bondRequired: bigint; 
+bondRequired: bigint;
 /** Equals bondRequired once the Payer deposited; the Bond sits in the vault. */
-bondDeposited: bigint; 
+bondDeposited: bigint;
 /** Solana unix time of creation. */
-createdAt: bigint; 
+createdAt: bigint;
 /** Relay tip height at creation; a Claim must prove a block above it. */
-createdTip: number; 
+createdTip: number;
 /** Zcash height by which the payment must be mined. */
-expiryHeight: number; 
+expiryHeight: number;
 /** 0 a Reveal Claim or a Private Claim may settle; 1 only a Private Claim may. */
-claimMode: number; 
+claimMode: number;
 /** Solana unix time of RequestRefund; 0 while state is 0. */
 refundRequestedAt: bigint; reserved: ReadonlyUint8Array;  };
 
-export type EscrowArgs = { version: number; 
+export type EscrowArgs = { version: number;
 /** 0 open; 1 refund requested (a Claim still settles until the Refund closes the account). */
-state: number; bump: number; 
+state: number; bump: number;
 /** Created the Escrow; gets the rent back and, with refunds, the tokens. */
-payee: Address | HasAddress; 
+payee: Address | HasAddress;
 /** The Payer wallet that receives the tokens. */
-payout: Address | HasAddress; mint: Address | HasAddress; 
+payout: Address | HasAddress; mint: Address | HasAddress;
 /** Token account holding the tokens, owned by the Escrow PDA. */
-vault: Address | HasAddress; 
+vault: Address | HasAddress;
 /** The Header Relay this Escrow trusts. */
-relay: Address | HasAddress; 
+relay: Address | HasAddress;
 /** Payment Commitment: Poseidon(txid_hi, txid_lo, salt). */
-commitment: ReadonlyUint8Array; amount: number | bigint; 
+commitment: ReadonlyUint8Array; amount: number | bigint;
 /** Tokens of the mint the Payer must lock before a Claim can settle. */
-bondRequired: number | bigint; 
+bondRequired: number | bigint;
 /** Equals bondRequired once the Payer deposited; the Bond sits in the vault. */
-bondDeposited: number | bigint; 
+bondDeposited: number | bigint;
 /** Solana unix time of creation. */
-createdAt: number | bigint; 
+createdAt: number | bigint;
 /** Relay tip height at creation; a Claim must prove a block above it. */
-createdTip: number; 
+createdTip: number;
 /** Zcash height by which the payment must be mined. */
-expiryHeight: number; 
+expiryHeight: number;
 /** 0 a Reveal Claim or a Private Claim may settle; 1 only a Private Claim may. */
-claimMode: number; 
+claimMode: number;
 /** Solana unix time of RequestRefund; 0 while state is 0. */
 refundRequestedAt: number | bigint; reserved: ReadonlyUint8Array;  };
 

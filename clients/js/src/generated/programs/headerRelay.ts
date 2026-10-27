@@ -57,7 +57,7 @@ export type ParsedHeaderRelayInstruction<TProgram extends string = '6F4o7Fphgz5M
 
 
         export function parseHeaderRelayInstruction<TProgram extends string>(
-            instruction: Instruction<TProgram> 
+            instruction: Instruction<TProgram>
                 & InstructionWithData<ReadonlyUint8Array>
         ): ParsedHeaderRelayInstruction<TProgram> {
             const instructionType = identifyHeaderRelayInstruction(instruction);

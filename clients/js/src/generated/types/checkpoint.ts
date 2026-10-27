@@ -12,27 +12,27 @@ import { combineCodec, fixDecoderSize, fixEncoderSize, getArrayDecoder, getArray
  * The immutable starting point of a Header Relay. The SHA-256 of its 956 serialised bytes is the Relay address seed.
  * times and bits hold the newest 113 blocks up to and including the checkpoint block, oldest first.
  */
-export type Checkpoint = { version: number; 
+export type Checkpoint = { version: number;
 /** 0 mainnet, 1 testnet. */
-network: number; finalityDepth: number; 
+network: number; finalityDepth: number;
 /** Height at which NU7 difficulty rules start on this network. */
-nu7Height: number; 
+nu7Height: number;
 /** Height of the checkpoint block. */
-height: number; 
+height: number;
 /** Lets one deployer create several Relays from the same checkpoint data. */
-nonce: bigint; 
+nonce: bigint;
 /** Checkpoint block hash, internal byte order. */
 hash: ReadonlyUint8Array; times: Array<number>; bits: Array<number>;  };
 
-export type CheckpointArgs = { version: number; 
+export type CheckpointArgs = { version: number;
 /** 0 mainnet, 1 testnet. */
-network: number; finalityDepth: number; 
+network: number; finalityDepth: number;
 /** Height at which NU7 difficulty rules start on this network. */
-nu7Height: number; 
+nu7Height: number;
 /** Height of the checkpoint block. */
-height: number; 
+height: number;
 /** Lets one deployer create several Relays from the same checkpoint data. */
-nonce: number | bigint; 
+nonce: number | bigint;
 /** Checkpoint block hash, internal byte order. */
 hash: ReadonlyUint8Array; times: Array<number>; bits: Array<number>;  };
 

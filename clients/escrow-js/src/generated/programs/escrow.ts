@@ -45,7 +45,7 @@ export type ParsedEscrowInstruction<TProgram extends string = 'HMew6N4iWjmWMbJBo
 
 
         export function parseEscrowInstruction<TProgram extends string>(
-            instruction: Instruction<TProgram> 
+            instruction: Instruction<TProgram>
                 & InstructionWithData<ReadonlyUint8Array>
         ): ParsedEscrowInstruction<TProgram> {
             const instructionType = identifyEscrowInstruction(instruction);

@@ -45,7 +45,7 @@ export type ParsedVendingInstruction<TProgram extends string = '8XqWKHQiesY5o2eD
 
 
         export function parseVendingInstruction<TProgram extends string>(
-            instruction: Instruction<TProgram> 
+            instruction: Instruction<TProgram>
                 & InstructionWithData<ReadonlyUint8Array>
         ): ParsedVendingInstruction<TProgram> {
             const instructionType = identifyVendingInstruction(instruction);

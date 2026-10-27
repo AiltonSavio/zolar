@@ -18,11 +18,11 @@ export function getCreateEscrowDiscriminatorBytes(): ReadonlyUint8Array { return
 export type CreateEscrowInstruction<TProgram extends string = typeof ESCROW_PROGRAM_ADDRESS, TAccountPayee extends string | AccountMeta<string> = string, TAccountEscrow extends string | AccountMeta<string> = string, TAccountPayeeToken extends string | AccountMeta<string> = string, TAccountVault extends string | AccountMeta<string> = string, TAccountRelay extends string | AccountMeta<string> = string, TAccountTokenProgram extends string | AccountMeta<string> = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", TAccountSystemProgram extends string | AccountMeta<string> = "11111111111111111111111111111111", TRemainingAccounts extends readonly AccountMeta<string>[] = []> =
 Instruction<TProgram> & InstructionWithData<ReadonlyUint8Array> & InstructionWithAccounts<[TAccountPayee extends string ? WritableSignerAccount<TAccountPayee> & AccountSignerMeta<TAccountPayee> : TAccountPayee, TAccountEscrow extends string ? WritableAccount<TAccountEscrow> : TAccountEscrow, TAccountPayeeToken extends string ? WritableAccount<TAccountPayeeToken> : TAccountPayeeToken, TAccountVault extends string ? WritableAccount<TAccountVault> : TAccountVault, TAccountRelay extends string ? ReadonlyAccount<TAccountRelay> : TAccountRelay, TAccountTokenProgram extends string ? ReadonlyAccount<TAccountTokenProgram> : TAccountTokenProgram, TAccountSystemProgram extends string ? ReadonlyAccount<TAccountSystemProgram> : TAccountSystemProgram, ...TRemainingAccounts]>;
 
-export type CreateEscrowInstructionData = { discriminator: number; commitment: ReadonlyUint8Array; payout: Address; amount: bigint; bondRequired: bigint; expiryHeight: number; 
+export type CreateEscrowInstructionData = { discriminator: number; commitment: ReadonlyUint8Array; payout: Address; amount: bigint; bondRequired: bigint; expiryHeight: number;
 /** 0: a Reveal Claim or a Private Claim may settle. 1: only a Private Claim may, so the transaction ID is never published. */
 claimMode: number;  };
 
-export type CreateEscrowInstructionDataArgs = { commitment: ReadonlyUint8Array; payout: Address | HasAddress; amount: number | bigint; bondRequired: number | bigint; expiryHeight: number; 
+export type CreateEscrowInstructionDataArgs = { commitment: ReadonlyUint8Array; payout: Address | HasAddress; amount: number | bigint; bondRequired: number | bigint; expiryHeight: number;
 /** 0: a Reveal Claim or a Private Claim may settle. 1: only a Private Claim may, so the transaction ID is never published. */
 claimMode: number;  };
 
