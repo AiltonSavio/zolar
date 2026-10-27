@@ -28,36 +28,39 @@ pub fn hex32(s: &str) -> Result<[u8; 32]> {
         .map_err(|_| anyhow::anyhow!("expected 32-byte hex"))
 }
 pub fn pubkey(s: &str) -> Result<[u8; 32]> {
-    bs58::decode(s)
+    let bytes: [u8; 32] = bs58::decode(s)
         .into_vec()?
         .try_into()
-        .map_err(|_| anyhow::anyhow!("expected 32-byte base58 public key"))
+        .map_err(|_| anyhow::anyhow!("expected 32-byte base58 public key"))?;
+    ensure!(
+        bs58::encode(bytes).into_string() == s,
+        "non-canonical base58"
+    );
+    Ok(bytes)
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ProveRequest {
     pub txid: String,
     pub machine: String,
-    #[serde(alias = "nonce")]
-    pub reservation_nonce: String,
+    pub nonce: String,
 }
 impl ProveRequest {
     pub fn validate(&self) -> Result<()> {
         hex32(&self.txid)?;
         pubkey(&self.machine)?;
-        hex32(&self.reservation_nonce)?;
+        pubkey(&self.nonce)?;
         Ok(())
     }
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct FindRequest {
     pub machine: String,
-    #[serde(rename = "nonce", alias = "reservation_nonce")]
-    pub reservation_nonce: String,
+    pub nonce: String,
 }
 impl FindRequest {
     pub fn validate(&self) -> Result<()> {
         pubkey(&self.machine)?;
-        hex32(&self.reservation_nonce)?;
+        pubkey(&self.nonce)?;
         Ok(())
     }
 }
@@ -65,6 +68,8 @@ impl FindRequest {
 pub struct FoundPayment {
     pub txid: String,
     pub height: u32,
+    pub value_zat: u64,
+    pub payout: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProofOutput {
@@ -75,6 +80,14 @@ pub struct ProofOutput {
     pub cycles: u64,
     pub vkey_hash: Option<String>,
 }
+#[derive(Debug)]
+pub struct WaitingFinality;
+impl std::fmt::Display for WaitingFinality {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("payment has not reached Relay Finality Depth")
+    }
+}
+impl std::error::Error for WaitingFinality {}
 #[async_trait]
 pub trait PaymentBackend: Send + Sync {
     async fn prepare(&self, request: &ProveRequest) -> Result<Witness>;
@@ -87,7 +100,11 @@ pub trait ProofEngine: Send + Sync {
 #[derive(Clone, Serialize)]
 struct Job {
     status: &'static str,
-    result: Option<ProofOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proof: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public_values: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
     #[serde(skip)]
     created: Instant,
@@ -114,7 +131,7 @@ pub fn router(backend: Arc<dyn PaymentBackend>, engine: Arc<dyn ProofEngine>) ->
     });
     Router::new()
         .route("/prove", post(prove))
-        .route("/jobs/{id}", get(job))
+        .route("/prove/{id}", get(job))
         .route("/find-payment", get(find))
         .with_state(state)
         .layer(tower_http::cors::CorsLayer::permissive())
@@ -142,8 +159,9 @@ async fn prove(
         jobs.insert(
             id.clone(),
             Job {
-                status: "running",
-                result: None,
+                status: "waiting_finality",
+                proof: None,
+                public_values: None,
                 error: None,
                 created: Instant::now(),
             },
@@ -152,15 +170,33 @@ async fn prove(
     let task_id = id.clone();
     tokio::spawn(async move {
         let result = async {
-            let witness = app.backend.prepare(&request).await?;
-            app.engine.run(witness).await
+            let deadline = Instant::now() + Duration::from_secs(3600);
+            let witness = loop {
+                match app.backend.prepare(&request).await {
+                    Ok(witness) => break witness,
+                    Err(e) if e.is::<WaitingFinality>() && Instant::now() < deadline => {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
+                    Err(e) => return Err(e),
+                }
+            };
+            if let Some(job) = app.jobs.lock().unwrap().get_mut(&task_id) {
+                job.status = "proving";
+            }
+            let out = app.engine.run(witness).await?;
+            ensure!(
+                out.mode == "groth16" && out.proof.as_ref().is_some_and(|p| !p.is_empty()),
+                "execute completed without a claimable proof; use a proving-capable service"
+            );
+            Ok(out)
         }
         .await;
         if let Some(job) = app.jobs.lock().unwrap().get_mut(&task_id) {
             match result {
                 Ok(out) => {
-                    job.status = "succeeded";
-                    job.result = Some(out);
+                    job.status = "done";
+                    job.proof = out.proof;
+                    job.public_values = Some(out.public_values);
                 }
                 Err(e) => {
                     job.status = "failed";
@@ -170,10 +206,7 @@ async fn prove(
         }
         drop(permit);
     });
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(serde_json::json!({"job_id":id,"status":"running"})),
-    ))
+    Ok((StatusCode::ACCEPTED, Json(serde_json::json!({"job":id}))))
 }
 async fn job(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<Job>, HttpError> {
     app.jobs
@@ -203,10 +236,14 @@ async fn find(
         .await
         .map_err(|e| error(StatusCode::BAD_GATEWAY, e))?
     {
-        Some(found) => Ok((StatusCode::OK, Json(serde_json::to_value(found).unwrap()))),
+        Some(found) => {
+            let mut value = serde_json::to_value(found).unwrap();
+            value["status"] = "found".into();
+            Ok((StatusCode::OK, Json(value)))
+        }
         None => Ok((
-            StatusCode::ACCEPTED,
-            Json(serde_json::json!({"status":"not_found"})),
+            StatusCode::OK,
+            Json(serde_json::json!({"status":"pending"})),
         )),
     }
 }

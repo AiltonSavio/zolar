@@ -17,8 +17,7 @@ use vending_guest::{decrypt_payment, Witness};
 use vending_types::Memo;
 use zcash_note_encryption::{try_compact_note_decryption, EphemeralKeyBytes};
 
-/// Public shop metadata. Until the machine account layout is supplied by the vending program,
-/// StaticShops is an explicit configuration adapter, not an authenticated on-chain account decoder.
+/// Public shop metadata. StaticShops is an explicit offline fallback.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShopConfig {
     pub machine: String,
@@ -80,6 +79,85 @@ impl ShopSource for StaticShops {
             .ok_or_else(|| anyhow!("unknown machine"))
     }
 }
+/// Codama vending program ID from the program worker branch.
+pub const VENDING_PROGRAM_ID: &str = "8XqWKHQiesY5o2eDKyewb9ZHwAZ5gdDMtWGuJogvQ5X5";
+
+/// Revision 2 Machine: exact 291 bytes; validates owner, discriminator, version and SVK hash.
+pub fn decode_machine(
+    machine: &str,
+    owner: &str,
+    executable: bool,
+    data: &[u8],
+) -> Result<ShopConfig> {
+    ensure!(
+        owner == VENDING_PROGRAM_ID && !executable,
+        "wrong Vending Machine owner or executable account"
+    );
+    ensure!(
+        data.len() == 291 && data[..2] == [1, 1],
+        "invalid revision 2 Vending Machine layout"
+    );
+    let shop = ShopConfig {
+        machine: machine.into(),
+        relay: bs58::encode(&data[100..132]).into_string(),
+        diversifier: hex::encode(&data[148..159]),
+        svk_hash: hex::encode(&data[159..191]),
+        shop_viewing_key: hex::encode(&data[227..291]),
+        scan_start: 0,
+    };
+    shop.validate()?;
+    Ok(shop)
+}
+
+pub struct RpcShops {
+    rpc: String,
+    http: reqwest::Client,
+}
+impl RpcShops {
+    pub fn new(rpc: String) -> Result<Self> {
+        Ok(Self {
+            rpc,
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_secs(60))
+                .build()?,
+        })
+    }
+}
+#[async_trait]
+impl ShopSource for RpcShops {
+    async fn shop(&self, machine: &str) -> Result<ShopConfig> {
+        pubkey(machine)?;
+        let response: serde_json::Value = self
+            .http
+            .post(&self.rpc)
+            .json(&json!({
+                "jsonrpc":"2.0", "id":1, "method":"getAccountInfo",
+                "params":[machine, {"encoding":"base64", "commitment":"finalized"}]
+            }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        ensure!(
+            response.get("error").is_none(),
+            "Solana RPC: {}",
+            response["error"]
+        );
+        let value = &response["result"]["value"];
+        ensure!(!value.is_null(), "missing Vending Machine");
+        let data = STANDARD.decode(value["data"][0].as_str().context("missing Machine data")?)?;
+        decode_machine(
+            machine,
+            value["owner"].as_str().context("missing Machine owner")?,
+            value["executable"]
+                .as_bool()
+                .context("missing executable flag")?,
+            &data,
+        )
+    }
+}
+
 #[derive(Clone)]
 pub struct Lightwallet {
     http: reqwest::Client,
@@ -228,11 +306,11 @@ impl ChainBackend {
                     continue;
                 };
                 if memo.machine == pubkey(machine)? {
-                    return Ok(hex::encode(memo.nonce));
+                    return Ok(bs58::encode(memo.nonce).into_string());
                 }
             }
         }
-        bail!("transaction has no binary vending memo for this machine")
+        bail!("transaction has no vending text memo for this machine")
     }
 }
 
@@ -271,15 +349,20 @@ impl PaymentBackend for ChainBackend {
         let mut txid = hex32(&r.txid)?;
         txid.reverse();
         let raw = self.light.transaction(txid).await?;
+        if raw.height == 0 || raw.height == u64::MAX {
+            return Err(crate::WaitingFinality.into());
+        }
         let height = u32::try_from(raw.height).context("payment is not in the canonical chain")?;
-        ensure!(height > 0, "payment is not mined");
         let (data, owner) = self.relay(&shop).await?;
         let addr = pubkey(&shop.relay)?;
         let view = RelayView::parse(&owner, &addr, &addr, &data).map_err(|e| anyhow!("{e:?}"))?;
         ensure!(
-            height > view.checkpoint_height() && height <= view.finalized_height(),
-            "payment has not reached Relay Finality Depth"
+            height > view.checkpoint_height(),
+            "payment predates Relay Checkpoint"
         );
+        if height > view.finalized_height() {
+            return Err(crate::WaitingFinality.into());
+        }
         let size = view.leaf_count() as usize;
         let checkpoint = view.checkpoint_height();
         let start: [u8; 32] =
@@ -311,7 +394,7 @@ impl PaymentBackend for ChainBackend {
             .context("txid not found in Relay-final block")?;
         let key = hex::decode(&shop.shop_viewing_key)?;
         let machine = pubkey(&r.machine)?;
-        let nonce = hex32(&r.reservation_nonce)?;
+        let nonce = pubkey(&r.nonce)?;
         let parsed = zcash_primitives::transaction::Transaction::read(
             raw.data.as_slice(),
             zcash_protocol::consensus::BranchId::Nu7,
@@ -337,6 +420,7 @@ impl PaymentBackend for ChainBackend {
                 action_index: index as u32,
                 machine,
                 nonce,
+                payout: memo.payout,
                 diversifier: hex::decode(&shop.diversifier)?
                     .try_into()
                     .map_err(|_| anyhow!("diversifier"))?,
@@ -371,8 +455,13 @@ impl PaymentBackend for ChainBackend {
         let (data, owner) = self.relay(&shop).await?;
         let addr = pubkey(&shop.relay)?;
         let view = RelayView::parse(&owner, &addr, &addr, &data).map_err(|e| anyhow!("{e:?}"))?;
+        let scan_start = if shop.scan_start == 0 {
+            view.tip_height().saturating_sub(999)
+        } else {
+            shop.scan_start
+        };
         ensure!(
-            view.tip_height().saturating_sub(shop.scan_start) < 1000,
+            view.tip_height().saturating_sub(scan_start) < 1000,
             "scan range exceeds 1000 blocks; narrow public scan_start"
         );
         let key_bytes: [u8; 64] = hex::decode(&shop.shop_viewing_key)?
@@ -380,7 +469,7 @@ impl PaymentBackend for ChainBackend {
             .map_err(|_| anyhow!("viewing key length"))?;
         let key = IncomingViewingKey::from_bytes(&key_bytes).unwrap();
         let d = hex::decode(&shop.diversifier)?;
-        for height in shop.scan_start..=view.tip_height() {
+        for height in scan_start..=view.tip_height() {
             for tx in self.light.block(height).await?.vtx {
                 let mut matches = false;
                 for action in &tx.ironwood_actions {
@@ -408,7 +497,7 @@ impl PaymentBackend for ChainBackend {
                         continue;
                     };
                     if memo.machine == pubkey(&r.machine)?
-                        && memo.nonce == hex32(&r.reservation_nonce)?
+                        && memo.nonce == pubkey(&r.nonce)?
                         && payment.diversifier.as_slice() == d
                     {
                         let mut display = internal;
@@ -416,6 +505,8 @@ impl PaymentBackend for ChainBackend {
                         return Ok(Some(FoundPayment {
                             txid: hex::encode(display),
                             height,
+                            value_zat: payment.value_zat,
+                            payout: bs58::encode(memo.payout).into_string(),
                         }));
                     }
                 }

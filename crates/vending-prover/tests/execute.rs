@@ -30,7 +30,15 @@ async fn sp1_full_statement_and_all_requested_negative_cases() {
         pv.as_slice().len()
     );
     let mut cases = Vec::new();
-    for kind in ["value", "rseed", "rho", "memo"] {
+    for kind in [
+        "value",
+        "rseed",
+        "rho",
+        "memo",
+        "uppercase",
+        "spaces",
+        "base58",
+    ] {
         cases.push((kind, fixture(kind)));
     }
     let mut w = good.clone();
@@ -42,6 +50,9 @@ async fn sp1_full_statement_and_all_requested_negative_cases() {
     let mut w = good.clone();
     w.machine[0] ^= 1;
     cases.push(("machine", w));
+    let mut w = good.clone();
+    w.payout[0] ^= 1;
+    cases.push(("payout", w));
     let mut w = good.clone();
     w.nonce[0] ^= 1;
     cases.push(("nonce", w));
@@ -89,4 +100,26 @@ async fn sp1_full_statement_and_all_requested_negative_cases() {
             Err(error) => println!("REJECTED {name} executor error={error}"),
         }
     }
+}
+
+#[tokio::test]
+async fn sp1_real_testnet_payment_with_real_block_merkle_path() {
+    let w: Witness = serde_json::from_str(include_str!(
+        "../../vending-guest/fixtures/testnet/witness.json"
+    ))
+    .unwrap();
+    let elf = Elf::from(std::fs::read(std::env::var("VENDING_GUEST_ELF").unwrap()).unwrap());
+    let mut stdin = SP1Stdin::new();
+    stdin.write(&w);
+    let client = ProverClient::builder().light().build().await;
+    let start = std::time::Instant::now();
+    let (pv, report) = client.execute(elf, stdin).await.unwrap();
+    assert_eq!(report.exit_code, 0);
+    assert_eq!(pv.as_slice(), vending_guest::verify(&w).unwrap().encode());
+    println!(
+        "REAL_GUEST cycles={} elapsed={:?} public_values_bytes={}",
+        report.total_instruction_count() + report.total_syscall_count(),
+        start.elapsed(),
+        pv.as_slice().len()
+    );
 }

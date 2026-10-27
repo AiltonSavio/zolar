@@ -2,7 +2,7 @@ use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand};
 use std::{path::PathBuf, sync::Arc};
 use vending_prover::{
-    backend::{ChainBackend, ShopConfig, StaticShops},
+    backend::{ChainBackend, RpcShops, ShopConfig, ShopSource, StaticShops},
     engine::Sp1Engine,
     PaymentBackend, ProofEngine, ProveRequest,
 };
@@ -75,9 +75,12 @@ async fn main() -> Result<()> {
         write_result(engine.run(witness).await?, cli.out)?;
         return Ok(());
     }
-    let shops: Vec<ShopConfig> = serde_json::from_slice(&std::fs::read(cli.shops.context(
-        "--shops public metadata file is required until the machine account decoder is integrated",
-    )?)?)?;
+    let shops: Arc<dyn ShopSource> = if let Some(path) = cli.shops {
+        let metadata: Vec<ShopConfig> = serde_json::from_slice(&std::fs::read(path)?)?;
+        Arc::new(StaticShops::new(metadata)?)
+    } else {
+        Arc::new(RpcShops::new(cli.rpc.clone())?)
+    };
     let peers = if cli.peers.is_empty() {
         vending_prover::chain::p2p::Network::Testnet
             .seeders()
@@ -87,15 +90,7 @@ async fn main() -> Result<()> {
     } else {
         cli.peers
     };
-    let backend = Arc::new(
-        ChainBackend::new(
-            Arc::new(StaticShops::new(shops)?),
-            cli.rpc,
-            cli.lightwallet,
-            peers,
-        )
-        .await?,
-    );
+    let backend = Arc::new(ChainBackend::new(shops, cli.rpc, cli.lightwallet, peers).await?);
     if let Some(Command::Serve { bind }) = cli.command {
         let listener = tokio::net::TcpListener::bind(bind).await?;
         eprintln!(
@@ -119,7 +114,7 @@ async fn main() -> Result<()> {
         .prepare(&ProveRequest {
             txid,
             machine,
-            reservation_nonce: nonce,
+            nonce,
         })
         .await?;
     write_result(engine.run(w).await?, cli.out)

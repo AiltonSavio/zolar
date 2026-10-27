@@ -5935,6 +5935,9 @@ dependencies = [
 [[package]]
 name = "vending-types"
 version = "0.1.0"
+dependencies = [
+ "bs58",
+]
 
 [[package]]
 name = "version_check"
