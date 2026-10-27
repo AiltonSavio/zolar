@@ -36,10 +36,19 @@ pub fn fixture(kind: &str) -> Witness {
     let mut memo = Memo {
         machine: [2; 32],
         nonce: [3; 32],
+        payout: [4; 32],
     }
     .encode();
-    if kind == "memo" {
-        memo[1] = 2;
+    match kind {
+        "memo" => memo[1] = b'2',
+        "uppercase" => memo[0] = b'Z',
+        "spaces" => memo[4] = b' ',
+        "base58" => {
+            let end = memo.iter().position(|b| *b == 0).unwrap();
+            memo.copy_within(4..end, 5);
+            memo[4] = b'1';
+        }
+        _ => (),
     }
     let rho = old_note.rho();
     let seed = if kind == "rseed" {
@@ -88,6 +97,7 @@ pub fn fixture(kind: &str) -> Witness {
         action_index: idx as u32,
         machine: [2; 32],
         nonce: [3; 32],
+        payout: [4; 32],
         diversifier: *old_note.recipient().diversifier().as_array(),
         tx_index: 0,
         tx_count: 1,

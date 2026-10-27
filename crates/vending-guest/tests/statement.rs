@@ -10,6 +10,7 @@ fn complete_statement_commits_only_the_contract_values() {
     let pv = verify(&w).unwrap();
     assert_eq!(pv.machine, w.machine);
     assert_eq!(pv.nonce, w.nonce);
+    assert_eq!(pv.payout, w.payout);
     assert_eq!(pv.value_zat, 2_500_000);
     assert_eq!(pv.root, w.root);
     assert_eq!(pv.height, w.height);
@@ -135,4 +136,14 @@ fn transaction_paths_bind_right_directions_and_odd_duplication() {
     assert!(vending_guest::check_tx_path(&txid, &w).is_ok());
     w.tx_path[0] = [9; 32];
     assert_eq!(vending_guest::check_tx_path(&txid, &w), Err(Error::TxPath));
+}
+
+#[test]
+fn payout_is_bound_and_noncanonical_text_memos_are_rejected() {
+    let mut w = fixture("valid");
+    w.payout[0] ^= 1;
+    assert_eq!(verify(&w), Err(Error::Payout));
+    for kind in ["uppercase", "spaces", "base58"] {
+        assert_eq!(verify(&fixture(kind)), Err(Error::Memo), "{kind}");
+    }
 }

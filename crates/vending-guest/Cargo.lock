@@ -200,6 +200,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "bech32"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -741,6 +747,10 @@ checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
  "allocator-api2",
 ]
+
+[[package]]
+name = "header-relay-interface"
+version = "0.1.0"
 
 [[package]]
 name = "hex"
@@ -1791,6 +1801,9 @@ dependencies = [
 name = "vending-guest"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "bs58",
+ "header-relay-interface",
  "hex",
  "orchard",
  "rand 0.8.8",
@@ -1808,6 +1821,9 @@ dependencies = [
 [[package]]
 name = "vending-types"
 version = "0.1.0"
+dependencies = [
+ "bs58",
+]
 
 [[package]]
 name = "version_check"

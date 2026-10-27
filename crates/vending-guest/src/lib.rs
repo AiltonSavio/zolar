@@ -17,6 +17,7 @@ pub struct Witness {
     pub action_index: u32,
     pub machine: [u8; 32],
     pub nonce: [u8; 32],
+    pub payout: [u8; 32],
     pub diversifier: [u8; 11],
     pub tx_index: u32,
     pub tx_count: u32,
@@ -38,6 +39,7 @@ pub enum Error {
     Memo,
     Machine,
     Nonce,
+    Payout,
     TxPath,
     TreePath,
 }
@@ -146,10 +148,14 @@ pub fn verify(w: &Witness) -> Result<PublicValues, Error> {
     if memo.nonce != w.nonce {
         return Err(Error::Nonce);
     }
+    if memo.payout != w.payout {
+        return Err(Error::Payout);
+    }
     Ok(PublicValues {
         branch_id: payment.branch_id,
         machine: memo.machine,
         nonce: memo.nonce,
+        payout: memo.payout,
         value_zat: payment.value_zat,
         payment_tag: payment.payment_tag,
         root: w.root,
