@@ -6,15 +6,37 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
-  "files": ["dist"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "eslint --max-warnings 0 .",
+    "fmt": "prettier --check --single-quote --print-width 120 src/vending*.ts src/fixtures/vending.ts eslint.config.js"
   },
   "devDependencies": {
+    "@eslint/js": "9.39.1",
+    "eslint": "9.39.1",
+    "globals": "16.5.0",
+    "prettier": "3.6.2",
     "typescript": "5.9.3",
+    "typescript-eslint": "8.46.3",
     "vitest": "4.0.8"
+  },
+  "dependencies": {
+    "@noble/hashes": "1.8.0",
+    "@scure/base": "1.2.6",
+    "@solana/kit": "8.5.0",
+    "@solana/web3.js": "1.98.4",
+    "@zolar/vending-client": "file:../clients/vending-js",
+    "buffer": "6.0.3"
   }
 }

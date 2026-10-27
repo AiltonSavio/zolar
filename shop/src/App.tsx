@@ -7,13 +7,15 @@ import {
   type JobView,
   type WalletStatus,
 } from '@zolar/sdk';
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Brand } from './components/Brand';
 import { CalendarIcon, ClockIcon, PinIcon, ShieldIcon, WalletIcon } from './components/Icons';
 import { Progress } from './components/Progress';
 import { Success } from './components/Success';
 import { type ShopConfig, short, zec } from './config';
 import { connectAddress, looksLikeAddress, useSolanaWallets } from './solanaWallet';
+
+const VendingApp = lazy(() => import('./VendingApp').then((module) => ({ default: module.VendingApp })));
 
 const EVENT = 'Shielded Night';
 
@@ -23,6 +25,16 @@ type Phase =
   | { kind: 'finished'; view: JobView };
 
 export function App({ config }: { config: ShopConfig }) {
+  return config.mode === 'vending' ? (
+    <Suspense fallback={<p className="mono notice">Loading checkout…</p>}>
+      <VendingApp config={config} />
+    </Suspense>
+  ) : (
+    <CheckoutApp config={config} />
+  );
+}
+
+function CheckoutApp({ config }: { config: ShopConfig }) {
   const merchant = useMemo(() => new MerchantClient(config.merchantUrl), [config.merchantUrl]);
   const wallet = useMemo(() => new WalletClient(config.walletUrl), [config.walletUrl]);
   const solanaWallets = useSolanaWallets();
@@ -116,18 +128,30 @@ export function App({ config }: { config: ShopConfig }) {
 
         <article className="stub">
           <section className="stub-top">
-            <img className="art" src="/london-night.webp" alt="Tower Bridge and the Thames at night, in black and yellow" />
+            <img
+              className="art"
+              src="/london-night.webp"
+              alt="Tower Bridge and the Thames at night, in black and yellow"
+            />
             <div className="event">
               <p className="eyebrow">Event</p>
               {done ? <h2 className="display title">{EVENT}</h2> : <h1 className="display title">{EVENT}</h1>}
               <p className="mono subtitle">A Zcash party during Breakpoint London</p>
               <ul className="facts">
-                <li><PinIcon /> London</li>
-                <li><CalendarIcon /> 16 November 2026</li>
-                <li><ClockIcon /> 21:00</li>
+                <li>
+                  <PinIcon /> London
+                </li>
+                <li>
+                  <CalendarIcon /> 16 November 2026
+                </li>
+                <li>
+                  <ClockIcon /> 21:00
+                </li>
               </ul>
               {!done && <p className="tagline">A night for people who like their payments private.</p>}
-              <p className="mono fine">Unofficial side event. Not affiliated with Breakpoint or the Solana Foundation.</p>
+              <p className="mono fine">
+                Unofficial side event. Not affiliated with Breakpoint or the Solana Foundation.
+              </p>
             </div>
             <aside className="details">
               <div>
@@ -152,7 +176,9 @@ export function App({ config }: { config: ShopConfig }) {
                   {phase.kind === 'running' && payoutOk && (
                     <div>
                       <p className="eyebrow">Ticket wallet</p>
-                      <p className="mono wallet-line"><WalletIcon /> {short(payout.trim())}</p>
+                      <p className="mono wallet-line">
+                        <WalletIcon /> {short(payout.trim())}
+                      </p>
                     </div>
                   )}
                   <div>
@@ -186,7 +212,9 @@ export function App({ config }: { config: ShopConfig }) {
                   </div>
                 )}
                 <label className="field">
-                  <span className="mono small">{solanaWallets.length ? 'or paste a Solana address' : 'Your Solana address (the ticket goes here)'}</span>
+                  <span className="mono small">
+                    {solanaWallets.length ? 'or paste a Solana address' : 'Your Solana address (the ticket goes here)'}
+                  </span>
                   <span className="input">
                     <WalletIcon />
                     <input
@@ -211,11 +239,14 @@ export function App({ config }: { config: ShopConfig }) {
                 </button>
                 {walletStatus === null && (
                   <p className="mono small bad">
-                    Zolar Wallet is not running on this computer (or does not allow this site). Start it, then try again.
+                    Zolar Wallet is not running on this computer (or does not allow this site). Start it, then try
+                    again.
                   </p>
                 )}
                 {walletStatus && <p className="mono small">Zolar Wallet found ({walletStatus.network}).</p>}
-                <p className="mono small">Your ticket arrives in this wallet. Solana never learns which Zcash payment paid for it.</p>
+                <p className="mono small">
+                  Your ticket arrives in this wallet. Solana never learns which Zcash payment paid for it.
+                </p>
               </div>
             </section>
           )}
