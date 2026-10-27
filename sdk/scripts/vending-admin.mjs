@@ -20,7 +20,7 @@ import {
   getMachineDecoder,
   getReservationDecoder,
   VENDING_PROGRAM_ADDRESS,
-} from '../../clients/vending-js/dist/index.js';
+} from '@zolar/vending-client';
 import { decodeVendingRelay } from '../dist/vendingInstructions.js';
 import { ironwoodReceiver } from '../dist/vendingAddress.js';
 import { paymentLink } from '../dist/vending.js';
@@ -74,24 +74,37 @@ async function main() {
     positionals: [command],
   } = parseArgs({
     allowPositionals: true,
-    options: Object.fromEntries(
-      [
-        'rpc',
-        'keypair',
-        'mint-keypair',
-        'shop',
-        'machine',
-        'seed',
-        'nonce',
-        'relay',
-        'vkey-hash',
-        'price-zat',
-        'stock',
-        'reservation-blocks',
-        'out',
-      ].map((k) => [k, { type: 'string' }]),
-    ),
+    options: {
+      help: { type: 'boolean' },
+      ...Object.fromEntries(
+        [
+          'rpc',
+          'keypair',
+          'mint-keypair',
+          'shop',
+          'machine',
+          'seed',
+          'nonce',
+          'relay',
+          'vkey-hash',
+          'price-zat',
+          'stock',
+          'reservation-blocks',
+          'out',
+        ].map((k) => [k, { type: 'string' }]),
+      ),
+    },
   });
+  if (v.help) {
+    console.log(
+      'Usage: vending-admin.sh init-machine|reserve|inspect [--rpc URL] [--keypair PATH] [--shop PUBLIC_JSON] [--out JSON]',
+    );
+    return;
+  }
+  const definition = readFileSync(new URL('../../clients/codama/vending.mjs', import.meta.url), 'utf8');
+  const sourceProgram = definition.match(/export const VENDING_PROGRAM_ID\s*=\s*'([^']+)'/)?.[1];
+  if (sourceProgram !== VENDING_PROGRAM_ADDRESS)
+    throw new Error('Stale vending client: rebuild clients/vending-js, then run pnpm --dir sdk install --force');
   const rpc = new Connection(v.rpc || 'https://api.devnet.solana.com', 'finalized');
   if ((await rpc.getGenesisHash()) !== 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG')
     throw new Error('Solana devnet only');

@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { checkedShop, DEFAULT_RESERVATION_BLOCKS } from './vending-admin.mjs';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { fixtureAddress } from '../src/vendingAddress.test.ts';
 
 describe('dedicated shop initialization guard', () => {
+  it('starts the real Node CLI with package dependencies resolved', () => {
+    const cli = fileURLToPath(new URL('../../scripts/vending-admin.sh', import.meta.url));
+    const result = spawnSync(cli, ['--help'], { encoding: 'utf8' });
+    expect(result.stderr).not.toContain('ERR_MODULE_NOT_FOUND');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('init-machine|reserve|inspect');
+  });
   const receiver = Array(43).fill(7);
   const key = Buffer.alloc(64, 1);
   const fixture = {
