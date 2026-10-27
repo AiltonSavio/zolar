@@ -51,6 +51,7 @@ jobs:
           cargo build-sbf --manifest-path programs/header-relay/Cargo.toml -- --locked
           cargo build-sbf --manifest-path programs/escrow/Cargo.toml -- --locked
           cargo build-sbf --manifest-path programs/vending/Cargo.toml -- --locked
+          python3 scripts/check-vending-sbf.py
       - name: Tests (crate and LiteSVM)
         run: cargo test --locked --workspace
       - name: Tests (program unit tests)

@@ -188,6 +188,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayref"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb"
+
+[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -260,7 +266,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3560a7b1951efe814fcd721938313adc56753ca39f4b23847d7e9a2402f5dbff"
 dependencies = [
  "arrayvec",
- "constant_time_eq",
+ "constant_time_eq 0.4.2",
 ]
 
 [[package]]
@@ -270,20 +276,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2380c0236432f7b22a70229df30f218f5293870c056beb76f5ca068e3273a366"
 dependencies = [
  "arrayvec",
- "constant_time_eq",
+ "constant_time_eq 0.4.2",
 ]
 
 [[package]]
 name = "blake3"
-version = "1.8.7"
+version = "1.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d9e454fc11f76977dc803893aff6304ed33d6a26efae8696573bea74baa27ae"
+checksum = "3888aaa89e4b2a40fca9848e400f6a658a5a3978de7be858e209cafa8be9a4a0"
 dependencies = [
+ "arrayref",
  "arrayvec",
  "cc",
  "cfg-if",
- "constant_time_eq",
- "cpufeatures 0.3.1",
+ "constant_time_eq 0.3.1",
 ]
 
 [[package]]
@@ -432,6 +438,12 @@ name = "const-default"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b396d1f76d455557e1218ec8066ae14bba60b4b36ecd55577ba979f5db7ecaa"
+
+[[package]]
+name = "constant_time_eq"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
 name = "constant_time_eq"
@@ -658,21 +670,6 @@ name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
-
-[[package]]
-name = "five8"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f76610e969fa1784327ded240f1e28a3fd9520c9cec93b636fcf62dd37f772"
-dependencies = [
- "five8_core",
-]
-
-[[package]]
-name = "five8_core"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "059c31d7d36c43fe39d89e55711858b4da8be7eb6dabac23c7289b1a19489406"
 
 [[package]]
 name = "fnv"
@@ -1668,17 +1665,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "solana-blake3-hasher"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7116e1d942a2432ca3f514625104757ab8a56233787e95144c93950029e31176"
-dependencies = [
- "blake3",
- "solana-define-syscall 4.0.1",
- "solana-hash",
-]
-
-[[package]]
 name = "solana-bn254"
 version = "3.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1710,9 +1696,6 @@ name = "solana-hash"
 version = "4.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7507df0d2c6350053d125e3df200976fdc68d2a942637d11ac657fe7220949a"
-dependencies = [
- "five8",
-]
 
 [[package]]
 name = "solana-instruction-view"
@@ -1782,8 +1765,8 @@ dependencies = [
 name = "sp1-solana-v6"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "groth16-solana",
- "solana-blake3-hasher",
  "solana-sha256-hasher",
 ]
 

@@ -9,6 +9,9 @@ description = "SP1 v6.10.0 Groth16 verification using Solana BN254 syscalls"
 [dependencies]
 groth16-solana = { git = "https://github.com/Lightprotocol/groth16-solana", rev = "ac9d959f9b14479c20c9d4f8168fa4cc47c13071", default-features = false }
 solana-sha256-hasher = { version = "=3.1.0", features = ["sha2"] }
+blake3 = { version = "=1.8.2", default-features = false, features = ["pure"] }
+
+[dev-dependencies]
 solana-blake3-hasher = { version = "=3.1.0", features = ["blake3"] }
 
 [lints.rust]

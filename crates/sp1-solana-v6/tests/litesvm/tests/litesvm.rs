@@ -46,9 +46,18 @@ fn run(ix: Instruction) -> Result<u64, TransactionError> {
     svm.send_transaction(tx)
         .map(|meta| meta.compute_units_consumed - 150)
         .map_err(|failed| {
+            println!("CU SP1 rejected {}", failed.meta.compute_units_consumed);
             eprintln!("SBF failure logs: {:?}", failed.meta.logs);
             failed.err
         })
+}
+
+#[test]
+fn vending_sized_public_values_reach_portable_blake3_and_reject_cleanly() {
+    assert_eq!(
+        run(instruction(PROOF, &[42; 249], VKEY)),
+        Err(custom(Error::VerificationFailed))
+    );
 }
 
 fn custom(error: Error) -> TransactionError {

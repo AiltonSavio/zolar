@@ -73,7 +73,7 @@ pub fn verify_proof(proof: &[u8], public_values: &[u8], vkey_hash: &[u8; 32]) ->
     if verify_pairing(&a, &b, &c, &inputs, &vk).is_ok() {
         return Ok(());
     }
-    inputs[1] = mask(solana_blake3_hasher::hash(public_values).to_bytes());
+    inputs[1] = mask(*blake3::hash(public_values).as_bytes());
     verify_pairing(&a, &b, &c, &inputs, &vk)
 }
 
@@ -100,4 +100,19 @@ fn mask(mut hash: [u8; 32]) -> [u8; 32] {
     // SP1 uses a 253-bit digest, not reduction modulo the BN254 scalar field.
     hash[0] &= 0x1f;
     hash
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn portable_blake3_preserves_previous_digest_and_mask_at_boundaries() {
+        let data = [42; 1025];
+        for len in [0, 1, 63, 64, 65, 249, 1023, 1024, 1025] {
+            let previous = solana_blake3_hasher::hash(&data[..len]).to_bytes();
+            let portable = *blake3::hash(&data[..len]).as_bytes();
+            assert_eq!(portable, previous);
+            assert_eq!(super::mask(portable), super::mask(previous));
+            assert_eq!(super::mask(portable)[0] & 0xe0, 0);
+        }
+    }
 }
