@@ -1,21 +1,23 @@
 # Zolar
 
-Zolar lets a Solana program act on a shielded Zcash payment without a custodian, and without learning which payment it was.
+Zolar lets a Solana program act on a shielded Zcash payment without a custodian. Escrow Private Claims hide the payment transaction ID from Solana; vending checkout publishes the shop's incoming payment data through its dedicated Shop Viewing Key.
 
-It has two parts:
+The Header Relay supports two checkout flows:
 
 - **Header Relay**: a Zcash light client on Solana. Anyone can submit Zcash block headers; the program checks the Equihash proof of work, the difficulty adjustment and the median-time rule on-chain, follows the chain with the most work, and records every block that is final in a Poseidon Merkle tree.
 - **Escrow**: a trustless swap built on the relay. A Payee locks SPL tokens against a commitment to a Zcash transaction. The Payer pays shielded ZEC, waits until the block is final and claims the tokens. With a **Private Claim** the Payer proves on their own machine, with a Groth16 proof, that the payment is in a final block, and Solana never sees the Zcash transaction ID.
 
+- **Vending Machine**: a Payee configures stock once; a Payer reserves before paying, and a Payment Proof authorizes a ticket mint. Setup, a real payment and SP1 execution are verified on devnet; a vending Claim with a real Groth16 proof is still pending.
+
 Built for ZECATHON (Cross-Chain track). Vocabulary: [`GLOSSARY.md`](GLOSSARY.md). Design decisions: [`docs/adr/`](docs/adr).
 
-## Checkout demo and SDK
+## Escrow demo and SDK
 
 The demo shop exchanges shielded Zcash testnet ZEC for a ticket token on Solana devnet. A merchant service locks the ticket; the Payer's local wallet helper asks for approval, pays and makes a Private Claim. The helper stands in for wallet support. See [Build on Zolar](sdk/README.md) for the SDK and [the shop README](shop/README.md) to run the demo.
 
-### Vending checkout (in progress)
+### Vending checkout (devnet; Claim mint pending)
 
-The planned Vending Machine lets the Payee set up stock once. The Payer
+The deployed devnet Vending Machine lets the Payee set up stock once. The Payer
 reserves a ticket before paying from a Zcash wallet; an SP1 Payment Proof
 then authorizes minting without a per-sale Payee service. The machine stores
 the full 64-byte public Shop Viewing Key and its SHA-256 hash on chain.
@@ -25,9 +27,10 @@ canonical base58 encoding of 32 bytes. The proof's 249-byte public values
 include that payout, and Claim requires it to match the Reservation's
 payout, preventing payment redirection after release and nonce reuse.
 Ana can reserve the same nonce again to claim her payment if stock remains.
-The proof, Solana verifier, and checkout integration are not yet verified
-end to end; wallet support for NU7 and exact text-memo preservation still
-need validation. A stateless prover HTTP service holds no keys and provides
+Machine setup, Reserve, payment discovery and SP1 execution have been checked
+live. A full Groth16 Payment Proof and successful Claim mint remain unverified.
+External wallet support for NU7 and exact text-memo preservation still needs
+validation. A stateless prover HTTP service holds no keys and provides
 payment discovery, proof jobs, and job polling for the page.
 See [ADR 0005](docs/adr/0005-vending-machines-claim-with-sp1-payment-proofs.md).
 
@@ -268,14 +271,15 @@ pnpm --dir sdk build
 
 Licensed under either of MIT ([`LICENSE-MIT`](LICENSE-MIT)) or Apache-2.0 ([`LICENSE-APACHE`](LICENSE-APACHE)).
 
-## Vending program integration (testnet, not deployed)
+## Vending checkout on devnet
 
 `programs/vending` is a separate Pinocchio workspace. The Codama source is
 `clients/codama/vending.mjs`; generated clients are `clients/vending-rust` and
-`clients/vending-js/src/generated`. Local program ID:
-`8XqWKHQiesY5o2eDKyewb9ZHwAZ5gdDMtWGuJogvQ5X5`. This is a test ID, with no deployment
-keypair. Before a future devnet deployment, select the deployed program address in Codama
-and regenerate both clients.
+`clients/vending-js/src/generated`. Program address:
+`J9paKuXLpRr4rmWVp8vBZ6ZMwQhrTSk6w3Rmyv5JHFW5` (Solana devnet only).
+The setup below also lets a demo user deploy under their own program address.
+A vending Claim mint with a real Payment Proof has **not yet been verified**;
+SP1 execution and a successful generic verifier fixture do not establish that mint.
 
 Ana reserves one of Ben's tickets, paying the Reservation's Solana rent. The Reservation
 snapshots the price and expiry, and records Ana as payout. A verified Payment Proof
@@ -322,6 +326,188 @@ A running Relay stalled below the height threshold does not qualify for the Halt
 backstop and can leave stock reserved indefinitely. Releasing stock never refunds ZEC.
 Claims use `RelayView` for owner/address/Halt and recent-root checks. The program accepts
 only the testnet network and NU7 branch ID `0x77190ad9`.
+
+### Live demo evidence (2026-10-27)
+
+The deployed Machine is `GiF2qqYCRHL6L4DVVDMPfNDk9G5f4qzovMCM62UHFjkV`, with
+mint `DARKR7E6KGL8L6oWeNXwnbhdSBL8oyZku8PVkxejVFjg`, price 100,000 zat,
+stock 100 and a 20-block Reservation duration. It uses the running testnet Relay
+`C9eFRXy11aT8JqcyZPvEGqsor3pmrAyPDBmg6LCcGvWS` (demo Finality Depth 10).
+The public browser configuration is in [`.env.vending.example`](shop/.env.vending.example)
+and [`vending-abi.json`](shop/public/vending-abi.json).
+
+One 0.001 TAZ payment mined at height 4,546,839:
+`c9cea1a5a3da02bc89a6afc58e7132eb0ce0610938cb647a81b354c9c8ac575e`.
+Its Reservation expires at height 4,546,854. The actual HTTP service found the
+correct value and payout by reading the full Shop Viewing Key from the Machine.
+The live payment executed in SP1 at **24,103,795 cycles**, committing 249 bytes
+identical to native verification; witness preparation, execution and guest-key
+setup took **199.52 s** on the VPS. Independent account checks matched machine,
+nonce, payout, price, diversifier, key hash, NU7 branch, guest vkey and a root
+still known to the live Relay. This produced **no Groth16 proof and no ticket**.
+
+Live InitMachine used 13,075 CU (13,225 including ComputeBudget); Reserve used
+8,830 CU (8,980 including ComputeBudget). The deploy transaction is
+`2jNpaUbid2BDpFE4ydPpPtBq9ZJG8AZLe1KY9wgxR2kcrdWEUEheYdNtwv6RontgWMmBgCQnRnBwGNVeo4Ndv6bw`.
+The deployed 96,360-byte ELF matches SHA-256
+`2a7feca3504d3d0a05bab4c850b58ce2a58434c69ba0c99b2b002e4175eacf65`.
+Claim minting with a real vending Payment Proof remains unverified.
+
+### Make your own demo shop
+
+Ben creates a dedicated testnet account, publishes its incoming Shop Viewing Key
+in a Machine, and offers 100 tickets at 0.001 TAZ each. Ana reserves one ticket
+with her Solana devnet wallet, pays 100,000 zat plus her Zcash wallet fee, and
+waits for the Relay's Finality Depth. A rented prover must still produce the
+Payment Proof before Claim can mint her ticket. Execute mode produces no proof.
+
+Use Zcash testnet and Solana devnet only. Keep all seed, identity and keypair
+files outside git. The tools accept paths and never print their private contents.
+Shop metadata contains only the dedicated public incoming viewing key; never
+substitute a Payer key or a spending/full viewing key.
+
+From the repository root, prepare Node 22, pnpm 10, Solana CLI and Rust, then:
+
+```sh
+free -g
+cargo_capped() {
+  systemd-run --user --scope -q -p MemoryMax=3G -p MemorySwapMax=0 -- \
+    env CARGO_BUILD_JOBS=2 cargo "$@"
+}
+export VENDING_DATA="$HOME/zolar-vending"
+mkdir -p "$VENDING_DATA" "$HOME/.config/zolar"
+umask 077
+# Choose an unused path; solana-keygen refuses an existing file.
+export PROGRAM_KEY="$HOME/.config/zolar/vending-keypair.json"
+solana-keygen new --no-bip39-passphrase --silent --outfile "$PROGRAM_KEY"
+export PROGRAM_ID=$(solana-keygen pubkey "$PROGRAM_KEY")
+python3 scripts/set-vending-program-id.py "$PROGRAM_ID"
+pnpm --dir clients/codama install --frozen-lockfile
+pnpm --dir clients/codama generate
+cargo_capped fmt --all
+cargo_capped fmt --manifest-path programs/vending/Cargo.toml
+cargo_capped build-sbf --manifest-path programs/vending/Cargo.toml
+python3 scripts/check-vending-sbf.py
+cargo_capped test -p vending-tests -- --test-threads=2
+# Your funded devnet deployer, supplied as a path only.
+export DEPLOYER="$HOME/.config/solana/devnet.json"
+solana-keygen new --no-bip39-passphrase --silent --outfile "$VENDING_DATA/deploy-buffer.json"
+solana program deploy programs/vending/target/deploy/vending.so --url devnet \
+  --keypair "$DEPLOYER" --upgrade-authority "$DEPLOYER" \
+  --program-id "$PROGRAM_KEY" --buffer "$VENDING_DATA/deploy-buffer.json" --use-rpc
+pnpm --dir clients/vending-js install --frozen-lockfile
+pnpm --dir clients/vending-js build
+pnpm --dir sdk install --frozen-lockfile
+# When changing program IDs in an existing checkout, refresh its local client copy:
+# pnpm --dir sdk install --frozen-lockfile --force
+pnpm --dir sdk build
+pnpm --dir shop install --frozen-lockfile
+cargo_capped build --manifest-path crates/vending-prover/Cargo.toml --bin zolar-vend-shop
+crates/vending-prover/target/debug/zolar-vend-shop \
+  --create --seed "$VENDING_DATA/shop.seed" --out "$VENDING_DATA/shop-public.json"
+```
+
+The seed is raw 32-byte ZIP-32 material written with mode 600. The helper derives
+`m/32'/1'/0'`, external address index 0, validates the receiving address against
+the 64-byte key, and writes an Ironwood-only testnet Unified Address. Running
+again without `--create` and with a new `--out` reproduces the public metadata.
+The seed stays local; neither the prover nor the browser needs it.
+
+The immutable Machine must pin the SP1 vkey from the exact ELF you will use.
+The integration artifact is documented in the [guest README](crates/vending-guest/README.md).
+Build/execution instructions are in the [prover README](crates/vending-prover/README.md).
+On a VPS, use SP1 v6.10.0 and a 5 GiB/no-swap scope to execute the recorded witness;
+check both the ELF SHA-256 and the emitted `vkey_hash` before initializing:
+
+```sh
+sha256sum crates/vending-guest/elf/vending-guest
+systemd-run --user --scope -q -p MemoryMax=5G -p MemorySwapMax=0 -- \
+  crates/vending-prover/target/debug/zolar-vend-prove \
+  --witness crates/vending-guest/fixtures/testnet/witness.json --execute --out vkey-check
+# For the pinned integration ELF only; recompute if rebuilding the guest.
+export GUEST_VKEY=000eeda101ba026e2f37c86e96abc5372ddc0330ea99d56e7ddfbef8aae711e7
+export RELAY=C9eFRXy11aT8JqcyZPvEGqsor3pmrAyPDBmg6LCcGvWS
+solana-keygen new --no-bip39-passphrase --silent --outfile "$VENDING_DATA/mint.json"
+scripts/vending-admin.sh init-machine --keypair "$DEPLOYER" \
+  --mint-keypair "$VENDING_DATA/mint.json" --shop "$VENDING_DATA/shop-public.json" \
+  --relay "$RELAY" --vkey-hash "$GUEST_VKEY" --price-zat 100000 --stock 100 \
+  --reservation-blocks 20 --out "$VENDING_DATA/machine.json"
+```
+
+`init-machine` checks devnet genesis, the running testnet Relay and the public
+shop metadata, simulates, submits, and waits for finalization. It writes the
+Machine, mint, signature and CU, plus `machine.binding.json` for the browser.
+The 20-block duration is this demo tool's default, not a protocol default.
+Configuration is immutable; changing the guest or shop account requires a new
+Machine. The CLI records the signed transaction identity before submission;
+a timeout requires checking that signature and account before retrying.
+
+Inspect the resulting Machine and mint before paying. On the Payer's machine,
+with their own devnet keypair and devnet SOL:
+
+```sh
+scripts/vending-admin.sh inspect --machine MACHINE_ADDRESS
+scripts/vending-admin.sh reserve --machine MACHINE_ADDRESS \
+  --keypair /path/to/payer-devnet.json --shop "$VENDING_DATA/shop-public.json" \
+  --out "$VENDING_DATA/reservation.json"
+```
+
+The Reservation output includes the exact ZIP-321 payment URI with amount,
+shop address and payout-bound text memo. Pay it once from a Zcash-testnet wallet
+supporting Ironwood. Wallet fees are additional. Check the saved Reservation
+and signature before retrying an interrupted command; never blindly repeat a
+payment. Faucets are not part of this workflow.
+
+Run the keyless prover on a host with SP1 installed. Compile with `--features sp1`
+for execute mode, following the capped build command in its README:
+
+```sh
+systemd-run --user --scope -q -p MemoryMax=5G -p MemorySwapMax=0 -- \
+  crates/vending-prover/target/debug/zolar-vend-prove serve \
+  --rpc https://api.devnet.solana.com --bind 127.0.0.1:8088 --execute
+curl 'http://127.0.0.1:8088/find-payment?machine=MACHINE_ADDRESS&nonce=BASE58_NONCE'
+```
+
+Omit `--shops`: the prover reads the full Shop Viewing Key from the deployed
+Machine. `--execute` deliberately fails proof jobs with a no-proof error; it
+cannot return a claimable Payment Proof. On a rented 32 GB+ machine with at
+least 28 GB available, compile with `--features native-prove`, then use `--prove`
+instead. Complete Groth16 proving and a real vending Claim remain unverified.
+
+Copy the public `machine.binding.json` to `shop/public/vending-abi.json`, and
+set the public browser configuration (the dedicated incoming key is read from
+chain, not placed in an environment variable):
+
+```sh
+export VITE_CHECKOUT_MODE=vending VITE_CLUSTER=devnet
+export VITE_VENDING_PROGRAM="$PROGRAM_ID" VITE_VENDING_MACHINE=MACHINE_ADDRESS
+export VITE_VENDING_ADDRESS=IRONWOOD_TESTNET_SHOP_ADDRESS
+export VITE_VENDING_RPC=https://api.devnet.solana.com
+export VITE_PROVER_URL=http://127.0.0.1:8088
+export VITE_VENDING_ABI_URL=/vending-abi.json
+devserve --port 5175 -- pnpm --dir shop dev --host 0.0.0.0 --port 5175 --strictPort
+```
+
+Open `http://localhost:5175` and connect a Solana Wallet Standard wallet on
+devnet. The live page reads the Machine and Relay, reserves before displaying
+the payment link, finds the payment and waits for finality. It can mint only
+when the prover returns a real proof accepted by Claim. Stop the named preview
+with `devservers stop NAME` afterwards. Public RPCs may throttle large program
+uploads; use a devnet RPC with sufficient capacity and reconcile the existing
+upload buffer before resuming. If the CLI's parallel writes keep hitting the
+public RPC limit, stop that uploader, then resume the existing authorized buffer
+sequentially (the helper checks devnet, authority, size and complete ELF readback):
+
+```sh
+node sdk/scripts/resume-vending-upload.mjs --rpc https://api.devnet.solana.com \
+  --keypair "$DEPLOYER" --buffer BUFFER_ADDRESS \
+  --elf programs/vending/target/deploy/vending.so --ledger "$VENDING_DATA/upload.jsonl"
+solana program deploy --url devnet --keypair "$DEPLOYER" \
+  --upgrade-authority "$DEPLOYER" --program-id "$PROGRAM_KEY" --buffer BUFFER_ADDRESS
+```
+
+The portable BLAKE3 fallback avoids the
+`sol_blake3` import rejected by devnet during this deployment.
 
 ### Vending wire interface
 

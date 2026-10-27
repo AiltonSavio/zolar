@@ -104,3 +104,14 @@ Initialize a Machine with this vkey hash for this exact guest. Rebuilding after
 any source, dependency, toolchain or feature change requires checking the hash
 again. The ELF stays outside git; raw transaction and witness fixtures are
 committed under `fixtures/testnet/`.
+
+## Live payment execution after deployment (October 27)
+
+The exact ELF and vkey above are pinned by devnet Machine
+`GiF2qqYCRHL6L4DVVDMPfNDk9G5f4qzovMCM62UHFjkV`. Its real testnet payment
+`c9cea1a5a3da02bc89a6afc58e7132eb0ce0610938cb647a81b354c9c8ac575e`
+executed at 24,103,795 cycles with 249 bytes equal to native verification.
+The account comparison also checked its actual Reservation payout/nonce, shop
+configuration, NU7 branch, expiry and live Relay root membership.
+This is execution evidence only: no Groth16 vending proof or Claim mint exists
+from this run. The root README records the deployed addresses and setup steps.

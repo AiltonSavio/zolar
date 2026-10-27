@@ -33,7 +33,7 @@ coordinated update.
 This fallback validates the key/hash but does not authenticate on-chain Machine
 configuration. It reads public metadata only. It still fetches chain data.
 
-The on-chain source scans the latest 1000 Relay-tip blocks. An offline
+The on-chain source scans the latest 1000 Relay-tip blocks, newest first. An offline
 `scan_start` must keep its range below 1000 blocks; `0` selects the automatic
 window. Payments ahead of the Relay tip appear once the Relay catches up.
 The scanner is stateless and scans on each request. Supplying an older txid
@@ -212,3 +212,25 @@ The matching ELF is on the VPS at
 and is copied locally to `crates/vending-guest/elf/vending-guest` (ignored).
 No Groth16 vending proof, successful on-chain vending Claim, devnet deployment,
 or live deployed-Machine read is established by these checks.
+
+## Live deployed Machine (October 27, after integration)
+
+Machine `GiF2qqYCRHL6L4DVVDMPfNDk9G5f4qzovMCM62UHFjkV` is now deployed on
+Solana devnet under the program ID above. Its dedicated incoming key is read
+from the 291-byte account; the live check used no offline metadata fallback.
+`GET /find-payment` found txid
+`c9cea1a5a3da02bc89a6afc58e7132eb0ce0610938cb647a81b354c9c8ac575e`,
+height 4,546,839, value 100,000 zat and payout
+`DdxCRHxJATpLkwVMeQZakCUX6WxHdP44tDcCVXRgsmgE`. Newest-first discovery took
+5.1 seconds; the preceding oldest-first scan took 144.44 seconds.
+
+The same integration ELF executed this payment in SP1: 24,103,795 cycles,
+249 bytes equal to native verification, and the pinned integration vkey.
+The complete CLI run took 199.52 seconds under a VPS 5 GiB/no-swap cap.
+`scripts/check-vending-execution.py` independently matched the public values to
+finalized Machine/Reservation accounts and a root still in the live Relay ring.
+Use that script's `--help` for snapshot-producing checks after future runs.
+
+No vending Groth16 proof or successful Claim was produced. The earlier sections
+record bounded integration checks before this deployment; they do not establish
+a live Claim. See the root README for setup and current public configuration.
