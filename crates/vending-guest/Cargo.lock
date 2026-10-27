@@ -337,6 +337,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytemuck"
+version = "1.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
+dependencies = [
+ "bytemuck_derive",
+]
+
+[[package]]
+name = "bytemuck_derive"
+version = "1.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a1f896587b6f2c069c73d2f0913e2d590c3990285cd2f0b6aa02b786b4c679c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -640,6 +660,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
+name = "five8"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23f76610e969fa1784327ded240f1e28a3fd9520c9cec93b636fcf62dd37f772"
+dependencies = [
+ "five8_core",
+]
+
+[[package]]
+name = "five8_core"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "059c31d7d36c43fe39d89e55711858b4da8be7eb6dabac23c7289b1a19489406"
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -713,6 +748,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "groth16-solana"
+version = "0.2.0"
+source = "git+https://github.com/Lightprotocol/groth16-solana?rev=ac9d959f9b14479c20c9d4f8168fa4cc47c13071#ac9d959f9b14479c20c9d4f8168fa4cc47c13071"
+dependencies = [
+ "ark-serialize",
+ "pinocchio",
+ "solana-bn254",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1165,6 +1211,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "pinocchio"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c06810dac15a4ef83d3dabdb4f2f22fb39c9adff669cd2781da4f716510a647c"
+dependencies = [
+ "solana-account-view",
+ "solana-address",
+ "solana-define-syscall 4.0.1",
+ "solana-instruction-view",
+ "solana-program-error",
+]
+
+[[package]]
 name = "poly1305"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1589,6 +1648,102 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-account-view"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f37ca34c37f92ee341b73d5ce7c8ef5bb38e9a87955b4bd343c63fa18b149215"
+dependencies = [
+ "solana-address",
+ "solana-program-error",
+]
+
+[[package]]
+name = "solana-address"
+version = "2.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "451294fdd4dde59ae27213695e2333eaaa39035e1f099f68644d2aa3ca0e2edd"
+dependencies = [
+ "solana-define-syscall 5.3.0",
+ "solana-program-error",
+]
+
+[[package]]
+name = "solana-blake3-hasher"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7116e1d942a2432ca3f514625104757ab8a56233787e95144c93950029e31176"
+dependencies = [
+ "blake3",
+ "solana-define-syscall 4.0.1",
+ "solana-hash",
+]
+
+[[package]]
+name = "solana-bn254"
+version = "3.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62ff13a8867fcc7b0f1114764e1bf6191b4551dcaf93729ddc676cd4ec6abc9f"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "ark-serialize",
+ "bytemuck",
+ "solana-define-syscall 5.3.0",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "solana-define-syscall"
+version = "4.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57e5b1c0bc1d4a4d10c88a4100499d954c09d3fecfae4912c1a074dff68b1738"
+
+[[package]]
+name = "solana-define-syscall"
+version = "5.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4d02bb1453b6f9e1e705383a44b98a8722669b44adcdfe3643183987fdad72e"
+
+[[package]]
+name = "solana-hash"
+version = "4.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7507df0d2c6350053d125e3df200976fdc68d2a942637d11ac657fe7220949a"
+dependencies = [
+ "five8",
+]
+
+[[package]]
+name = "solana-instruction-view"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60147e4d0a4620013df40bf30a86dd299203ff12fcb8b593cd51014fce0875d8"
+dependencies = [
+ "solana-account-view",
+ "solana-address",
+ "solana-define-syscall 4.0.1",
+ "solana-program-error",
+]
+
+[[package]]
+name = "solana-program-error"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f04fa578707b3612b095f0c8e19b66a1233f7c42ca8082fcb3b745afcc0add6"
+
+[[package]]
+name = "solana-sha256-hasher"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db7dc3011ea4c0334aaaa7e7128cb390ecf546b28d412e9bf2064680f57f588f"
+dependencies = [
+ "sha2 0.10.9",
+ "solana-define-syscall 4.0.1",
+ "solana-hash",
+]
+
+[[package]]
 name = "sp1-lib"
 version = "6.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1621,6 +1776,15 @@ dependencies = [
  "slop-poseidon2",
  "slop-primitives",
  "slop-symmetric",
+]
+
+[[package]]
+name = "sp1-solana-v6"
+version = "0.1.0"
+dependencies = [
+ "groth16-solana",
+ "solana-blake3-hasher",
+ "solana-sha256-hasher",
 ]
 
 [[package]]
@@ -1798,6 +1962,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "vending"
+version = "0.1.0"
+dependencies = [
+ "header-relay-interface",
+ "pinocchio",
+ "sp1-solana-v6",
+ "vending-types",
+]
+
+[[package]]
 name = "vending-guest"
 version = "0.1.0"
 dependencies = [
@@ -1811,6 +1985,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sp1-zkvm",
+ "vending",
  "vending-types",
  "zcash_note_encryption",
  "zcash_primitives",
