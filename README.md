@@ -13,6 +13,46 @@ Built for ZECATHON (Cross-Chain track). Vocabulary: [`GLOSSARY.md`](GLOSSARY.md)
 
 The demo shop exchanges shielded Zcash testnet ZEC for a ticket token on Solana devnet. A merchant service locks the ticket; the Payer's local wallet helper asks for approval, pays and makes a Private Claim. The helper stands in for wallet support. See [Build on Zolar](sdk/README.md) for the SDK and [the shop README](shop/README.md) to run the demo.
 
+### Vending checkout (in progress)
+
+The planned Vending Machine lets the Payee set up stock once. The Payer
+reserves a ticket before paying from a Zcash wallet; an SP1 Payment Proof
+then authorizes minting without a per-sale Payee service. The machine stores
+the full 64-byte public Shop Viewing Key and its SHA-256 hash on chain.
+The ZIP-321 link requests the exact price and the ZIP-302 text memo
+`zv1:<machine>:<nonce>:<payout>`, zero-padded to 512 bytes. Each field is a
+canonical base58 encoding of 32 bytes. The proof's 249-byte public values
+include that payout, and Claim requires it to match the Reservation's
+payout, preventing payment redirection after release and nonce reuse.
+Ana can reserve the same nonce again to claim her payment if stock remains.
+The proof, Solana verifier, and checkout integration are not yet verified
+end to end; wallet support for NU7 and exact text-memo preservation still
+need validation. A stateless prover HTTP service holds no keys and provides
+payment discovery, proof jobs, and job polling for the page.
+See [ADR 0005](docs/adr/0005-vending-machines-claim-with-sp1-payment-proofs.md).
+
+This mode makes shop sales public through a dedicated Shop Viewing Key.
+Wallet misuse or a relay failure can strand the Payer's ZEC: releasing a
+Reservation returns stock and rent, not ZEC. The guest does not check the
+Halo2 transaction proof and relies on proof of work over the relay's
+Finality Depth. Testnet tickets would mint without an extra settlement
+delay; this design is for Zcash testnet and Solana devnet only.
+
+Release takes two steps. Any signer can call RequestRelease after the relay
+tip exceeds expiry plus Finality Depth, or when the relay is Halted and
+24 hours of Solana time have passed since Reservation creation. It records
+the Solana time and rejects a second request. A valid Claim still succeeds
+during the next 15 minutes, giving Ana time to finish her Payment Proof;
+a Halt still blocks Claims. Any signer can then call ReleaseReservation
+to return stock and refund Reservation rent to the payout wallet, once
+`release_requested_at + 900 <= now` in Solana seconds. A proof delayed past
+this Claim window can still lose to release.
+A running but stalled relay can block release. Unpaid Reservations can tie
+up all stock and repeat after release. Payers need devnet SOL for Reserve's
+fee and refundable rent; v1 has no fee pool. The Claim submitter (Payer or
+prover service) pays the Claim fee, permanent Payment Tag rent, and any
+missing associated token account's rent.
+
 ## Live on Solana devnet
 
 | What | Address |
