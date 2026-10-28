@@ -42,7 +42,10 @@ export function App({ config }: { config: Config }) {
       <main>
         <header className="top">
           <div>
-            <h1>Zolar</h1>
+            <h1 className="brand">
+              <img className="brand-word" src="/zolar-wordmark.png" alt="Zolar" />
+              <img className="brand-mark" src="/zolar-mark.png" alt="" aria-hidden="true" />
+            </h1>
             <p className="tagline">Zcash light client on Solana. Escrows that pay out when a shielded payment is final.</p>
           </div>
           <div className="live" title={new URL(config.rpcUrl).origin}>
