@@ -60,7 +60,7 @@ sequenceDiagram
     Ben-->>Ana: salt (privately)
     Ana->>Sol: Check Escrow terms and relay
     Ana->>Zec: Sign and broadcast 0.001 TAZ, shielded
-    Zec-->>Sol: Relayers submit headers; block becomes final
+    Zec-->>Sol: Relayers submit headers, block becomes final
     Ana->>Sol: PrivateClaim (Groth16 proof + tree root)
     Sol-->>Ana: 5 tokens released to Ana's payout wallet
 ```
