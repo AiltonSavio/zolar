@@ -1,119 +1,95 @@
+<div align="center">
+
+<img src="shop/public/zolar-mark.png" alt="Zolar" width="96">
+
 # Zolar
 
-Zolar lets a Solana program act on a shielded Zcash payment without a custodian. Escrow Private Claims hide the payment transaction ID from Solana; vending checkout publishes the shop's incoming payment data through its dedicated Shop Viewing Key.
+**Act on shielded Zcash payments from Solana, without a custodian.**
 
-The Header Relay supports two checkout flows:
+[![CI](https://github.com/AiltonSavio/zolar/actions/workflows/ci.yml/badge.svg)](https://github.com/AiltonSavio/zolar/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE-MIT)
+![Solana devnet](https://img.shields.io/badge/Solana-devnet-9945FF)
+![Zcash testnet](https://img.shields.io/badge/Zcash-testnet-F3B724)
 
-- **Header Relay**: a Zcash light client on Solana. Anyone can submit Zcash block headers; the program checks the Equihash proof of work, the difficulty adjustment and the median-time rule on-chain, follows the chain with the most work, and records every block that is final in a Poseidon Merkle tree.
-- **Escrow**: a trustless swap built on the relay. A Payee locks SPL tokens against a commitment to a Zcash transaction. The Payer pays shielded ZEC, waits until the block is final and claims the tokens. With a **Private Claim** the Payer proves on their own machine, with a Groth16 proof, that the payment is in a final block, and Solana never sees the Zcash transaction ID.
+[Live dashboard](https://zolar-devnet.vercel.app) · [How a swap works](#how-a-swap-works) · [Run a testnet swap](#run-a-testnet-swap) · [Glossary](GLOSSARY.md) · [Design decisions](docs/adr)
 
-- **Vending Machine**: a Payee configures stock once; a Payer reserves before paying, and a Payment Proof authorizes a ticket mint. Setup, a real payment and SP1 execution are verified on devnet; a vending Claim with a real Groth16 proof is still pending.
+</div>
 
-Built for ZECATHON (Cross-Chain track). Vocabulary: [`GLOSSARY.md`](GLOSSARY.md). Design decisions: [`docs/adr/`](docs/adr).
+Zolar is a Zcash light client that runs on Solana, plus a trustless swap built on top of it. A Payer sends shielded ZEC; once the payment is final on Zcash, a Solana program releases the Payee's SPL tokens to the Payer. With a **Private Claim**, the Payer proves the payment on their own machine and Solana never learns which Zcash transaction paid.
 
-## Checkout demo
+Built for ZECATHON (Cross-Chain track).
 
-Ben configures 100 tickets at **0.001 TAZ** each once. Ana connects a Solana
-devnet wallet, reserves one ticket, and opens the payment request in her
-Zcash-testnet wallet. She pays 100,000 zat plus her wallet fee from shielded
-funds, keeping the requested memo. After Finality Depth, a keyless prover
-makes the Payment Proof and Ana signs Claim to receive one SPL ticket.
-Ben performs no per-sale action. The Header Relay and prover still need to run.
+| Part | What it does |
+|---|---|
+| **Header Relay** | Zcash block headers verified on Solana. Anyone can submit headers; the program checks Equihash proof of work, the difficulty adjustment and the median-time rule on-chain, follows the chain with the most work, and records every final block in a Poseidon Merkle tree (the Final Block Tree). |
+| **Escrow** | A Payee locks SPL tokens against a commitment to a Zcash transaction. The Payer pays shielded ZEC, waits for finality and claims. Unclaimed Escrows are refunded. |
+| **Private Claim** | A Groth16 proof, made locally, that the committed payment is in a final block. Solana receives 256 bytes of proof and a tree root, never the transaction ID. |
+| **Vending Machine** *(experimental)* | A Payee sets up ticket stock once; Payers reserve, pay and claim with an SP1 Payment Proof. See [`programs/vending`](programs/vending/README.md). |
 
-The Solana wallet receives the ticket and signs Reserve and Claim; it does
-not send ZEC. Ana's Zcash wallet sends the payment. Ben's dedicated shop
-address receives it. Ana pays Reserve's Solana fee and refundable rent;
-the Claim submitter pays its fee, permanent Payment Tag rent, and any new
-token-account rent. V1 has no fee sponsorship.
+> [!IMPORTANT]
+> Zolar runs on **Zcash testnet and Solana devnet only**. The programs are not audited, and Private Claims use a **single-party development key**: whoever generated it could forge a Private Claim. See [Limitations](#limitations).
 
-Start with [the vending shop setup](shop/README.md#vending-checkout) and
-[prover preparation](#prepare-a-proving-host). The legacy Escrow checkout
-also remains available through the [SDK service setup](sdk/README.md#run-the-services);
-it uses a per-sale Payee service and a local wallet helper.
+## Live on devnet
 
-### Vending checkout (devnet; Claim mint pending)
+The [dashboard](https://zolar-devnet.vercel.app) shows both relays, open Escrows and Claims as they land. It is read-only and holds no keys.
 
-The deployed devnet Vending Machine lets the Payee set up stock once. The Payer
-reserves a ticket before paying from a Zcash wallet; an SP1 Payment Proof
-then authorizes minting without a per-sale Payee service. The machine stores
-the full 64-byte public Shop Viewing Key and its SHA-256 hash on chain.
-The ZIP-321 link requests the exact price and the ZIP-302 text memo
-`zv1:<machine>:<nonce>:<payout>`, zero-padded to 512 bytes. Each field is a
-canonical base58 encoding of 32 bytes. The proof's 249-byte public values
-include that payout, and Claim requires it to match the Reservation's
-payout, preventing payment redirection after release and nonce reuse.
-Ana can reserve the same nonce again to claim her payment if stock remains.
-Machine setup, Reserve, payment discovery and SP1 execution have been checked
-live. A full Groth16 Payment Proof and successful Claim mint remain unverified.
-The recorded payment validates the payment statement. The browser-to-Zkool
-handoff, exact memo preservation through that handoff, and a full browser
-purchase still need a fresh end-to-end check. A stateless prover HTTP service
-holds no keys and provides payment discovery, proof jobs, and job polling
-for the page.
-See [ADR 0005](docs/adr/0005-vending-machines-claim-with-sp1-payment-proofs.md).
-
-This mode makes shop sales public through a dedicated Shop Viewing Key.
-Wallet misuse or a relay failure can strand the Payer's ZEC: releasing a
-Reservation returns stock and rent, not ZEC. The guest does not check the
-Halo2 transaction proof and relies on proof of work over the relay's
-Finality Depth. Testnet tickets would mint without an extra settlement
-delay; this design is for Zcash testnet and Solana devnet only.
-
-Release takes two steps. Any signer can call RequestRelease after the relay
-tip exceeds expiry plus Finality Depth, or when the relay is Halted and
-24 hours of Solana time have passed since Reservation creation. It records
-the Solana time and rejects a second request. A valid Claim still succeeds
-during the next 15 minutes, giving Ana time to finish her Payment Proof;
-a Halt still blocks Claims. Any signer can then call ReleaseReservation
-to return stock and refund Reservation rent to the payout wallet, once
-`release_requested_at + 900 <= now` in Solana seconds. A proof delayed past
-this Claim window can still lose to release.
-A running but stalled relay can block release. Unpaid Reservations can tie
-up all stock and repeat after release. Payers need devnet SOL for Reserve's
-fee and refundable rent; v1 has no fee pool. The Claim submitter (Payer or
-prover service) pays the Claim fee, permanent Payment Tag rent, and any
-missing associated token account's rent.
-
-## Live on Solana devnet
-
-| What | Address |
+| What | Solana devnet address |
 |---|---|
 | Header Relay program | `6F4o7Fphgz5MS4BZrqbE4NyaLUKiAprDNdYTxif4sg9D` |
 | Escrow program | `HMew6N4iWjmWMbJBoK6WfQRucBt8ZfWpMadd9mpMtbML` |
-| Relay following the Zcash testnet (NU7), Finality Depth 10 (demo only) | `C9eFRXy11aT8JqcyZPvEGqsor3pmrAyPDBmg6LCcGvWS` |
-| Relay following the Zcash mainnet, Finality Depth 20 | `2m1YC6pGTBpoKDHL5NQgDQDTewE7bYs4m6TdxkMG4Yhs` |
+| Vending program | `J9paKuXLpRr4rmWVp8vBZ6ZMwQhrTSk6w3Rmyv5JHFW5` |
+| Relay following Zcash testnet (NU7), Finality Depth 10, demo only | `C9eFRXy11aT8JqcyZPvEGqsor3pmrAyPDBmg6LCcGvWS` |
+| Relay following Zcash mainnet, Finality Depth 20 | `2m1YC6pGTBpoKDHL5NQgDQDTewE7bYs4m6TdxkMG4Yhs` |
 
-Both relays are kept at the tip by `zolar-relayer`. The mainnet relay runs on Solana devnet: it shows real mainnet headers verified at full mainnet difficulty, it is not a Solana mainnet deployment.
+`zolar-relayer` keeps both relays at the tip. The mainnet relay lives on Solana devnet: it verifies real mainnet headers at full mainnet difficulty, but it is not a Solana mainnet deployment.
 
-A settled Private Claim swap: Zcash testnet payment `3dbb300e...2e814`, Escrow `AKbiHejAGJ51KqvkBQxvhhKKaAEdudhznrnWxeFJAhUB`, CreateEscrow `4ufFWSDM...UdRdya`, PrivateClaim `SDGSDwPt...NZYZRi`. `scripts/check-txid-absent.sh` finds no form of the Zcash transaction ID in either Solana transaction; the same script finds it in a Reveal Claim swap, so the check is not vacuous.
+**A settled Private Claim swap.** Zcash testnet payment `3dbb300e…2e814` was claimed from Escrow [`AKbiHejA…AhUB`](https://explorer.solana.com/address/AKbiHejAGJ51KqvkBQxvhhKKaAEdudhznrnWxeFJAhUB?cluster=devnet) ([CreateEscrow](https://explorer.solana.com/tx/4ufFWSDMb3oTDbs3Wp4DX93Y7Gb8qjhqYgZKYyHExnqqwfwBaqzSKEPvdvZAYZezMcrcfh2hNuoRaoREkUUdRdya?cluster=devnet), [PrivateClaim](https://explorer.solana.com/tx/SDGSDwPtmWYDcz7VbVtP6edEdj28AWFgE5q942mxygyR1pCNZw1k6dxVyuCQjqtpBYk2uSQnf3ZMcVuUoNpYZRi?cluster=devnet)). `scripts/check-txid-absent.sh` finds no form of the Zcash transaction ID in either Solana transaction. The same script does find it in a Reveal Claim swap, so the check is not vacuous.
 
 ## How a swap works
 
-1. **Payer** builds an unsigned Zcash transaction (a PCZT) paying the Payee, with the Payee's challenge text in the memo. Its transaction ID is known before signing.
-2. **Payee** receives a redacted copy of the PCZT (`created.payee.pczt`), decrypts their output with their viewing key, checks amount and memo, and creates the Escrow: tokens in a vault, the Payer's payout address, an expiry height and the Payment Commitment `Poseidon(txid, salt)`. The salt goes to the Payer privately. The unredacted PCZT stays with the Payer.
-3. **Payer** checks the Escrow against the agreed terms and the relay against the Zcash chain, then signs and broadcasts the payment.
-4. Once Finality Depth blocks follow the payment's block, the relay appends it to the Final Block Tree.
-5. **Payer** claims:
-   - **Private Claim**: proves locally that some transaction in a final block of the Escrow's height window hashes with the salt to the commitment. Solana receives 256 bytes of proof and a 32-byte tree root.
-   - **Reveal Claim**: sends the transaction ID, salt and Merkle paths. Cheaper, but it publishes the transaction ID. `zolar-payee create-escrow --private-only` makes an Escrow that refuses it.
-6. If no valid Claim arrives, the Payee asks for a refund once the tip passes expiry plus Finality Depth (or 24 hours after creation), then takes the tokens back after a 15-minute window in which a late Claim still wins.
+Ana (the Payer) buys 5 of Ben's (the Payee's) test tokens for 0.001 TAZ (100,000 zatoshi), the defaults of the swap script below.
 
-An optional **Bond** makes the Payer lock tokens before a Claim can settle. It returns with the Claim and goes to the Payee on a refund, so a Payer cannot hold the Payee's tokens hostage for free.
+```mermaid
+sequenceDiagram
+    participant Ana as Ana (Payer)
+    participant Ben as Ben (Payee)
+    participant Sol as Solana (Escrow + Header Relay)
+    participant Zec as Zcash testnet
+    Ana->>Ben: Redacted unsigned payment (PCZT)
+    Ben->>Sol: CreateEscrow: lock 5 tokens, commitment = Poseidon(txid, salt)
+    Ben-->>Ana: salt (privately)
+    Ana->>Sol: Check Escrow terms and relay
+    Ana->>Zec: Sign and broadcast 0.001 TAZ, shielded
+    Zec-->>Sol: Relayers submit headers; block becomes final
+    Ana->>Sol: PrivateClaim (Groth16 proof + tree root)
+    Sol-->>Ana: 5 tokens released to Ana's payout wallet
+```
+
+1. **Ana** builds an unsigned Zcash transaction (a PCZT) paying Ben, with Ben's challenge text in the memo. Its transaction ID is known before signing.
+2. **Ben** receives a redacted copy (`created.payee.pczt`), decrypts his output with his viewing key, checks amount and memo, and creates the Escrow: the 5 tokens in a vault, Ana's payout address, an expiry height and the Payment Commitment `Poseidon(txid, salt)`. The salt goes to Ana privately.
+3. **Ana** checks the Escrow against the agreed terms and the relay against the Zcash chain, then signs and broadcasts the payment.
+4. Once Finality Depth blocks follow the payment's block, the relay appends that block to the Final Block Tree.
+5. **Ana** claims, in one of two ways:
+   - **Private Claim**: proves locally that some transaction in a final block of the Escrow's height window hashes with the salt to the commitment.
+   - **Reveal Claim**: sends the transaction ID, salt and Merkle paths. Cheaper, but it publishes the transaction ID. `zolar-payee create-escrow --private-only` makes an Escrow that refuses it.
+6. If no valid Claim arrives, Ben requests a refund once the tip passes expiry plus Finality Depth (or 24 hours after creation), then takes the tokens back after a 15-minute window in which a late Claim still wins.
+
+An optional **Bond** makes Ana lock tokens before a Claim can settle. It returns with the Claim and goes to Ben on a refund, so Ana cannot hold Ben's tokens hostage for free.
 
 ## Run a testnet swap
 
-This runs one swap of testnet ZEC (TAZ) for a devnet token on your machine. You play both Payer and Payee. It costs nothing but faucet funds.
+This runs one swap of testnet ZEC (TAZ) for a devnet token on your machine, with you playing both Payer and Payee. It costs only faucet funds.
 
-### Tools
+### Prerequisites
 
-- Rust 1.91.1 (the repository's `rust-toolchain.toml` selects it), Solana CLI 2.3.11 (includes `spl-token`), Node 22 and pnpm 10.
-- About 3 GB of free memory for the builds and 2 GiB for a Private Claim proof.
+- Rust 1.91.1 (selected by `rust-toolchain.toml`), Solana CLI 2.3.11 (includes `spl-token`), Node 22 and pnpm 10
+- About 3 GB of free memory for the builds and 2 GiB for a Private Claim proof
 
 ```sh
 git clone https://github.com/AiltonSavio/zolar && cd zolar
 cargo build --release --manifest-path cli/Cargo.toml    # zolar-payer and zolar-payee; about 10 minutes the first time
 
-# zcash-devtool, with the patch that sets a PCZT's expiry height (the Escrow refuses expiries over 20 blocks ahead)
+# zcash-devtool, patched to set a PCZT's expiry height (the Escrow refuses expiries over 20 blocks ahead)
 git clone https://github.com/zcash/zcash-devtool ../zcash-devtool
 git -C ../zcash-devtool checkout 0b3436b
 git -C ../zcash-devtool apply "$PWD/tools/zcash-devtool-0b3436b.patch"
@@ -123,10 +99,10 @@ export ZOLAR_DEVTOOL="$PWD/../zcash-devtool/target/release/zcash-devtool"
 
 ### Wallets and funds (once)
 
+Create a Zcash testnet wallet for each side. The Payer's wallet spends; the Payee's viewing key checks the payment.
+
 ```sh
 W=$HOME/zolar-wallets; mkdir -p "$W"
-
-# Zcash testnet: a Payer wallet that spends, a Payee wallet whose viewing key checks the payment
 $ZOLAR_DEVTOOL wallet -w "$W/payer" init --name payer -i "$W/payer-key.txt" --network test
 $ZOLAR_DEVTOOL wallet -w "$W/payee" init --name payee -i "$W/payee-key.txt" --network test
 $ZOLAR_DEVTOOL wallet -w "$W/payee" list-addresses | awk '/Default Address:/ {print $3}' > "$W/payee.address"
@@ -134,10 +110,11 @@ $ZOLAR_DEVTOOL wallet -w "$W/payee" list-accounts | awk '/UFVK:/ {print $2}' > "
 $ZOLAR_DEVTOOL wallet -w "$W/payer" list-addresses | awk '/Default Address:/ {print $3}'   # fund this address
 ```
 
-Ask the [jinolabs testnet faucet](https://zcashfaucet.jinolabs.xyz) for TAZ at the Payer address (0.1 TAZ per address per day; a swap uses 0.001 TAZ plus fees), then wait for about 10 confirmations (a few minutes).
+Request TAZ for the Payer address from the [jinolabs testnet faucet](https://zcashfaucet.jinolabs.xyz) (0.1 TAZ per address per day; a swap uses 0.001 TAZ plus fees), then wait about 10 confirmations.
+
+Then create two Solana devnet keypairs and a test token standing in for USDC:
 
 ```sh
-# Solana devnet: two keypairs, some SOL, and a test token standing in for USDC
 solana-keygen new --no-bip39-passphrase -o "$W/payee-sol.json"
 solana-keygen new --no-bip39-passphrase -o "$W/payer-sol.json"
 solana airdrop 2 "$(solana-keygen pubkey "$W/payee-sol.json")" -u devnet   # or https://faucet.solana.com
@@ -148,7 +125,8 @@ spl-token mint "$MINT" 100 -u devnet --mint-authority "$W/payee-sol.json" --fee-
   --recipient-owner "$(solana-keygen pubkey "$W/payee-sol.json")"
 ```
 
-The token has no freeze authority. The Payer refuses a mint that has one (Circle's devnet USDC does) unless told `--accept-freeze-authority`.
+> [!NOTE]
+> This token has no freeze authority. The Payer refuses a mint that has one (Circle's devnet USDC does) unless run with `--accept-freeze-authority`.
 
 ### The swap
 
@@ -158,528 +136,154 @@ export ZOLAR_PAYER_KEYPAIR="$W/payer-sol.json" ZOLAR_PAYEE_KEYPAIR="$W/payee-sol
 export PAYEE_UA_FILE="$W/payee.address" PAYEE_UFVK_FILE="$W/payee.ufvk" MINT
 ```
 
-**Reveal Claim** (no circuit files needed):
+**Reveal Claim** needs no circuit files:
 
 ```sh
 PRIVATE_ONLY=0 CLAIM=reveal scripts/private-swap.sh     # about 8 minutes; the last step finds the txid on Solana, as expected
 ```
 
-**Private Claim**: the proof must be made with the proving key the devnet Escrow verifies, so download the circuit files rather than building your own key:
+**Private Claim** must use the proving key the devnet Escrow verifies, so download the circuit files from the [`private-claim-d8-dev` release](https://github.com/AiltonSavio/zolar/releases/tag/private-claim-d8-dev) rather than building your own:
 
 ```sh
 cargo build --release -p dev-groth16          # the local prover
 pnpm --dir circuits install                    # snarkjs, for the witness
 mkdir -p "$HOME/zolar-data/build" && cd "$HOME/zolar-data/build"
-gh release download private-claim-d8-dev -R AiltonSavio/zolar   # wasm, R1CS, proving key, about 490 MB
+gh release download private-claim-d8-dev -R AiltonSavio/zolar   # wasm, R1CS, proving key; about 490 MB
 sha256sum -c SHA256SUMS && tar -xf d8.tar && cd -
 export ZOLAR_DATA="$HOME/zolar-data"
 scripts/private-swap.sh                        # about 8 minutes: pay, wait for finality, prove (about 1 minute), claim, check
 ```
 
-The script runs the steps back to back because the payment expires 18 blocks (about 8 minutes on testnet) after the PCZT is made:
+The payment expires 18 blocks (about 8 minutes) after the PCZT is made, so the script runs these steps back to back:
 
-1. `zolar-payer create-pczt`: the unsigned payment and its transaction ID, plus the redacted copy for the Payee (`created.payee.pczt`). An unredacted PCZT carries the Payer's full viewing key, note values and change; never hand it to anyone.
-2. `zolar-payee create-escrow`: decrypts the PCZT with the viewing key, checks amount and memo, locks the tokens.
-3. `zolar-payer pay`: checks the Escrow and the relay, proves and signs, broadcasts.
-4. `zolar-payer private-claim` (or `claim`): waits for finality, finds the block over Zcash P2P, proves locally, claims.
-5. `scripts/check-txid-absent.sh`: searches every Solana transaction of the Escrow for the Zcash transaction ID. Exit 0 means no form of it was found.
+1. `zolar-payer create-pczt` builds the unsigned payment, its transaction ID and the redacted copy for the Payee.
+2. `zolar-payee create-escrow` decrypts the redacted PCZT with the viewing key, checks amount and memo, and locks the tokens.
+3. `zolar-payer pay` checks the Escrow and the relay, proves and signs, and broadcasts.
+4. `zolar-payer private-claim` (or `claim`) waits for finality, fetches the block over Zcash P2P, proves locally and claims.
+5. `scripts/check-txid-absent.sh` searches every Solana transaction of the Escrow for the Zcash transaction ID. Exit 0 means no form of it was found.
 
-Run `zolar-payer --help` and `zolar-payee --help` for every option, `zolar-payee refund --escrow <address> --wait` to take an unclaimed Escrow back, and `zolar-payer verify-tree` to check that the relay's Final Block Tree matches the headers of live Zcash peers. The read-only dashboard is in [`dashboard/`](dashboard/README.md).
+> [!CAUTION]
+> An unredacted PCZT carries the Payer's full viewing key, note values and change. Only ever hand the Payee `created.payee.pczt`.
+
+Other useful commands: `zolar-payer --help` and `zolar-payee --help` list every option, `zolar-payee refund --escrow <address> --wait` takes an unclaimed Escrow back, and `zolar-payer verify-tree` checks that the relay's Final Block Tree matches the headers of live Zcash peers.
+
+## Build a checkout
+
+Two checkout flows sit on top of the relay:
+
+- **Escrow checkout.** [`@zolar/sdk`](sdk/README.md) connects a shop page to `zolar-merchant` (the Payee's service, which creates private-only Escrows per order) and `zolar-wallet` (a local helper standing in for Zcash wallet support, which pays and makes the Private Claim). The [demo shop](shop/README.md) sells tickets for a fictional event this way.
+- **Vending checkout** *(experimental)*. The Payee configures stock once and runs nothing per sale; the Payer reserves on Solana, pays from a Zcash wallet, and a keyless prover makes an SP1 Payment Proof for the Claim. Sales are public through a Shop Viewing Key. Setup, a real payment and SP1 execution are verified on devnet; a Claim mint with a real Groth16 proof is not. See [`programs/vending`](programs/vending/README.md).
 
 ## What each party learns
 
 | Who | Learns | Does not learn |
 |---|---|---|
 | Anyone reading Solana | The Escrow: Payee, payout wallet, mint, amount, creation tip, expiry height, commitment; when it is claimed or refunded | With a Private Claim: the Zcash transaction ID, its block, its position, the salt |
-| Anyone reading Solana, Reveal Claim | Also the transaction ID and salt, so the Zcash payment is linked to the Escrow | |
-| Payee | The transaction ID, and the amount and memo of its own output (it checks them before locking) | The Payer's viewing key, other notes, the values of the notes spent, or the change: the Payer hands it a redacted copy of the unsigned payment (`created.payee.pczt`) |
-| Zcash P2P peers asked for blocks | That some node asked for the headers since the Checkpoint and for the blocks of a recent window, each block by hash from a random peer | Any transaction ID |
-| The Payer's light wallet server (lightwalletd behind zcash-devtool) | The whole payment, and the Payer's IP address | Anything on Solana |
+| Anyone reading Solana, Reveal Claim | Also the transaction ID and salt, linking the Zcash payment to the Escrow | |
+| Payee | The transaction ID, and the amount and memo of its own output | The Payer's viewing key, other notes, the values of the notes spent, or the change |
+| Zcash P2P peers asked for blocks | That some node asked for headers since the Checkpoint and for blocks of a recent window, each block by hash from a random peer | Any transaction ID |
+| The Payer's light wallet server | The whole payment, and the Payer's IP address | Anything on Solana |
 | The Solana RPC node | Every Solana transaction sent through it, with the sender's IP address | The Zcash transaction behind a Private Claim |
-| Block explorers | Nothing: neither CLI asks an explorer anything | |
+| Block explorers | Nothing: neither CLI queries an explorer | |
 
-Plain limits on that privacy:
+Limits on that privacy:
 
-- The Escrow's height window covers about 20 to 30 blocks, and a Claim lands minutes after its block is final. On a quiet chain that narrows the candidates to the few transactions of a few blocks. Zolar hides which transaction paid, not that a swap happened.
-- Someone watching all of the Payer's network traffic sees the last block fetched before the Claim, which is the payment's block, and the broadcast to the light wallet server, which carries the whole transaction.
+- The Escrow's height window covers about 20 to 30 blocks, and a Claim lands minutes after its block is final. On a quiet chain that narrows the candidates to a few transactions. Zolar hides *which* transaction paid, not *that* a swap happened.
+- Someone watching all of the Payer's network traffic sees the last block fetched before the Claim (the payment's block) and the broadcast to the light wallet server.
 - The Payee's challenge memo must be new for every trade; it is what stops an old payment from being presented again.
 
-## Threat model
+## Security model
 
 Zolar trusts:
 
-- **The Checkpoint**: the block a relay starts from. Anyone can compare it with a Zcash node; the relay's address is a digest of it.
-- **Zcash proof of work over Finality Depth**: a Claim is as safe as a reorganisation deeper than Finality Depth is unlikely. Testnet relays use 10 blocks, labelled demo only; the mainnet relay uses 20 (about 25 minutes).
-- **The Groth16 setup** for Private Claims. Today it is a single-party development key (see Limitations).
-- Solana itself, and the Escrow and relay programs, which are not audited.
+- **The Checkpoint**, the block a relay starts from. Anyone can compare it with a Zcash node; the relay's address is a digest of it.
+- **Zcash proof of work over Finality Depth.** A Claim is as safe as a reorganisation deeper than Finality Depth is unlikely. Testnet relays use 10 blocks (demo only); the mainnet relay uses 20 (about 25 minutes).
+- **The Groth16 setup** for Private Claims, today a single-party development key.
+- Solana itself, and the Zolar programs, which are not audited.
 
-What the programs enforce, with tests for each in `crates/relay-tests` and `crates/escrow-tests`:
+What the programs enforce, each with tests in `crates/relay-tests` and `crates/escrow-tests`:
 
-- A Relayer cannot add a header without valid Equihash (200,9), a hash under its target, the target the difficulty adjustment requires, a timestamp above the median of the last 11 blocks, and a known parent. Forged headers (bad solution, easier target, wrong version) are rejected, and recorded mainnet headers are replayed at full mainnet difficulty.
-- The relay follows the chain with the most work. A reorganisation deeper than Finality Depth Halts it: it accepts no more headers and Claims stop, and Escrows are refunded through the 24-hour backstop. A Halt cannot be undone; a new relay is started from a new Checkpoint.
-- A Claim pays only the payout wallet named in the Escrow, so a copied or front-run Claim pays the Payer anyway. A second Claim fails. A Claim needs a block from the Escrow's own height window, a root among the relay's last 128, and a running relay.
+- A header needs valid Equihash (200,9), a hash under its target, the target the difficulty adjustment requires, a timestamp above the median of the last 11 blocks, and a known parent. Forged headers are rejected, and recorded mainnet headers replay at full mainnet difficulty.
+- The relay follows the chain with the most work. A reorganisation deeper than Finality Depth **Halts** it: no more headers, no more Claims, and Escrows refund through the 24-hour backstop. A Halt is permanent; a new relay starts from a new Checkpoint.
+- A Claim pays only the payout wallet named in the Escrow, so a copied or front-run Claim still pays the Payer. A second Claim fails. A Claim needs a block from the Escrow's height window, a root among the relay's last 128, and a running relay.
 - A refund cannot beat an honest Claim: it needs the tip above expiry plus Finality Depth (or the 24-hour backstop), then a 15-minute window in which a Claim still wins.
-- The Payer's CLI refuses an Escrow whose mint, amount, Bond, payout, expiry, relay or commitment differ from what was agreed, a vault with a delegate or close authority, a mint with a freeze authority unless accepted, a relay of another Zcash network or whose Final Block Tree differs from live peers' headers, and a private-only Escrow unless accepted (a payment in a block of more than 256 transactions cannot be claimed privately).
+- The Payer's CLI refuses an Escrow whose terms differ from what was agreed, a vault with a delegate or close authority, a mint with a freeze authority (unless accepted), a relay of another Zcash network or whose Final Block Tree differs from live peers', and a private-only Escrow (unless accepted).
 
 ## Compute units
 
-Measured in LiteSVM and on devnet (`cargo test -p relay-tests -- --nocapture`, `cargo test -p escrow-tests -- --nocapture`).
+Measured in LiteSVM and on devnet.
 
 | Operation | Compute units |
 |---|---|
 | Relaying one header | 4 transactions; the two heaviest about 1.08M and 1.2M of the 1.4M cap |
-| Equihash (200,9) verification | 2.17M in total, split into two steps of 256 leaves (a stock implementation measured 4.46M) |
-| `AcceptHeader` (target, difficulty, median time, parent, heaviest chain) | 47k to 65k; up to 120k on devnet when it also finalises a block into the tree |
-| `CreateEscrow` | 5.5k |
-| `RevealClaim` | 25k |
-| `PrivateClaim` (Groth16 verification over BN254) | 95k |
-| `DepositBond`, `RequestRefund`, `Refund` | 1.8k, 0.6k, 3.2k |
+| Equihash (200,9) verification | 2.17M in total, split into two steps (a stock implementation measured 4.46M) |
+| `AcceptHeader` | 47k to 65k; up to 120k when it also finalises a block into the tree |
+| `CreateEscrow` / `RevealClaim` | 5.5k / 25k |
+| `PrivateClaim` (Groth16 over BN254) | 95k |
+| `DepositBond` / `RequestRefund` / `Refund` | 1.8k / 0.6k / 3.2k |
 
-Keeping a relay at the tip costs 20,000 lamports per header in fees: about 0.07 SOL a day for the testnet relay and 0.02 SOL a day for mainnet. The header buffer's rent comes back after each header.
+Keeping a relay at the tip costs 20,000 lamports per header in fees: about 0.07 SOL a day for the testnet relay and 0.02 SOL a day for mainnet. The header buffer's rent is returned after each header.
 
 ## Limitations
 
-- **The Private Claim key is a single-party development key.** Whoever generated it could forge a Private Claim. That is acceptable for a devnet demo with test tokens, not for real value. The phase-2 ceremony tooling is ready and rehearsed ([`circuits/ceremony/`](circuits/ceremony/README.md)); the ceremony itself runs after the hackathon with outside contributors, and one honest contributor is enough.
-- Devnet only. Nothing is deployed to Solana mainnet, and the programs are not audited.
+- **The Private Claim key is a single-party development key.** That is acceptable for a devnet demo with test tokens, not for real value. The phase-2 ceremony tooling is ready and rehearsed in [`circuits/ceremony`](circuits/ceremony/README.md); the ceremony itself will run after the hackathon with outside contributors (one honest contributor is enough).
+- Devnet only, and the programs are not audited.
 - The testnet Finality Depth of 10 is for the demo only.
-- The mainnet relay's Checkpoint predates NU7 on mainnet; after NU7 activates, a new relay with the activation height is needed.
-- A Private Claim needs the payment's block to hold at most 256 transactions (the circuit's depth 8), about 2 GiB of memory and about a minute of proving.
+- The mainnet relay's Checkpoint predates NU7 on mainnet; once NU7 activates, a new relay is needed.
+- A Private Claim needs the payment's block to hold at most 256 transactions, about 2 GiB of memory and about a minute of proving.
 - No Relayer rewards: anyone can relay, and the demo relays are run by the author.
-- A flood of about 250 valid sibling blocks could make the relay's store refuse an honest fork block. Each costs real proof of work.
-
-## Prior art and credit
-
-- **Skyhook** (Strahn Cryptography) introduced swaps keyed to a ZIP 244 transaction ID, on Ethereum and Base, with Equihash verified on the EVM and FlyClient-style finality. Per its proposal, it enforces a trusted difficulty floor rather than the difficulty adjustment, and the recipient's note data is visible on-chain. Zolar's swap design credits it. Zolar differs in enforcing the full difficulty adjustment on-chain, in relaying contiguously instead of sampling, and in the Private Claim, which reveals neither the recipient nor the transaction.
-- **ZULU** (Starknet, Zypherpunk 2025) relayed Zcash headers with on-chain Equihash and proved transaction inclusion. Zolar brings the idea to Solana, where a header does not fit one transaction or one compute budget.
+- A flood of about 250 valid sibling blocks could make the relay's store refuse an honest fork block. Each one costs real proof of work.
+- The Vending Machine's Claim mint with a real Payment Proof is unverified.
 
 ## Repository layout
 
-- `crates/zcash-header`: `no_std` header parsing, SHA-256d, compact targets, chain work, Equihash and the difficulty rules, shared by the program and off-chain tools.
-- `programs/header-relay`: the Header Relay program (Pinocchio). It has its own workspace and lockfile because `cargo build-sbf` uses an older toolchain.
-- `crates/header-relay-interface`: dependency-free layout and `RelayView` (owner, address and Halt checked) for programs that trust a relay.
-- `programs/escrow`: the Escrow program (Pinocchio), own workspace.
-- `clients/codama`: Codama definitions; `clients/rust`, `clients/js`, `clients/escrow-rust` and `clients/escrow-js` are generated from them.
-- `crates/relayer`: `zolar-relayer`, which follows Zcash peers over P2P and keeps a relay at the tip.
-- `crates/zolar-claim`: Payment Commitment, Merkle paths and Private Claim witness. `crates/zolar-pczt`: transaction ID and viewing-key decryption of an unsigned PCZT (own workspace).
-- `cli/`: `zolar-payer`, `zolar-payee`, `zolar-merchant` and `zolar-wallet` (own workspace).
-- `sdk/`: TypeScript merchant and wallet clients and the checkout flow. See [Build on Zolar](sdk/README.md).
-- `shop/`: demo ticket checkout using the SDK. See [the shop README](shop/README.md).
-- `circuits/`: the Private Claim circuit (circom, Groth16), proving scripts and the ceremony tooling. See [`circuits/README.md`](circuits/README.md).
-- `dashboard/`: read-only web page for both relays, open Escrows and Claims.
-- `crates/relay-tests`, `crates/escrow-tests`: LiteSVM tests that drive the programs through the generated clients.
-- `scripts/`, `tools/`: fixture export, forged-header fixtures, the swap script and the transaction ID search.
+| Path | Contents |
+|---|---|
+| [`programs/header-relay`](programs/header-relay) | Header Relay program (Pinocchio, own workspace) |
+| [`programs/escrow`](programs/escrow) | Escrow program (Pinocchio, own workspace) |
+| [`programs/vending`](programs/vending/README.md) | Vending Machine program (Pinocchio, own workspace) |
+| [`crates/zcash-header`](crates/zcash-header) | `no_std` header parsing, Equihash and difficulty rules, shared on- and off-chain |
+| [`crates/header-relay-interface`](crates/header-relay-interface) | Dependency-free `RelayView` for programs that trust a relay |
+| [`crates/relayer`](crates/relayer) | `zolar-relayer`: follows Zcash peers over P2P and keeps a relay at the tip |
+| [`crates/zolar-claim`](crates/zolar-claim), [`crates/zolar-pczt`](crates/zolar-pczt) | Payment Commitment, Merkle paths, Private Claim witness; PCZT transaction ID, decryption and redaction |
+| [`crates/vending-*`](crates/vending-guest/README.md), [`crates/sp1-solana-v6`](crates/sp1-solana-v6/README.md) | Vending shared types, SP1 guest, keyless prover and the SP1 verifier |
+| [`cli`](cli) | `zolar-payer`, `zolar-payee`, `zolar-merchant` and `zolar-wallet` (own workspace) |
+| [`circuits`](circuits/README.md) | Private Claim circuit (circom, Groth16), proving scripts and ceremony tooling |
+| [`clients`](clients) | Codama definitions and the generated Rust and JS clients |
+| [`sdk`](sdk/README.md), [`shop`](shop/README.md), [`dashboard`](dashboard/README.md) | TypeScript checkout SDK, demo shop and read-only dashboard |
+| `crates/*-tests` | LiteSVM tests that drive the programs through the generated clients |
+| `scripts`, `tools` | Fixture export, forged headers, the swap script and the transaction ID search |
+
+## Development
+
+Rust builds are memory hungry; on a small machine cap them, for example with `CARGO_BUILD_JOBS=2`.
 
 ```sh
+# Rust: format, lint, build the programs, test
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build-sbf --manifest-path programs/header-relay/Cargo.toml
 cargo build-sbf --manifest-path programs/escrow/Cargo.toml
-cargo test --workspace                       # LiteSVM tests build the programs first; about 5 minutes
+cargo build-sbf --manifest-path programs/vending/Cargo.toml
+cargo test --workspace                       # LiteSVM tests; about 5 minutes
 cargo test --manifest-path cli/Cargo.toml
-pnpm --dir clients/codama install && pnpm --dir clients/codama generate   # regenerate the clients
+
+# Generated clients (CI fails if they drift)
+pnpm --dir clients/codama install && pnpm --dir clients/codama generate && cargo fmt --all
+
+# TypeScript (the SDK depends on the built vending client)
+pnpm --dir clients/vending-js install && pnpm --dir clients/vending-js build
+pnpm --dir sdk install && pnpm --dir sdk typecheck && pnpm --dir sdk test && pnpm --dir sdk build
+pnpm --dir shop install && pnpm --dir shop lint && pnpm --dir shop test && pnpm --dir shop build
+pnpm --dir dashboard install && pnpm --dir dashboard lint && pnpm --dir dashboard test && pnpm --dir dashboard build
+
+# Privacy check
 python3 -I scripts/test_check_txid_absent.py
-pnpm --dir sdk typecheck && pnpm --dir sdk test
-pnpm --dir shop lint && pnpm --dir shop test
-npx --prefix shop --no-install tsc --noEmit -p shop
-pnpm --dir shop build
-pnpm --dir sdk build
 ```
 
-## License
+`programs/*`, `cli`, `crates/zolar-pczt` and the vending crates are separate Cargo workspaces (the SBF programs build with an older toolchain); run `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` inside each. [CI](.github/workflows/ci.yml) runs the full set, including the circuit tests. Vending-specific checks are in [`programs/vending`](programs/vending/README.md#verify-vending-locally).
 
-Licensed under either of MIT ([`LICENSE-MIT`](LICENSE-MIT)) or Apache-2.0 ([`LICENSE-APACHE`](LICENSE-APACHE)).
+## Prior art and credit
 
-## Vending checkout on devnet
-
-`programs/vending` is a separate Pinocchio workspace. The Codama source is
-`clients/codama/vending.mjs`; generated clients are `clients/vending-rust` and
-`clients/vending-js/src/generated`. Program address:
-`J9paKuXLpRr4rmWVp8vBZ6ZMwQhrTSk6w3Rmyv5JHFW5` (Solana devnet only).
-The setup below also lets a demo user deploy under their own program address.
-A vending Claim mint with a real Payment Proof has **not yet been verified**;
-SP1 execution and a successful generic verifier fixture do not establish that mint.
-
-Ana reserves one of Ben's tickets, paying the Reservation's Solana rent. The Reservation
-snapshots the price and expiry, and records Ana as payout. A verified Payment Proof
-creates a permanent Payment Tag, mints one ticket into Ana's associated token account
-(creating it if missing), and returns the Reservation rent to Ana. The Claim submitter
-pays for the Tag and any new token account. RequestRelease starts a 15-minute Claim
-window; ReleaseReservation then returns stock and Reservation rent;
-it does not refund Zcash. Mint decimals are zero, mint authority is the PDA, and freeze
-authority is absent. Testnet v1 tickets are immediately transferable: there is **no
-non-transferable settlement window**.
-
-The program uses the real `sp1-solana-v6` verifier and the same `vending-types`
-public-values type as the guest. The verifier exposes
-`verify_proof(proof: &[u8], public_values: &[u8], vkey_hash: &[u8; 32]) -> Result<(), Error>`.
-`PublicValues::encode()` and `PublicValues::decode(&[u8])` share the fixed 249-byte
-wire format. Decoding checks version 1, Ironwood pool 3, and the zero reserved
-suffix; the typed amount is `value_zat`. Payout occupies `189..221`, with only
-`221..249` reserved. See the [types](crates/vending-types/README.md),
-[guest](crates/vending-guest/README.md), [prover](crates/vending-prover/README.md)
-and [verifier](crates/sp1-solana-v6/README.md) for APIs and fixture provenance.
-
-Account/authority bindings are checked before proof verification. Every subsequent
-Claim policy rule is in the native-testable pure function
-`rules::validate_claim(&PublicValues, ClaimAccounts<'_>) -> Result<ClaimPlan, VendingError>`.
-A successful plan fixes one ticket and closure to the stored payout. There is no test
-proof bypass in the program. Successful Tag creation, ATA creation, MintTo and Claim closure still require a
-valid vending proof to verify in LiteSVM and remain unverified. Release closure and rent return are verified in LiteSVM.
-
-Revision 2 binds the memo and proof to the payout: the text memo is exactly
-`zv1:<machine>:<nonce>:<payout>` with canonical base58 encodings of three 32-byte
-values, zero-padded to 512 bytes. Claim requires the proven payout to equal the
-Reservation's payout. After release, the same Payer can reserve the nonce again and
-claim an old unclaimed payment while stock remains; another payout cannot use it.
-The full 64-byte Shop Viewing Key is stored publicly, and InitMachine computes its
-SHA-256 hash with the Solana syscall.
-
-RequestRelease is permissionless when `relay_tip > expiry_height + finality_depth`
-**or** when the Relay is Halted and 24 hours have passed since Reservation creation.
-It records Solana time once; duplicate requests fail without resetting the window.
-ReleaseReservation is permissionless at or after `release_requested_at + 900`.
-A Claim remains eligible during the window and afterwards until release closes the
-Reservation. A later Halt does not reset or extend an existing release window.
-A running Relay stalled below the height threshold does not qualify for the Halt
-backstop and can leave stock reserved indefinitely. Releasing stock never refunds ZEC.
-Claims use `RelayView` for owner/address/Halt and recent-root checks. The program accepts
-only the testnet network and NU7 branch ID `0x77190ad9`.
-
-### Live demo evidence (2026-10-27)
-
-The deployed Machine is `GiF2qqYCRHL6L4DVVDMPfNDk9G5f4qzovMCM62UHFjkV`, with
-mint `DARKR7E6KGL8L6oWeNXwnbhdSBL8oyZku8PVkxejVFjg`, price 100,000 zat,
-stock 100 and a 20-block Reservation duration. It uses the running testnet Relay
-`C9eFRXy11aT8JqcyZPvEGqsor3pmrAyPDBmg6LCcGvWS` (demo Finality Depth 10).
-The public browser configuration is in [`.env.vending.example`](shop/.env.vending.example)
-and [`vending-abi.json`](shop/public/vending-abi.json).
-
-One 0.001 TAZ payment mined at height 4,546,839:
-`c9cea1a5a3da02bc89a6afc58e7132eb0ce0610938cb647a81b354c9c8ac575e`.
-Its Reservation expires at height 4,546,854. The actual HTTP service found the
-correct value and payout by reading the full Shop Viewing Key from the Machine.
-The live payment executed in SP1 at **24,103,795 cycles**, committing 249 bytes
-identical to native verification; witness preparation, execution and guest-key
-setup took **199.52 s** on the VPS. Independent account checks matched machine,
-nonce, payout, price, diversifier, key hash, NU7 branch, guest vkey and a root
-still known to the live Relay. This produced **no Groth16 proof and no ticket**.
-
-Live InitMachine used 13,075 CU (13,225 including ComputeBudget); Reserve used
-8,830 CU (8,980 including ComputeBudget). The deploy transaction is
-`2jNpaUbid2BDpFE4ydPpPtBq9ZJG8AZLe1KY9wgxR2kcrdWEUEheYdNtwv6RontgWMmBgCQnRnBwGNVeo4Ndv6bw`.
-The deployed 96,360-byte ELF matches SHA-256
-`2a7feca3504d3d0a05bab4c850b58ce2a58434c69ba0c99b2b002e4175eacf65`.
-Claim minting with a real vending Payment Proof remains unverified.
-
-### Prepare a proving host
-
-The existing paid demo Reservation must not be paid again or released.
-Its public identifiers and guest hash are in
-[`scripts/vending-paid-demo.json`](scripts/vending-paid-demo.json).
-
-On the source machine, package tracked working files and the pinned public
-ELF. This includes uncommitted source edits, records every file hash, and
-excludes ignored files and wallet data. It does not require a GitHub push:
-
-```sh
-python3 -I scripts/prepare-vending-prover.py --out /tmp/zolar-prover.tgz
-bash scripts/setup-vending-prover.sh --plan
-scp /tmp/zolar-prover.tgz rented:zolar-prover.tgz
-ssh rented 'mkdir zolar-vending-paid && tar -xzf zolar-prover.tgz -C zolar-vending-paid'
-ssh -t rented 'cd zolar-vending-paid && bash scripts/setup-vending-prover.sh --run'
-```
-
-Choose a fresh remote directory and preserve the printed archive SHA-256.
-The host must be Ubuntu/Debian x86_64, have systemd and sudo/root access,
-and provide at least 32,000,000 KiB total RAM with 28,000,000 KiB available
-(the prover checks KiB, so a provider's nominal 32 GB may be insufficient).
-SP1 v6.10.0, Rust 1.97.1, protoc 28.3, and Go 1.24.0 are installed there.
-The guest is checked against the deployed Machine's pinned artifact and is
-never rebuilt by this script. Source and installer references:
-[SP1 installer](https://github.com/succinctlabs/sp1/blob/v6.10.0/sp1up/sp1up),
-[native gnark build](https://github.com/succinctlabs/sp1/blob/v6.10.0/crates/recursion/gnark-ffi/build.rs),
-and [Go releases](https://go.dev/dl/).
-
-`--run` installs, builds under a 3 GiB/no-swap cap, and proves only the
-existing payment. `--install`, `--build`, and `--prove` run each stage
-separately. `--serve` exposes the keyless prover on remote loopback port
-8088 for the browser demo; forward it with
-`ssh -N -L 8088:127.0.0.1:8088 rented`. No spending key, seed, identity,
-or Solana signer goes to the rented machine.
-
-Proving logs and `/usr/bin/time -v` measurements go under
-`.zolar-work/rented/`. Maximum process RSS is not aggregate prover memory.
-The proof uses a fresh Relay root; the script checks root membership again
-when it finishes. If the root has aged out, make a new proof against a fresh
-root. Do not weaken the root check. The setup, native gnark build, full proof
-resource usage, and Claim remain unverified on a rented host.
-
-Copy the `proof/` directory back locally. Before signing Claim, collect a
-read-only baseline (replace the identifiers using the public demo JSON):
-
-```sh
-node sdk/scripts/check-vending-settlement.mjs before \
-  --result /path/to/proof/result.json \
-  --machine MACHINE_ADDRESS --reservation RESERVATION_ADDRESS \
-  --out /tmp/vending-before.json
-```
-
-This requires the real Groth16 output and checks its Machine bindings and
-live Relay root. It refuses a release request that needs reconciliation.
-The default Claim submitter is the payout wallet; supply
-`--submitter PUBLIC_ADDRESS` if another wallet pays the fee. The checker
-never signs or sends transactions. To submit this exact one-shot proof, sign locally:
-
-```sh
-node sdk/scripts/submit-vending-claim.mjs \
-  --before /tmp/vending-before.json --result /path/to/proof/result.json \
-  --keypair /path/to/claim-submitter-devnet.json --out /tmp/vending-claim.json
-```
-
-This command rechecks the live root, simulates, signs, saves the expected
-signature before broadcast, and sends once. After any timeout, reconcile
-that journal and signature before retrying. Keep the signer local. Wait
-for finalization, then verify the signature:
-
-```sh
-node sdk/scripts/check-vending-settlement.mjs after \
-  --before /tmp/vending-before.json --result /path/to/proof/result.json \
-  --signature CLAIM_SIGNATURE --out /tmp/vending-settlement.json
-```
-
-The checker requires the exact Claim instruction and proof, a one-ticket
-transaction balance increase to the fixed payout, a closed Reservation,
-a permanent Payment Tag, the expected mint authority, and a replay
-simulation rejected specifically with `MissingReservation`. It records
-Claim CU and fees. It sends no replay transaction. Keep the baseline,
-proof, signature, and output together; a green execute run alone cannot
-pass settlement verification.
-
-### Make your own demo shop
-
-Ben creates a dedicated testnet account, publishes its incoming Shop Viewing Key
-in a Machine, and offers 100 tickets at 0.001 TAZ each. Ana reserves one ticket
-with her Solana devnet wallet, pays 100,000 zat plus her Zcash wallet fee, and
-waits for the Relay's Finality Depth. A suitable proving host must produce the
-Payment Proof before Claim can mint her ticket. Execute mode produces no proof.
-
-Use Zcash testnet and Solana devnet only. Keep all seed, identity and keypair
-files outside git. The tools accept paths and never print their private contents.
-Shop metadata contains only the dedicated public incoming viewing key; never
-substitute a Payer key or a spending/full viewing key.
-
-From the repository root, prepare Node 22, pnpm 10, Solana CLI and Rust, then:
-
-```sh
-free -g
-cargo_capped() {
-  systemd-run --user --scope -q -p MemoryMax=3G -p MemorySwapMax=0 -- \
-    env CARGO_BUILD_JOBS=2 cargo "$@"
-}
-export VENDING_DATA="$HOME/zolar-vending"
-mkdir -p "$VENDING_DATA" "$HOME/.config/zolar"
-umask 077
-# Choose an unused path; solana-keygen refuses an existing file.
-export PROGRAM_KEY="$HOME/.config/zolar/vending-keypair.json"
-solana-keygen new --no-bip39-passphrase --silent --outfile "$PROGRAM_KEY"
-export PROGRAM_ID=$(solana-keygen pubkey "$PROGRAM_KEY")
-python3 scripts/set-vending-program-id.py "$PROGRAM_ID"
-pnpm --dir clients/codama install --frozen-lockfile
-pnpm --dir clients/codama generate
-cargo_capped fmt --all
-cargo_capped fmt --manifest-path programs/vending/Cargo.toml
-cargo_capped build-sbf --manifest-path programs/vending/Cargo.toml
-python3 scripts/check-vending-sbf.py
-cargo_capped test -p vending-tests -- --test-threads=2
-# Your funded devnet deployer, supplied as a path only.
-export DEPLOYER="$HOME/.config/solana/devnet.json"
-solana-keygen new --no-bip39-passphrase --silent --outfile "$VENDING_DATA/deploy-buffer.json"
-solana program deploy programs/vending/target/deploy/vending.so --url devnet \
-  --keypair "$DEPLOYER" --upgrade-authority "$DEPLOYER" \
-  --program-id "$PROGRAM_KEY" --buffer "$VENDING_DATA/deploy-buffer.json" --use-rpc
-pnpm --dir clients/vending-js install --frozen-lockfile
-pnpm --dir clients/vending-js build
-pnpm --dir sdk install --frozen-lockfile
-# When changing program IDs in an existing checkout, refresh its local client copy:
-# pnpm --dir sdk install --frozen-lockfile --force
-pnpm --dir sdk build
-pnpm --dir shop install --frozen-lockfile
-cargo_capped build --manifest-path crates/vending-prover/Cargo.toml --bin zolar-vend-shop
-crates/vending-prover/target/debug/zolar-vend-shop \
-  --create --seed "$VENDING_DATA/shop.seed" --out "$VENDING_DATA/shop-public.json"
-```
-
-The seed is raw 32-byte ZIP-32 material written with mode 600. The helper derives
-`m/32'/1'/0'`, external address index 0, validates the receiving address against
-the 64-byte key, and writes an Ironwood-only testnet Unified Address. Running
-again without `--create` and with a new `--out` reproduces the public metadata.
-The seed stays local; neither the prover nor the browser needs it.
-
-The immutable Machine must pin the SP1 vkey from the exact ELF you will use.
-The integration artifact is documented in the [guest README](crates/vending-guest/README.md).
-Build/execution instructions are in the [prover README](crates/vending-prover/README.md).
-On a VPS, use SP1 v6.10.0 and a 5 GiB/no-swap scope to execute the recorded witness;
-check both the ELF SHA-256 and the emitted `vkey_hash` before initializing:
-
-```sh
-sha256sum crates/vending-guest/elf/vending-guest
-systemd-run --user --scope -q -p MemoryMax=5G -p MemorySwapMax=0 -- \
-  crates/vending-prover/target/debug/zolar-vend-prove \
-  --witness crates/vending-guest/fixtures/testnet/witness.json --execute --out vkey-check
-# For the pinned integration ELF only; recompute if rebuilding the guest.
-export GUEST_VKEY=000eeda101ba026e2f37c86e96abc5372ddc0330ea99d56e7ddfbef8aae711e7
-export RELAY=C9eFRXy11aT8JqcyZPvEGqsor3pmrAyPDBmg6LCcGvWS
-solana-keygen new --no-bip39-passphrase --silent --outfile "$VENDING_DATA/mint.json"
-scripts/vending-admin.sh init-machine --keypair "$DEPLOYER" \
-  --mint-keypair "$VENDING_DATA/mint.json" --shop "$VENDING_DATA/shop-public.json" \
-  --relay "$RELAY" --vkey-hash "$GUEST_VKEY" --price-zat 100000 --stock 100 \
-  --reservation-blocks 20 --out "$VENDING_DATA/machine.json"
-```
-
-`init-machine` checks devnet genesis, the running testnet Relay and the public
-shop metadata, simulates, submits, and waits for finalization. It writes the
-Machine, mint, signature and CU, plus `machine.binding.json` for the browser.
-The 20-block duration is this demo tool's default, not a protocol default.
-Configuration is immutable; changing the guest or shop account requires a new
-Machine. The CLI records the signed transaction identity before submission;
-a timeout requires checking that signature and account before retrying.
-
-Inspect the resulting Machine and mint before paying. On the Payer's machine,
-with their own devnet keypair and devnet SOL:
-
-```sh
-scripts/vending-admin.sh inspect --machine MACHINE_ADDRESS
-scripts/vending-admin.sh reserve --machine MACHINE_ADDRESS \
-  --keypair /path/to/payer-devnet.json --shop "$VENDING_DATA/shop-public.json" \
-  --out "$VENDING_DATA/reservation.json"
-```
-
-The Reservation output includes the exact ZIP-321 payment URI with amount,
-shop address and payout-bound text memo. Pay it once from a Zcash-testnet wallet
-supporting Ironwood. Wallet fees are additional. Check the saved Reservation
-and signature before retrying an interrupted command; never blindly repeat a
-payment. Faucets are not part of this workflow.
-
-Run the keyless prover on a host with SP1 installed. Compile with `--features sp1`
-for execute mode, following the capped build command in its README:
-
-```sh
-systemd-run --user --scope -q -p MemoryMax=5G -p MemorySwapMax=0 -- \
-  crates/vending-prover/target/debug/zolar-vend-prove serve \
-  --rpc https://api.devnet.solana.com --bind 127.0.0.1:8088 --execute
-curl 'http://127.0.0.1:8088/find-payment?machine=MACHINE_ADDRESS&nonce=BASE58_NONCE'
-```
-
-Omit `--shops`: the prover reads the full Shop Viewing Key from the deployed
-Machine. `--execute` deliberately fails proof jobs with a no-proof error; it
-cannot return a claimable Payment Proof. On a rented 32 GB+ machine with at
-least 28 GB available, compile with `--features native-prove`, then use `--prove`
-instead. Complete Groth16 proving and a real vending Claim remain unverified.
-
-Copy the public `machine.binding.json` to `shop/public/vending-abi.json`, and
-set the public browser configuration (the dedicated incoming key is read from
-chain, not placed in an environment variable):
-
-```sh
-export VITE_CHECKOUT_MODE=vending VITE_CLUSTER=devnet
-export VITE_VENDING_PROGRAM="$PROGRAM_ID" VITE_VENDING_MACHINE=MACHINE_ADDRESS
-export VITE_VENDING_ADDRESS=IRONWOOD_TESTNET_SHOP_ADDRESS
-export VITE_VENDING_RPC=https://api.devnet.solana.com
-export VITE_PROVER_URL=http://127.0.0.1:8088
-export VITE_VENDING_ABI_URL=/vending-abi.json
-devserve --port 5175 -- pnpm --dir shop dev --host 0.0.0.0 --port 5175 --strictPort
-```
-
-Open `http://localhost:5175` and connect a Solana Wallet Standard wallet on
-devnet. The live page reads the Machine and Relay, reserves before displaying
-the payment link, finds the payment and waits for finality. It can mint only
-when the prover returns a real proof accepted by Claim. Stop the named preview
-with `devservers stop NAME` afterwards. Public RPCs may throttle large program
-uploads; use a devnet RPC with sufficient capacity and reconcile the existing
-upload buffer before resuming. If the CLI's parallel writes keep hitting the
-public RPC limit, stop that uploader, then resume the existing authorized buffer
-sequentially (the helper checks devnet, authority, size and complete ELF readback):
-
-```sh
-node sdk/scripts/resume-vending-upload.mjs --rpc https://api.devnet.solana.com \
-  --keypair "$DEPLOYER" --buffer BUFFER_ADDRESS \
-  --elf programs/vending/target/deploy/vending.so --ledger "$VENDING_DATA/upload.jsonl"
-solana program deploy --url devnet --keypair "$DEPLOYER" \
-  --upgrade-authority "$DEPLOYER" --program-id "$PROGRAM_KEY" --buffer BUFFER_ADDRESS
-```
-
-The portable BLAKE3 fallback avoids the
-`sol_blake3` import rejected by devnet during this deployment.
-
-### Vending wire interface
-
-All integers are little-endian. Instructions start with one byte: InitMachine `0`,
-Reserve `1`, Claim `2`, ReleaseReservation `3`, RequestRelease `4`.
-`seed` and `nonce` are exactly 32 bytes.
-Init arguments follow the shared contract, in this order:
-`seed32, price_zat u64, stock u32, diversifier11, svk64, relay32, vkey_hash32,
-reservation_blocks u32` (187 argument bytes; 188 including discriminator).
-The generated argument for `relay` is named
-`relayAddress` / `relay_address`, to distinguish it from the account. Reserve carries
-only `nonce32`; RequestRelease and ReleaseReservation carry no arguments. Claim carries
-`proof_len u16, proof[proof_len], public_values[249]`, with no extra prefix on public
-values and no trailing data.
-
-| Account | Bytes | Fields as `offset:name` |
-|---|---:|---|
-| Machine | 291 | `0:disc=1, 1:version, 2:bump, 3:mint_bump, 4:payee32, 36:seed32, 68:mint32, 100:relay32, 132:price_zat u64, 140:available u32, 144:stock u32, 148:diversifier11, 159:svk_hash32, 191:vkey_hash32, 223:reservation_blocks u32, 227:svk64` |
-| Reservation | 128 | `0:disc=2, 1:version, 2:bump, 3:machine32, 35:nonce32, 67:payout32, 99:price_zat u64, 107:expiry_height u32, 111:created_at i64, 119:release_requested bool(u8), 120:release_requested_at i64` |
-| Payment Tag | 2 | `0:disc=3, 1:version` |
-
-All versions are `1`; legacy 227/119-byte accounts and 155-byte Init arguments are
-rejected. No Vending deployment needs migration. `release_requested` distinguishes
-a request at Unix time zero from no request. PDAs are `["machine", payee, seed]`,
-`["mint", machine]`,
-`["reservation", machine, nonce]`, `["tag", machine, payment_tag]`.
-
-Account order (w = writable, s = signer):
-
-- InitMachine: `payee(ws), machine(w), mint(ws), mintAuthority, relay, tokenProgram, systemProgram`.
-- Reserve: `payer(ws), machine(w), reservation(w), relay, systemProgram`.
-- Claim: `submitter(ws), machine(w), reservation(w), relay, payout(w), mint(w), mintAuthority, payoutToken(w), paymentTag(w), tokenProgram, associatedTokenProgram, systemProgram`.
-- RequestRelease: `submitter(s), machine, reservation(w), relay`.
-- ReleaseReservation: `submitter(s), machine(w), reservation(w), relay, payout(w)`.
-
-The numbered errors are defined in `programs/vending/src/error.rs` and mirrored in
-Codama. New errors: WrongPayout `21`, ReleaseAlreadyRequested `22`,
-ReleaseNotRequested `23`, ClaimWindowOpen `24`. The real SP1 v6 proof is 356 bytes;
-with 249 public bytes it fits the packet limit. The conservative 388-byte proof
-payload test produces a **1226-byte legacy transaction** including compute-limit and compute-price instructions, with submitter as
-fee payer. A separate fee payer exceeds the 1232-byte packet limit with both budget
-instructions; use the submitter as fee payer or an address lookup table.
-
-### Verify Vending locally
-
-Check `free -g` first and wait for at least 3 GiB available. Run cargo commands under
-`systemd-run --user --scope -q -p MemoryMax=3G -p MemorySwapMax=0 -- env CARGO_BUILD_JOBS=2`:
-
-```sh
-cargo build-sbf --manifest-path programs/vending/Cargo.toml -- --locked
-cargo fmt --all --check
-cargo fmt --manifest-path programs/vending/Cargo.toml --check
-cargo fmt --manifest-path crates/vending-types/Cargo.toml --check
-cargo clippy --locked -p vending-tests -p vending-client --all-targets -- -D warnings
-cargo clippy --locked --manifest-path programs/vending/Cargo.toml --all-targets -- -D warnings
-cargo clippy --locked --manifest-path crates/vending-types/Cargo.toml --all-targets -- -D warnings
-cargo test --locked --manifest-path crates/vending-types/Cargo.toml
-cargo test --locked --manifest-path programs/vending/Cargo.toml
-cargo test --locked -p vending-tests -- --nocapture --test-threads=1
-```
-
-The LiteSVM harness reuses `relay-tests` to initialize and advance a real Relay with
-known Final Block Tree roots. Synthetic headers isolate consumer behavior; they do not
-test Equihash. Halt tests inject the frozen Relay state to exercise the consumer's
-24-hour path. The suite also checks the syscall hash, payout binding, strict height
-threshold, request idempotence, the exact 900-second boundary, a later Halt, and
-Unix time zero. Native policy tests accept a Claim during and after the window.
-LiteSVM rejects invalid Payment Proofs through the real verifier. Successful
-Claim settlement and a real SP1 vending proof remain unverified.
-The October 27 live run verified deployment, Reserve, one mined payment,
-discovery, and SP1 execution; browser-to-Zkool payment behavior remains unverified.
-The verifier has a positive SP1 fixture test, but that fixture is contributor-authored
-and is not a vending Payment Proof. See its README for this limitation.
+- **Skyhook** (Strahn Cryptography) introduced swaps keyed to a ZIP 244 transaction ID, on Ethereum and Base, with Equihash verified on the EVM and FlyClient-style finality. Per its proposal, it enforces a trusted difficulty floor rather than the difficulty adjustment, and the recipient's note data is visible on-chain. Zolar's swap design credits it. Zolar differs in enforcing the full difficulty adjustment on-chain, relaying contiguously instead of sampling, and the Private Claim, which reveals neither the recipient nor the transaction.
+- **ZULU** (Starknet, Zypherpunk 2025) relayed Zcash headers with on-chain Equihash and proved transaction inclusion. Zolar brings the idea to Solana, where a header fits neither one transaction nor one compute budget.

@@ -5,8 +5,8 @@ pays from an existing Zcash-testnet wallet, and uses a Payment Proof to Claim
 one ticket. Ben has no per-sale step. The relay and keyless prover must run.
 
 A real payment and SP1 execution are recorded; a Groth16 vending proof and
-successful ticket mint remain unverified. See the root README for the
-[current evidence](../README.md#live-demo-evidence-2026-10-27).
+successful ticket mint remain unverified. See the vending program's
+[current evidence](../programs/vending/README.md#live-demo-evidence-2026-10-27).
 
 ## Vending checkout
 
@@ -56,7 +56,7 @@ devserve --name zolar-vending-shop --port 5188 --mem 500M --force -- \
 
 Open `http://127.0.0.1:5188`. The example targets the deployed demo Machine.
 For a new shop, use its own public configuration and authoritative binding.
-Follow [prover preparation](../README.md#prepare-a-proving-host) and forward
+Follow [prover preparation](../programs/vending/README.md#prepare-a-proving-host) and forward
 its loopback API on port 8088 before making a purchase. Execute-only mode
 cannot mint a ticket. The Solana wallet signs Reserve and Claim and pays
 Solana fees/rent; the Zcash wallet signs and pays ZEC plus its wallet fee.
