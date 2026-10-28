@@ -1,0 +1,14 @@
+{
+  "note": "Ticket 08 devnet swap, first run: transaction 9e0bd89a... is the payment (tx 4 of 5, odd level)",
+  "zcash_testnet_block": 4517442,
+  "block_merkle_root_display": "2bbbafbdbfbc638979506c8615b0aca46dca029592adc770df1a60a806d7777c",
+  "txids_display": [
+    "2de08772cf8b0d04b634fb2c34475884e0cdef177910c98e222d6e44b016c20d",
+    "15575e17a9bf22959f58239e9afa7c4328601fd30730b12dd2587e8c5b993b0d",
+    "0ab4ba79388a2d241860b375014d218e3a3c3d4f3c3c7b089673af8b7323541d",
+    "6f908f564c21b4195e4d8d88e5d343adb669765d304142f0df685fbed6b33095",
+    "9e0bd89ab09567b3b6d83649c0a0c4c582f2e8101882242cb94d1f2f2bb71c20"
+  ],
+  "index": 4,
+  "salt": "009c1a1cf42baa4926e3d50c690a1214c2a33047df0a81a30f41384f1da4de20"
+}

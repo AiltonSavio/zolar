@@ -1,0 +1,19 @@
+[package]
+name = "dev-groth16"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Throwaway single-party Groth16 setup and prover for the Private Claim R1CS (arkworks), for development: no Powers of Tau, no ceremony"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+ark-bn254 = "0.5"
+ark-ec = "0.5"
+ark-ff = "0.5"
+ark-groth16 = { version = "0.5", features = ["parallel"] }
+ark-relations = "0.5"
+ark-serialize = "0.5"
+ark-snark = "0.5"
+ark-std = { version = "0.5", features = ["parallel"] }
+rand = "0.8"
+serde_json = "1"

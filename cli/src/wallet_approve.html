@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approve payment · Zolar Wallet</title>
+<link rel="icon" href="{{mark}}">
+<style>
+  /* No web fonts: the wallet asks no third party anything while you approve a payment. */
+  :root { --yellow:#f3b724; --ink:#111111; --paper:#ffffff; --muted:#4a4a4a; --ok:#111111; --bad:#b3261e;
+          --display: ui-serif, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+          --mono: ui-monospace, "SFMono-Regular", "DejaVu Sans Mono", Menlo, monospace; color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.45 var(--mono); }
+  main { max-width: 440px; margin: 0 auto; border: 2px solid var(--ink); border-radius: 12px; overflow: hidden; }
+  .bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 2px solid var(--ink); font-size: 13px; }
+  .bar img { width: 22px; height: 22px; }
+  .bar .dots { margin-left: auto; display: flex; gap: 6px; }
+  .bar .dots span { width: 10px; height: 10px; border-radius: 50%; background: var(--ink); }
+  .bar .dots span:first-child { background: var(--yellow); }
+  .body { padding: 18px 20px 20px; }
+  .head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+  .badge { flex: none; width: 54px; height: 54px; border-radius: 50%; background: var(--yellow); display: grid; place-items: center; }
+  h1 { font-family: var(--display); font-weight: 800; font-size: 30px; line-height: 1.1; margin: 0; }
+  dl { margin: 0; display: grid; gap: 10px; }
+  .row { display: grid; grid-template-columns: 22px minmax(0, 1fr); column-gap: 12px; align-items: start; }
+  dt { grid-column: 1 / -1; font-size: 11px; font-weight: 600; letter-spacing: .2em; text-transform: uppercase; }
+  dd { margin: 0; grid-column: 2; word-break: break-all; }
+  .row svg { grid-row: 2; grid-column: 1; margin-top: 2px; }
+  .big { font-family: var(--display); font-weight: 800; font-size: 24px; line-height: 1.15; word-break: normal; }
+  .note { display: flex; gap: 10px; background: var(--yellow); border-radius: 10px; padding: 10px 12px; margin: 16px 0; font-size: 12px; }
+  .buttons { display: grid; grid-template-columns: 1fr 1.4fr; gap: 10px; }
+  button { font: 800 18px var(--display); min-height: 50px; border-radius: 10px; cursor: pointer; }
+  #reject { background: var(--paper); color: var(--ink); border: 2px solid var(--ink); }
+  #approve { background: var(--yellow); color: var(--ink); border: 2px solid var(--yellow); }
+  #approve:hover:not(:disabled) { border-color: var(--ink); }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+  #result { margin-top: 12px; font-weight: 600; min-height: 1.4em; }
+  @media (max-width: 460px) { main { border-radius: 0; border-left: 0; border-right: 0; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="bar"><img src="{{mark}}" alt=""><span>Zolar Wallet</span><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span></div>
+  <div class="body">
+    <div class="head">
+      <span class="badge" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 3.5 5 6v5.5c0 4.2 3 7.6 7 9 4-1.4 7-4.8 7-9V6z"/></svg></span>
+      <h1>Approve payment</h1>
+    </div>
+    <dl>
+      <div class="row"><dt>Requested by</dt>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.6 2.5 14.4 0 17M12 3.5c-2.5 2.6-2.5 14.4 0 17"/></svg>
+        <dd>{{origin}}</dd></div>
+      <div class="row"><dt>Merchant</dt>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 9.5 5.5 4h13L20 9.5M4 9.5V20h16V9.5M4 9.5h16"/></svg>
+        <dd>{{merchant}} · <span title="{{merchant_url}}">{{merchant_url}}</span></dd></div>
+      <div class="row"><dt>You pay</dt>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="2.5"/><path d="M5 6v6c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6M5 12v6c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-6"/></svg>
+        <dd><span class="big">{{zec}} ZEC</span><br>(shielded, Zcash {{network}})</dd></div>
+      <div class="row"><dt>To</dt>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3.5" y="6" width="17" height="12" rx="2"/><path d="M20.5 10h-4a2 2 0 0 0 0 4h4"/></svg>
+        <dd title="{{address}}">{{address_short}}</dd></div>
+      <div class="row"><dt>You receive</dt>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3.5 7h17v3a2 2 0 0 0 0 4v3h-17v-3a2 2 0 0 0 0-4z"/></svg>
+        <dd><span class="big">{{amount}} × {{item}}</span><br><span title="{{mint}}">token {{mint_short}}</span></dd></div>
+      <div class="row"><dt>In wallet</dt>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v4"/><rect x="4" y="7.5" width="16.5" height="11.5" rx="2"/></svg>
+        <dd title="{{payout}}">{{payout_short}} (Solana)</dd></div>
+    </dl>
+    <p class="note"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="flex:none"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v6M12 7.5v.5"/></svg>
+      <span>The ticket is locked on Solana for this wallet before anything is paid, and this wallet checks it. You claim it with a proof made on this computer, so Solana never learns which Zcash payment paid for it. If the payment is not final in time, the merchant can only take the item back after the refund window.</span></p>
+    <div class="buttons">
+      <button id="reject" type="button">Reject</button>
+      <button id="approve" type="button">Approve and pay</button>
+    </div>
+    <div id="result" role="status"></div>
+  </div>
+</main>
+<script>
+  const digest = "{{digest}}";
+  const decided = {{decided}};
+  const result = document.getElementById("result");
+  const buttons = [document.getElementById("approve"), document.getElementById("reject")];
+  function done(text, ok) {
+    buttons.forEach(b => b.disabled = true);
+    result.textContent = text;
+    result.style.color = ok ? "var(--ok)" : "var(--bad)";
+  }
+  if (decided) done("This checkout was already decided.", false);
+  async function decide(approve) {
+    buttons.forEach(b => b.disabled = true);
+    try {
+      const r = await fetch(location.pathname, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approve, digest }),
+      });
+      const body = await r.json();
+      if (!r.ok) return done(body.error || "Refused", false);
+      done(approve ? "Approved. Paying now; you can close this window." : "Rejected. Nothing was paid.", approve);
+      setTimeout(() => window.close(), 1500);
+    } catch (e) {
+      done("The wallet did not answer.", false);
+    }
+  }
+  buttons[0].addEventListener("click", () => decide(true));
+  buttons[1].addEventListener("click", () => decide(false));
+</script>
+</body>
+</html>

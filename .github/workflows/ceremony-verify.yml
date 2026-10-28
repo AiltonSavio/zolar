@@ -1,0 +1,37 @@
+name: ceremony-verify
+
+# The full transcript check (about an hour: it downloads the 1.2 GB Powers of Tau and the final zkey, compiles
+# the circuit and runs `snarkjs zkey verify`). Run it by hand after the ceremony and before relying on the key.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      ZOLAR_DATA: ${{ github.workspace }}/.zolar-data
+      ZOLAR_NO_CAP: "1"
+      ZOLAR_NODE_MB: "8000"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 10
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Install circom 2.2.3
+        run: |
+          mkdir -p .zolar-data/bin
+          curl -sSfL -o .zolar-data/bin/circom https://github.com/iden3/circom/releases/download/v2.2.3/circom-linux-amd64
+          echo "85342c7ff332d948df7c0c50ecf201e6129349aef550ce873f3c811b79fe53a3  .zolar-data/bin/circom" | sha256sum -c -
+          chmod +x .zolar-data/bin/circom
+      - name: Build the circuit and verify the whole transcript
+        run: |
+          pnpm --dir circuits install --frozen-lockfile
+          circuits/scripts/build.sh 8
+          node circuits/ceremony/ceremony.mjs verify

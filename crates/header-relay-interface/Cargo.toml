@@ -1,0 +1,8 @@
+[package]
+name = "header-relay-interface"
+version = "0.1.0"
+edition = "2021"
+description = "Layout of the Header Relay account and a read-only view for programs that trust a Header Relay"
+license = "MIT OR Apache-2.0"
+
+[dependencies]

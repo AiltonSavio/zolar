@@ -1,0 +1,7 @@
+{
+  "name": "final-block-tree-ref",
+  "private": true,
+  "type": "module",
+  "description": "Independent reference for the Header Relay's Final Block Tree root (circomlibjs Poseidon)",
+  "dependencies": { "circomlibjs": "0.1.7" }
+}

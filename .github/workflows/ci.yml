@@ -1,0 +1,231 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@8632757d5a758c452f724e9d837848c694a7bb48 # 1.91.1
+        with:
+          components: rustfmt, clippy
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+            programs/header-relay/target
+            programs/escrow/target
+            programs/vending/target
+          key: cargo-${{ hashFiles('Cargo.lock', 'programs/header-relay/Cargo.lock', 'programs/escrow/Cargo.lock', 'programs/vending/Cargo.lock') }}
+      - name: Install Solana toolchain (cargo build-sbf)
+        run: |
+          curl -sSfL -o solana-release.tar.bz2 https://github.com/anza-xyz/agave/releases/download/v2.3.11/solana-release-x86_64-unknown-linux-gnu.tar.bz2
+          echo "3127d066a6b9e3e5e5558a2d34112434a60d0410800d94e6bb12714315dc5f26  solana-release.tar.bz2" | sha256sum -c -
+          mkdir -p "$HOME/solana" && tar -xjf solana-release.tar.bz2 -C "$HOME/solana" && rm solana-release.tar.bz2
+          echo "$HOME/solana/solana-release/bin" >> "$GITHUB_PATH"
+      - name: Format
+        run: |
+          cargo fmt --all --check
+          cargo fmt --manifest-path programs/header-relay/Cargo.toml --check
+          cargo fmt --manifest-path programs/escrow/Cargo.toml --check
+          cargo fmt --manifest-path programs/vending/Cargo.toml --check
+      - name: Clippy
+        run: |
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path programs/header-relay/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path programs/escrow/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path programs/vending/Cargo.toml --all-targets -- -D warnings
+      - name: SBF build
+        run: |
+          cargo build-sbf --manifest-path programs/header-relay/Cargo.toml -- --locked
+          cargo build-sbf --manifest-path programs/escrow/Cargo.toml -- --locked
+          cargo build-sbf --manifest-path programs/vending/Cargo.toml -- --locked
+          python3 scripts/check-vending-sbf.py
+      - name: Tests (crate and LiteSVM)
+        run: cargo test --locked --workspace
+      - name: Tests (program unit tests)
+        run: |
+          cargo test --locked --manifest-path programs/header-relay/Cargo.toml
+          cargo test --locked --manifest-path programs/escrow/Cargo.toml
+          cargo test --locked --manifest-path programs/vending/Cargo.toml
+
+  vending-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@8632757d5a758c452f724e9d837848c694a7bb48 # 1.91.1
+        with:
+          components: rustfmt, clippy
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/vending-types/target
+            crates/vending-guest/target
+            crates/vending-prover/target
+          key: vending-host-${{ hashFiles('crates/vending-types/Cargo.lock', 'crates/vending-guest/Cargo.lock', 'crates/vending-prover/Cargo.lock') }}
+      - name: Shared types, native guest and keyless prover (including guest-to-Claim fixture)
+        run: |
+          for crate in vending-types vending-guest vending-prover; do
+            cargo fmt --manifest-path crates/$crate/Cargo.toml --check
+            cargo clippy --locked --manifest-path crates/$crate/Cargo.toml --all-targets -- -D warnings
+            cargo test --locked --manifest-path crates/$crate/Cargo.toml
+          done
+
+  pczt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@8632757d5a758c452f724e9d837848c694a7bb48 # 1.91.1
+        with:
+          components: rustfmt, clippy
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/zolar-pczt/target
+          key: pczt-${{ hashFiles('crates/zolar-pczt/Cargo.lock') }}
+      - name: Format, clippy and tests (zolar-pczt, own workspace)
+        run: |
+          cargo fmt --manifest-path crates/zolar-pczt/Cargo.toml --check
+          cargo clippy --locked --manifest-path crates/zolar-pczt/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path crates/zolar-pczt/Cargo.toml
+
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@8632757d5a758c452f724e9d837848c694a7bb48 # 1.91.1
+        with:
+          components: rustfmt, clippy
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            cli/target
+          key: cli-${{ hashFiles('cli/Cargo.lock') }}
+      - name: Format, clippy and tests (Payee and Payer CLIs, own workspace)
+        run: |
+          cargo fmt --manifest-path cli/Cargo.toml --check
+          cargo clippy --locked --manifest-path cli/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path cli/Cargo.toml
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Transaction ID search of the privacy check
+        run: python3 -I scripts/test_check_txid_absent.py
+      - name: Proving preparation guards
+        run: |
+          bash -n scripts/setup-vending-prover.sh
+          python3 -I scripts/test_vending_preparation.py
+
+  vending-tooling:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 10
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Settlement evidence and interrupted submission guards
+        run: |
+          pnpm --dir clients/vending-js install --frozen-lockfile
+          pnpm --dir clients/vending-js build
+          pnpm --dir sdk install --frozen-lockfile
+          pnpm --dir sdk lint
+          pnpm --dir sdk test scripts/check-vending-settlement.test.mjs scripts/submit-vending-claim.test.mjs
+
+  clients:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 10
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@8632757d5a758c452f724e9d837848c694a7bb48 # 1.91.1
+        with:
+          components: rustfmt
+      - name: Generated clients are up to date
+        run: |
+          pnpm --dir clients/codama install --frozen-lockfile
+          pnpm --dir clients/codama generate
+          git diff --check -- clients
+          test -z "$(git status --porcelain --untracked-files=all -- clients)"
+
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 10
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Install, lint (no warnings allowed), test, build
+        run: |
+          pnpm --dir dashboard install --frozen-lockfile
+          pnpm --dir dashboard lint
+          pnpm --dir dashboard test
+          pnpm --dir dashboard build
+
+  circuits:
+    runs-on: ubuntu-latest
+    env:
+      ZOLAR_DATA: ${{ github.workspace }}/.zolar-data
+      ZOLAR_NO_CAP: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 10
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@8632757d5a758c452f724e9d837848c694a7bb48 # 1.91.1
+      - name: Install circom 2.2.3
+        run: |
+          mkdir -p .zolar-data/bin
+          curl -sSfL -o .zolar-data/bin/circom https://github.com/iden3/circom/releases/download/v2.2.3/circom-linux-amd64
+          echo "85342c7ff332d948df7c0c50ecf201e6129349aef550ce873f3c811b79fe53a3  .zolar-data/bin/circom" | sha256sum -c -
+          chmod +x .zolar-data/bin/circom
+      - name: Circuit tests (depth-2 instance, real swap transactions)
+        run: |
+          pnpm --dir circuits install --frozen-lockfile
+          circuits/scripts/build.sh 2
+          node --test circuits/test/*.test.mjs
+      - name: The production circuit still compiles to the committed R1CS
+        run: |
+          circuits/scripts/build.sh 8
+          test "$(sha256sum "$ZOLAR_DATA/build/d8/private_claim_d8.r1cs" | cut -d' ' -f1)" = "$(cut -d' ' -f1 circuits/private_claim_d8.r1cs.sha256)"
+      - name: The committed proof verifies against the committed verification key
+        run: node circuits/node_modules/snarkjs/build/cli.cjs groth16 verify circuits/verification_key.json circuits/fixtures/swap2.public.json circuits/fixtures/swap2.proof.json
+      - name: Ceremony tool tests
+        run: node --test circuits/ceremony/test/*.test.mjs
+      - name: The committed verification key is the final key of the ceremony transcript (once it exists)
+        run: node circuits/ceremony/ceremony.mjs check-vk
+      - name: The verifying key constants are generated from the committed verification key
+        run: |
+          cargo run --locked -p zolar-claim --example gen_vk -- circuits/verification_key.json programs/escrow/src
+          test -z "$(git status --porcelain -- programs/escrow/src)"

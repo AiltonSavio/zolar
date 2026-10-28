@@ -1,0 +1,12 @@
+[package]
+name = "forge-header"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Builds test headers with a valid Equihash solution but a hash above the target"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+equihash = { version = "0.3.0", features = ["solver"] }
+hex = "0.4"
+sha2 = "0.10"

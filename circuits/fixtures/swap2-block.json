@@ -1,0 +1,13 @@
+{
+  "note": "Ticket 08 devnet swap, second run: transaction fee9e219... is the payment (tx 3 of 4)",
+  "zcash_testnet_block": 4517478,
+  "block_merkle_root_display": "70e0000b74772a6e462b28888302f2eca1c071418a71da7c1de7b9084b396184",
+  "txids_display": [
+    "dcde51fd81310b888caff6a887d6892ec4c9500a1e1ac1dda2eb4d68bfb3056d",
+    "781a82a7402d5b5c19a3b3e72d8871926cc2aa9851739b79ef88e7d9ae33c292",
+    "1d84412c94c70eca67f0b8abdb9fdabec44e12503435aa7dbc7e5260df22631e",
+    "fee9e219e5e1c48f5c619b6e411a2aafe675f5612e1d8544eba593731c20c75f"
+  ],
+  "index": 3,
+  "salt": "00e62f98943dec79e143a7e8ff583172ff9585f51fe575fd68cb78ba661b9cc0"
+}

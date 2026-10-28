@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "types": ["vite/client", "node"],
+    "baseUrl": ".",
+    "paths": {
+      "@solana/kit": ["./node_modules/@solana/kit"],
+      "@solana/program-client-core": ["./node_modules/@solana/program-client-core"],
+      "@relay-client": ["../clients/js/src/generated"],
+      "@escrow-client": ["../clients/escrow-js/src/generated"]
+    }
+  },
+  "include": ["src", "scripts", "vite.config.ts", "eslint.config.js"]
+}

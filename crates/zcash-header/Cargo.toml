@@ -1,0 +1,15 @@
+[package]
+name = "zcash-header"
+version = "0.1.0"
+edition = "2021"
+description = "no_std Zcash header checks shared by the Header Relay and off-chain tools"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+
+[dev-dependencies]
+equihash = "0.3.0"
+hex = "0.4"
+blake2b_simd = "1"
+sha2 = "0.10"
+serde_json = "1"
