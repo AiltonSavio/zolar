@@ -11,9 +11,25 @@ The Header Relay supports two checkout flows:
 
 Built for ZECATHON (Cross-Chain track). Vocabulary: [`GLOSSARY.md`](GLOSSARY.md). Design decisions: [`docs/adr/`](docs/adr).
 
-## Escrow demo and SDK
+## Checkout demo
 
-The demo shop exchanges shielded Zcash testnet ZEC for a ticket token on Solana devnet. A merchant service locks the ticket; the Payer's local wallet helper asks for approval, pays and makes a Private Claim. The helper stands in for wallet support. See [Build on Zolar](sdk/README.md) for the SDK and [the shop README](shop/README.md) to run the demo.
+Ben configures 100 tickets at **0.001 TAZ** each once. Ana connects a Solana
+devnet wallet, reserves one ticket, and opens the payment request in her
+Zcash-testnet wallet. She pays 100,000 zat plus her wallet fee from shielded
+funds, keeping the requested memo. After Finality Depth, a keyless prover
+makes the Payment Proof and Ana signs Claim to receive one SPL ticket.
+Ben performs no per-sale action. The Header Relay and prover still need to run.
+
+The Solana wallet receives the ticket and signs Reserve and Claim; it does
+not send ZEC. Ana's Zcash wallet sends the payment. Ben's dedicated shop
+address receives it. Ana pays Reserve's Solana fee and refundable rent;
+the Claim submitter pays its fee, permanent Payment Tag rent, and any new
+token-account rent. V1 has no fee sponsorship.
+
+Start with [the vending shop setup](shop/README.md#vending-checkout) and
+[prover preparation](#prepare-a-proving-host). The legacy Escrow checkout
+also remains available through the [SDK service setup](sdk/README.md#run-the-services);
+it uses a per-sale Payee service and a local wallet helper.
 
 ### Vending checkout (devnet; Claim mint pending)
 
@@ -29,9 +45,11 @@ payout, preventing payment redirection after release and nonce reuse.
 Ana can reserve the same nonce again to claim her payment if stock remains.
 Machine setup, Reserve, payment discovery and SP1 execution have been checked
 live. A full Groth16 Payment Proof and successful Claim mint remain unverified.
-External wallet support for NU7 and exact text-memo preservation still needs
-validation. A stateless prover HTTP service holds no keys and provides
-payment discovery, proof jobs, and job polling for the page.
+The recorded payment validates the payment statement. The browser-to-Zkool
+handoff, exact memo preservation through that handoff, and a full browser
+purchase still need a fresh end-to-end check. A stateless prover HTTP service
+holds no keys and provides payment discovery, proof jobs, and job polling
+for the page.
 See [ADR 0005](docs/adr/0005-vending-machines-claim-with-sp1-payment-proofs.md).
 
 This mode makes shop sales public through a dedicated Shop Viewing Key.
@@ -353,12 +371,96 @@ The deployed 96,360-byte ELF matches SHA-256
 `2a7feca3504d3d0a05bab4c850b58ce2a58434c69ba0c99b2b002e4175eacf65`.
 Claim minting with a real vending Payment Proof remains unverified.
 
+### Prepare a proving host
+
+The existing paid demo Reservation must not be paid again or released.
+Its public identifiers and guest hash are in
+[`scripts/vending-paid-demo.json`](scripts/vending-paid-demo.json).
+
+On the source machine, package tracked working files and the pinned public
+ELF. This includes uncommitted source edits, records every file hash, and
+excludes ignored files and wallet data. It does not require a GitHub push:
+
+```sh
+python3 -I scripts/prepare-vending-prover.py --out /tmp/zolar-prover.tgz
+bash scripts/setup-vending-prover.sh --plan
+scp /tmp/zolar-prover.tgz rented:zolar-prover.tgz
+ssh rented 'mkdir zolar-vending-paid && tar -xzf zolar-prover.tgz -C zolar-vending-paid'
+ssh -t rented 'cd zolar-vending-paid && bash scripts/setup-vending-prover.sh --run'
+```
+
+Choose a fresh remote directory and preserve the printed archive SHA-256.
+The host must be Ubuntu/Debian x86_64, have systemd and sudo/root access,
+and provide at least 32,000,000 KiB total RAM with 28,000,000 KiB available
+(the prover checks KiB, so a provider's nominal 32 GB may be insufficient).
+SP1 v6.10.0, Rust 1.97.1, protoc 28.3, and Go 1.24.0 are installed there.
+The guest is checked against the deployed Machine's pinned artifact and is
+never rebuilt by this script. Source and installer references:
+[SP1 installer](https://github.com/succinctlabs/sp1/blob/v6.10.0/sp1up/sp1up),
+[native gnark build](https://github.com/succinctlabs/sp1/blob/v6.10.0/crates/recursion/gnark-ffi/build.rs),
+and [Go releases](https://go.dev/dl/).
+
+`--run` installs, builds under a 3 GiB/no-swap cap, and proves only the
+existing payment. `--install`, `--build`, and `--prove` run each stage
+separately. `--serve` exposes the keyless prover on remote loopback port
+8088 for the browser demo; forward it with
+`ssh -N -L 8088:127.0.0.1:8088 rented`. No spending key, seed, identity,
+or Solana signer goes to the rented machine.
+
+Proving logs and `/usr/bin/time -v` measurements go under
+`.zolar-work/rented/`. Maximum process RSS is not aggregate prover memory.
+The proof uses a fresh Relay root; the script checks root membership again
+when it finishes. If the root has aged out, make a new proof against a fresh
+root. Do not weaken the root check. The setup, native gnark build, full proof
+resource usage, and Claim remain unverified on a rented host.
+
+Copy the `proof/` directory back locally. Before signing Claim, collect a
+read-only baseline (replace the identifiers using the public demo JSON):
+
+```sh
+node sdk/scripts/check-vending-settlement.mjs before \
+  --result /path/to/proof/result.json \
+  --machine MACHINE_ADDRESS --reservation RESERVATION_ADDRESS \
+  --out /tmp/vending-before.json
+```
+
+This requires the real Groth16 output and checks its Machine bindings and
+live Relay root. It refuses a release request that needs reconciliation.
+The default Claim submitter is the payout wallet; supply
+`--submitter PUBLIC_ADDRESS` if another wallet pays the fee. The checker
+never signs or sends transactions. To submit this exact one-shot proof, sign locally:
+
+```sh
+node sdk/scripts/submit-vending-claim.mjs \
+  --before /tmp/vending-before.json --result /path/to/proof/result.json \
+  --keypair /path/to/claim-submitter-devnet.json --out /tmp/vending-claim.json
+```
+
+This command rechecks the live root, simulates, signs, saves the expected
+signature before broadcast, and sends once. After any timeout, reconcile
+that journal and signature before retrying. Keep the signer local. Wait
+for finalization, then verify the signature:
+
+```sh
+node sdk/scripts/check-vending-settlement.mjs after \
+  --before /tmp/vending-before.json --result /path/to/proof/result.json \
+  --signature CLAIM_SIGNATURE --out /tmp/vending-settlement.json
+```
+
+The checker requires the exact Claim instruction and proof, a one-ticket
+transaction balance increase to the fixed payout, a closed Reservation,
+a permanent Payment Tag, the expected mint authority, and a replay
+simulation rejected specifically with `MissingReservation`. It records
+Claim CU and fees. It sends no replay transaction. Keep the baseline,
+proof, signature, and output together; a green execute run alone cannot
+pass settlement verification.
+
 ### Make your own demo shop
 
 Ben creates a dedicated testnet account, publishes its incoming Shop Viewing Key
 in a Machine, and offers 100 tickets at 0.001 TAZ each. Ana reserves one ticket
 with her Solana devnet wallet, pays 100,000 zat plus her Zcash wallet fee, and
-waits for the Relay's Finality Depth. A rented prover must still produce the
+waits for the Relay's Finality Depth. A suitable proving host must produce the
 Payment Proof before Claim can mint her ticket. Execute mode produces no proof.
 
 Use Zcash testnet and Solana devnet only. Keep all seed, identity and keypair
@@ -574,8 +676,10 @@ known Final Block Tree roots. Synthetic headers isolate consumer behavior; they 
 test Equihash. Halt tests inject the frozen Relay state to exercise the consumer's
 24-hour path. The suite also checks the syscall hash, payout binding, strict height
 threshold, request idempotence, the exact 900-second boundary, a later Halt, and
-Unix time zero. Native policy tests accept a Claim during and after the window; the
-LiteSVM rejects invalid Payment Proofs through the real verifier. Successful Claim settlement, a real SP1
-vending proof, devnet deployment and wallet payment behavior remain unverified.
+Unix time zero. Native policy tests accept a Claim during and after the window.
+LiteSVM rejects invalid Payment Proofs through the real verifier. Successful
+Claim settlement and a real SP1 vending proof remain unverified.
+The October 27 live run verified deployment, Reserve, one mined payment,
+discovery, and SP1 execution; browser-to-Zkool payment behavior remains unverified.
 The verifier has a positive SP1 fixture test, but that fixture is contributor-authored
 and is not a vending Payment Proof. See its README for this limitation.

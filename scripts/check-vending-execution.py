@@ -18,7 +18,15 @@ parser.add_argument("--machine", required=True)
 parser.add_argument("--reservation", required=True)
 parser.add_argument("--rpc", default="https://api.devnet.solana.com")
 parser.add_argument("--snapshot-dir", required=True, type=pathlib.Path)
+parser.add_argument("--require-proof", action="store_true", help="Reject execute-only output before settlement")
 args = parser.parse_args()
+result = json.loads(args.result.read_text())
+if args.require_proof:
+    if result.get("mode") != "groth16":
+        raise SystemExit("a Groth16 Payment Proof is required; execution is not settlement")
+    proof = result.get("proof")
+    if not isinstance(proof, str) or not re.fullmatch(r"(?:[0-9a-fA-F]{712}|[0-9a-fA-F]{776})", proof):
+        raise SystemExit("missing or malformed SP1 proof")
 args.snapshot_dir.mkdir(parents=True, exist_ok=True)
 
 
@@ -65,7 +73,6 @@ reservation = account(args.reservation, "reservation", program, 128)
 relay = account(b58encode(machine[100:132]), "relay", "6F4o7Fphgz5MS4BZrqbE4NyaLUKiAprDNdYTxif4sg9D", 5914)
 assert machine[:2] == bytes([1, 1]) and reservation[:2] == bytes([2, 1])
 assert relay[:4] == bytes([1, 1, 1, 0]) and relay[95] == 1, "running Zcash-testnet Relay required"
-result = json.loads(args.result.read_text())
 values = bytes.fromhex(result["public_values"])
 assert len(values) == 249 and values[0] == 1 and values[188] == 3 and not any(values[221:])
 assert struct.unpack_from("<I", values, 1)[0] == 0x77190AD9
@@ -84,6 +91,9 @@ assert values[109:141] in [relay[i:i + 32] for i in range(1818, 5914, 32)], "roo
 assert result["mode"] in ["execute", "groth16"]
 if result["mode"] == "execute":
     assert result["proof"] is None, "execution must not be represented as a proof"
+assert reservation[119] in [0, 1], "invalid release state"
+if reservation[119]:
+    raise SystemExit("Release has been requested; reconcile its Claim window before submitting")
 checks = {"machine": args.machine, "reservation": args.reservation, "nonce": b58encode(values[37:69]), "payout": b58encode(values[189:221]), "value_zat": amount, "height": height, "root": values[109:141].hex(), "relay_tip": struct.unpack_from("<I", relay, 36)[0], "relay_finalized": struct.unpack_from("<I", relay, 1050)[0], "root_known": True, "mode": result["mode"], "cycles": result["cycles"], "vkey_hash": result["vkey_hash"]}
 (args.snapshot_dir / "checks.json").write_text(json.dumps(checks, indent=2) + "\n")
 print("PASS: machine, nonce, payout, price, height window, SVK hash, diversifier, NU7 branch, guest vkey and live Relay root")

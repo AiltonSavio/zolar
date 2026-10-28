@@ -1,11 +1,79 @@
 # Checkout demo
 
-The demo shop uses the [Zolar SDK](../sdk/README.md) to exchange shielded
+Ben configures 100 tickets at 0.001 TAZ once. Ana reserves on Solana devnet,
+pays from an existing Zcash-testnet wallet, and uses a Payment Proof to Claim
+one ticket. Ben has no per-sale step. The relay and keyless prover must run.
+
+A real payment and SP1 execution are recorded; a Groth16 vending proof and
+successful ticket mint remain unverified. See the root README for the
+[current evidence](../README.md#live-demo-evidence-2026-10-27).
+
+## Vending checkout
+
+Set `VITE_CHECKOUT_MODE=vending`; the default `checkout` mode keeps the
+existing merchant/wallet flow. Configure `VITE_VENDING_MACHINE`,
+`VITE_VENDING_PROGRAM`, `VITE_VENDING_ADDRESS` (testnet Ironwood-only UA),
+`VITE_VENDING_RPC`, `VITE_PROVER_URL`, and `VITE_VENDING_ABI_URL`.
+The last URL must serve the authoritative machine-setup artifact described
+in the [SDK deployment binding](../sdk/README.md#deployment-binding).
+The page disables payment until it observes the testnet relay advance;
+120 seconds without progress disables it again.
+
+Connect a devnet Solana wallet, Reserve, then scan or open the ZIP-321
+request in an Ironwood-capable testnet wallet. Keep the exact amount and
+memo; pay once from shielded funds. Fees are extra. The page watches for
+the payment, reuses the existing finality calculation, requests a proof,
+and asks the Solana wallet to submit Claim. The success panel describes
+the minted ticket without an Escrow transaction-ID privacy claim.
+
+Nonce, detected payment, and submitted Claim signature are saved locally
+for recovery. After reload, reconnect the same wallet and use **Check
+reservation**. A pending Claim must be checked before another submission.
+Do not clear browser storage during a purchase. Proof failures can be
+retried without another Zcash payment. Release returns Solana rent and
+stock; it cannot refund Zcash. **Request release** first becomes available
+after expiry plus Finality Depth (or the Halt backstop). It starts a 15-minute
+Claim window, shown as a countdown. **Release** becomes available when that
+window ends. A detected payment can still Claim during the window. The page
+refreshes stored release requests, including requests made by another signer.
+
+### Start the vending page
+
+From the repository root, install the client and page dependencies, then
+load the public devnet configuration without changing your local env file:
+
+```sh
+pnpm --dir clients/vending-js install --frozen-lockfile
+pnpm --dir clients/vending-js build
+pnpm --dir sdk install --frozen-lockfile
+pnpm --dir shop install --frozen-lockfile
+set -a
+. shop/.env.vending.example
+set +a
+devserve --name zolar-vending-shop --port 5188 --mem 500M --force -- \
+  pnpm --dir shop dev --host 127.0.0.1 --port 5188 --strictPort
+```
+
+Open `http://127.0.0.1:5188`. The example targets the deployed demo Machine.
+For a new shop, use its own public configuration and authoritative binding.
+Follow [prover preparation](../README.md#prepare-a-proving-host) and forward
+its loopback API on port 8088 before making a purchase. Execute-only mode
+cannot mint a ticket. The Solana wallet signs Reserve and Claim and pays
+Solana fees/rent; the Zcash wallet signs and pays ZEC plus its wallet fee.
+Keep the Reservation and browser storage until settlement is verified.
+
+Shop sales are public through the dedicated Shop Viewing Key. Vending does
+not provide Escrow Private Claim transaction-ID privacy or a ZEC refund.
+Never put a Payer's wallet keys, seed, or viewing key into browser settings.
+
+## Legacy Escrow checkout
+
+The legacy Escrow shop uses the [Zolar SDK](../sdk/README.md) to exchange shielded
 Zcash testnet ZEC for a ticket token on Solana devnet. The shop needs no
 keys; the Payee runs `zolar-merchant`, and the Payer runs `zolar-wallet`
 on the same computer as their browser.
 
-## Run locally
+### Run the legacy services
 
 Run commands from the repository root. You need Node 22, pnpm 10, the
 release CLI binaries, funded test wallets, and the Private Claim proving
@@ -101,35 +169,6 @@ pnpm --dir shop test
 npx --prefix shop --no-install tsc --noEmit -p shop
 pnpm --dir shop build
 ```
-
-## Vending mode
-
-Set `VITE_CHECKOUT_MODE=vending`; the default `checkout` mode keeps the
-existing merchant/wallet flow. Configure `VITE_VENDING_MACHINE`,
-`VITE_VENDING_PROGRAM`, `VITE_VENDING_ADDRESS` (testnet Ironwood-only UA),
-`VITE_VENDING_RPC`, `VITE_PROVER_URL`, and `VITE_VENDING_ABI_URL`.
-The last URL must serve the authoritative machine-setup artifact described
-in the [SDK deployment binding](../sdk/README.md#deployment-binding).
-The page disables payment until it observes the testnet relay advance;
-120 seconds without progress disables it again.
-
-Connect a devnet Solana wallet, Reserve, then scan or open the ZIP-321
-request in an Ironwood-capable testnet wallet. Keep the exact amount and
-memo; pay once from shielded funds. Fees are extra. The page watches for
-the payment, reuses the existing finality calculation, requests a proof,
-and asks the Solana wallet to submit Claim. The success panel describes
-the minted ticket without an Escrow transaction-ID privacy claim.
-
-Nonce, detected payment, and submitted Claim signature are saved locally
-for recovery. After reload, reconnect the same wallet and use **Check
-reservation**. A pending Claim must be checked before another submission.
-Do not clear browser storage during a purchase. Proof failures can be
-retried without another Zcash payment. Release returns Solana rent and
-stock; it cannot refund Zcash. **Request release** first becomes available
-after expiry plus Finality Depth (or the Halt backstop). It starts a 15-minute
-Claim window, shown as a countdown. **Release** becomes available when that
-window ends. A detected payment can still Claim during the window. The page
-refreshes stored release requests, including requests made by another signer.
 
 ### Browser fixtures
 

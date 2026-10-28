@@ -9,13 +9,16 @@ import time
 parser = argparse.ArgumentParser()
 parser.add_argument('--url', default='http://127.0.0.1:5188')
 parser.add_argument('--out', default='.zolar-work/screenshots')
+parser.add_argument('--session', default='zolar-vending-shop')
 args = parser.parse_args()
 out = Path(args.out).resolve()
 out.mkdir(parents=True, exist_ok=True)
 
 
 def browser(*arguments):
-    result = subprocess.run(['agent-browser', '--session', 'zolar-vending-shop', *arguments], check=True, text=True, capture_output=True)
+    result = subprocess.run(['agent-browser', '--session', args.session, *arguments], text=True, capture_output=True)
+    if result.returncode:
+        raise RuntimeError(result.stderr or result.stdout)
     return result.stdout.strip()
 
 
@@ -44,13 +47,13 @@ try:
         browser('open', f'{args.url}/fixture.html?state={state}')
         wait_for('!!document.querySelector("button")')
         if state not in ['connect', 'sold-out', 'halted', 'stalled']:
-            browser('click', 'button:has-text("Connect Solana wallet")')
+            browser('find', 'role', 'button', 'click', '--name', 'Connect Solana wallet', '--exact')
             wait_for('!![...document.querySelectorAll("button")].find(b => b.textContent === "Reserve ticket" && !b.disabled)')
             if state != 'reserve':
-                browser('click', 'button:has-text("Reserve ticket")')
+                browser('find', 'role', 'button', 'click', '--name', 'Reserve ticket', '--exact')
                 if state == 'claim-failed':
                     wait_for('!![...document.querySelectorAll("button")].find(b => b.textContent === "Check claim")')
-                    browser('click', 'button:has-text("Check claim")')
+                    browser('find', 'role', 'button', 'click', '--name', 'Check claim', '--exact')
         wait_for(f'document.body.innerText.includes({json.dumps(expected)})')
         if state == 'payment':
             wait_for('!!document.querySelector(".payment-qr")')
@@ -66,14 +69,14 @@ try:
             assert browser('eval', 'document.documentElement.scrollWidth <= innerWidth') == 'true'
             browser('screenshot', str(out / f'{state}{suffix}.png'), '--full')
         if state == 'expired':
-            browser('click', 'button:has-text("Request release")')
+            browser('find', 'role', 'button', 'click', '--name', 'Request release', '--exact')
             wait_for('document.body.innerText.includes("Release in")')
             assert browser('eval', '[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Release").disabled') == 'true'
             browser('screenshot', str(out / 'release-requested-phone.png'), '--full')
         if state == 'release-window':
             assert browser('eval', '[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Release").disabled') == 'true'
         if state == 'release-ready':
-            browser('click', 'button:text-is("Release")')
+            browser('find', 'role', 'button', 'click', '--name', 'Release', '--exact')
             wait_for('!![...document.querySelectorAll("button")].find(b => b.textContent === "Reserve ticket")')
         assert not browser('errors'), f'Browser errors in {state}'
         print(f'PASS {state}: {args.url}/fixture.html?state={state}')
