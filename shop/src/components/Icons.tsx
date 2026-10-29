@@ -22,3 +22,6 @@ export const LinkIcon = () => (
 export const CheckIcon = () => (
   <svg {...base} width={18} height={18} strokeWidth={3}><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>
 );
+export const CloseIcon = () => <svg {...base}><path d="m6 6 12 12M18 6 6 18" /></svg>;
+export const ArrowIcon = () => <svg {...base}><path d="M5 12h14m-5-5 5 5-5 5" /></svg>;
+export const ChevronIcon = () => <svg {...base}><path d="m9 5 7 7-7 7" /></svg>;

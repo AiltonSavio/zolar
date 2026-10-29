@@ -10,7 +10,7 @@ use zolar_cli::{
     devtool::Devtool,
     prover::Prover,
     solana::parse_address,
-    wallet::{self, Config, Wallet},
+    wallet::{self, Config, PaymentWallet, Wallet},
 };
 
 /// `circuits/scripts/prove.sh` relative to the repository this binary was built from.
@@ -75,14 +75,15 @@ fn main() -> Result<()> {
         port: cli.port,
         allowed_origins: cli.allowed_origins,
         network: cli.network,
+        peers: vec![],
         rpc_url: cli.rpc_url,
         relay: parse_address(&relay)?,
         fee_payer: cli.fee_payer,
-        devtool: Devtool {
+        payment_wallet: PaymentWallet::Devtool(Devtool {
             binary: cli.devtool,
             wallet_dir: cli.wallet_dir,
             identity: cli.identity,
-        },
+        }),
         prover: Prover {
             script: cli.prove_script,
             data_dir: cli.zolar_data,

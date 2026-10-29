@@ -1,5 +1,5 @@
 import { base58 } from '@scure/base';
-import { base, request, type Fetch } from './http';
+import { base, request, type Fetch } from './http.js';
 
 export interface VendingRelay {
   tip: number;

@@ -1,6 +1,6 @@
 import { base58 } from '@scure/base';
 import { describe, expect, it } from 'vitest';
-import { encodeVendingMemo, paymentLink, zatoshiAmount, vendingStatus, VendingProverClient } from './vending';
+import { encodeVendingMemo, paymentLink, zatoshiAmount, vendingStatus, VendingProverClient } from './vending.js';
 
 const machine = Uint8Array.from({ length: 32 }, (_, i) => i);
 const payout = new Uint8Array(32).fill(42);

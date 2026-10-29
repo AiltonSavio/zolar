@@ -15,7 +15,7 @@ import {
   decodeVendingRelay,
   canRequestRelease,
   releaseSecondsRemaining,
-} from './vendingInstructions';
+} from './vendingInstructions.js';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -95,7 +95,7 @@ describe('program vending instruction codec', () => {
   });
 });
 
-import { createVendingChain, validateVendingBinding } from './vendingInstructions';
+import { createVendingChain, validateVendingBinding } from './vendingInstructions.js';
 import {
   fixtureBinding,
   fixtureAddress,
@@ -104,7 +104,7 @@ import {
   fixtureRelay,
   fixtureMint,
   mockVendingTransport,
-} from './fixtures/vending';
+} from './fixtures/vending.js';
 const deployment = {
   machine: fixtureMachine,
   program: fixtureProgram,

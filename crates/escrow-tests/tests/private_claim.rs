@@ -61,6 +61,23 @@ fn a_real_proof_pays_the_payer_and_closes_the_escrow() {
 }
 
 #[test]
+fn a_verified_nonlatest_root_still_releases_the_ticket_to_the_fixed_payout() {
+    let (mut w, deal, fx) = funded(1);
+    let start = w.tip();
+    w.finalize(start + 1);
+    let data = w.h.relay_data(&w.relay);
+    let view = relay_tests::relay_status(&w.relay, &data)
+        .running()
+        .unwrap();
+    assert_ne!(view.latest_root(), fx.root());
+    assert!(view.is_known_root(&fx.root()));
+    let ix = w.private_claim_ix(&deal, &fx.proof, fx.root());
+    let cu = w.claim(ix);
+    println!("CU PrivateClaim nonlatest {cu}");
+    assert_eq!(token_balance(&w.h, &w.payer_token), Some(deal.amount));
+}
+
+#[test]
 fn a_private_only_escrow_refuses_a_reveal_claim() {
     let (mut w, deal, _) = funded(1);
     let reveal = w.claim_ix_raw(&deal, 4_000_004, [1; 32], vec![], deal.index);

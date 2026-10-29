@@ -5,6 +5,7 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use solana_address::Address;
 use solana_hash::Hash;
@@ -24,6 +25,16 @@ const RATE_LIMIT_RETRIES: u32 = 8;
 pub struct HttpRpc {
     url: String,
     agent: ureq::Agent,
+}
+
+/// A signed transaction whose identity can be saved before any network submission. Retrying these
+/// exact bytes cannot perform a second transfer. A new blockhash requires explicit reconciliation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PreparedTransaction {
+    pub signature: String,
+    pub wire: String,
+    pub last_valid_block_height: u64,
+    pub context_slot: u64,
 }
 
 impl HttpRpc {
@@ -90,19 +101,95 @@ impl HttpRpc {
             .ok_or_else(|| "getBalance: no value".into())
     }
 
-    fn blockhash(&self) -> Result<Hash, String> {
+    /// Read-only JSON-RPC access for consumers that reconcile durable transactions and history.
+    pub fn request(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.call(method, params)?
+            .map_err(|e| format!("{method}: {e}"))
+    }
+
+    pub fn prepare(
+        &self,
+        instructions: &[Instruction],
+        payer: &Keypair,
+    ) -> Result<PreparedTransaction, TxError> {
         let result = self
-            .call("getLatestBlockhash", json!([{"commitment": "confirmed"}]))?
-            .map_err(|e| format!("getLatestBlockhash: {e}"))?;
+            .request("getLatestBlockhash", json!([{"commitment": "confirmed"}]))
+            .map_err(TxError::Other)?;
         let text = result["value"]["blockhash"]
             .as_str()
-            .ok_or("getLatestBlockhash: no blockhash")?;
+            .ok_or_else(|| TxError::Other("getLatestBlockhash: no blockhash".into()))?;
         let bytes: [u8; 32] = bs58::decode(text)
             .into_vec()
-            .map_err(|e| e.to_string())?
+            .map_err(|e| TxError::Other(e.to_string()))?
             .try_into()
-            .map_err(|_| "blockhash is not 32 bytes".to_string())?;
-        Ok(Hash::new_from_array(bytes))
+            .map_err(|_| TxError::Other("blockhash is not 32 bytes".into()))?;
+        let tx = Transaction::new(
+            &[payer],
+            Message::new(instructions, Some(&payer.pubkey())),
+            Hash::new_from_array(bytes),
+        );
+        Ok(PreparedTransaction {
+            signature: tx.signatures[0].to_string(),
+            wire: STANDARD.encode(wire(&tx)),
+            last_valid_block_height: result["value"]["lastValidBlockHeight"]
+                .as_u64()
+                .ok_or_else(|| TxError::Other("getLatestBlockhash: no expiry height".into()))?,
+            context_slot: result["context"]["slot"]
+                .as_u64()
+                .ok_or_else(|| TxError::Other("getLatestBlockhash: no context slot".into()))?,
+        })
+    }
+
+    pub fn submit_prepared(&self, tx: &PreparedTransaction) -> Result<String, TxError> {
+        let sent = self
+            .call(
+                "sendTransaction",
+                json!([tx.wire, {
+                    "encoding": "base64",
+                    "preflightCommitment": "confirmed",
+                    "maxRetries": 5,
+                }]),
+            )
+            .map_err(TxError::Other)?;
+        let signature = match sent {
+            Ok(value) => value.as_str().unwrap_or_default().to_string(),
+            Err(error) => {
+                return Err(match error.get("data").and_then(|d| d.get("err")) {
+                    Some(err) => tx_error(err),
+                    None => TxError::Other(format!("sendTransaction: {error}")),
+                })
+            }
+        };
+        if signature != tx.signature {
+            return Err(TxError::Other(
+                "RPC returned another transaction's signature".into(),
+            ));
+        }
+        let started = Instant::now();
+        while started.elapsed() < CONFIRM_TIMEOUT {
+            sleep(POLL);
+            // A failed status request is not a failed transaction: ask again until the deadline.
+            let Ok(Ok(statuses)) = self.call(
+                "getSignatureStatuses",
+                json!([[signature], {"searchTransactionHistory": true}]),
+            ) else {
+                continue;
+            };
+            let status = &statuses["value"][0];
+            if status.is_null() {
+                continue;
+            }
+            if !status["err"].is_null() {
+                return Err(tx_error(&status["err"]));
+            }
+            if matches!(
+                status["confirmationStatus"].as_str(),
+                Some("confirmed" | "finalized")
+            ) {
+                return Ok(signature);
+            }
+        }
+        Err(TxError::Other(format!("{signature} not confirmed in time")))
     }
 }
 
@@ -137,53 +224,7 @@ fn wire(tx: &Transaction) -> Vec<u8> {
 
 impl Cluster for HttpRpc {
     fn send(&mut self, instructions: &[Instruction], payer: &Keypair) -> Result<String, TxError> {
-        let blockhash = self.blockhash().map_err(TxError::Other)?;
-        let tx = Transaction::new(
-            &[payer],
-            Message::new(instructions, Some(&payer.pubkey())),
-            blockhash,
-        );
-        let sent = self
-            .call(
-                "sendTransaction",
-                json!([STANDARD.encode(wire(&tx)), {
-                    "encoding": "base64",
-                    "preflightCommitment": "confirmed",
-                    "maxRetries": 5,
-                }]),
-            )
-            .map_err(TxError::Other)?;
-        let signature = match sent {
-            Ok(value) => value.as_str().unwrap_or_default().to_string(),
-            Err(error) => {
-                return Err(match error.get("data").and_then(|d| d.get("err")) {
-                    Some(err) => tx_error(err),
-                    None => TxError::Other(format!("sendTransaction: {error}")),
-                })
-            }
-        };
-        let started = Instant::now();
-        while started.elapsed() < CONFIRM_TIMEOUT {
-            sleep(POLL);
-            // A failed status request is not a failed transaction: ask again until the deadline.
-            let Ok(Ok(statuses)) = self.call("getSignatureStatuses", json!([[signature]])) else {
-                continue;
-            };
-            let status = &statuses["value"][0];
-            if status.is_null() {
-                continue;
-            }
-            if !status["err"].is_null() {
-                return Err(tx_error(&status["err"]));
-            }
-            if matches!(
-                status["confirmationStatus"].as_str(),
-                Some("confirmed" | "finalized")
-            ) {
-                return Ok(signature);
-            }
-        }
-        Err(TxError::Other(format!("{signature} not confirmed in time")))
+        self.submit_prepared(&self.prepare(instructions, payer)?)
     }
 
     fn account_with_owner(

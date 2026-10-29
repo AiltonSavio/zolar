@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { bech32m } from '@scure/base';
 import { blake2b } from '@noble/hashes/blake2b';
-import { ironwoodReceiver } from './vendingAddress';
+import { ironwoodReceiver } from './vendingAddress.js';
 
 // Encoder is independent of the production inverse; fixture is an address, never a key.
 export function fixtureAddress(receiver = new Uint8Array(43).fill(7), extra = new Uint8Array()): string {

@@ -180,6 +180,73 @@ pub fn fetch_block_txids(
     )
 }
 
+/// A connection retained across a scan only for an explicitly configured peer pool.
+/// Every response is checked against the current requested hash, never a previous response.
+/// Default DNS discovery continues to choose a random peer independently for each block.
+pub struct BlockSource {
+    addresses: Vec<SocketAddr>,
+    next: usize,
+    network: Network,
+    peer: Option<Peer<std::net::TcpStream>>,
+}
+impl BlockSource {
+    pub fn new(hosts: &[String], network: Network) -> Result<Self> {
+        let mut addresses = p2p::resolve(hosts, network);
+        addresses.sort();
+        addresses.dedup();
+        addresses.shuffle(&mut rand::thread_rng());
+        addresses.truncate(40);
+        ensure!(!addresses.is_empty(), "no configured Zcash peers resolved");
+        Ok(Self {
+            addresses,
+            next: 0,
+            network,
+            peer: None,
+        })
+    }
+    pub fn fetch(&mut self, hash: &[u8; 32]) -> Result<Vec<[u8; 32]>> {
+        let started = std::time::Instant::now();
+        for _ in 0..self.addresses.len() {
+            if started.elapsed() > std::time::Duration::from_secs(90) {
+                break;
+            }
+            let mut peer = if let Some(peer) = self.peer.take() {
+                peer
+            } else {
+                let address = self.addresses[self.next % self.addresses.len()];
+                self.next += 1;
+                let Ok(peer) = Peer::connect(address, self.network) else {
+                    continue;
+                };
+                peer
+            };
+            if let Ok(txids) = peer
+                .getdata_block(hash)
+                .map_err(anyhow::Error::from)
+                .and_then(|raw| verified_block_txids(&raw, hash))
+            {
+                self.peer = Some(peer);
+                return Ok(txids);
+            }
+            // Drop the connection after transport, parsing or identity failure. The caller keeps
+            // its scan position and can reconnect on a later bounded retry.
+        }
+        bail!("configured peers did not return the requested verified block")
+    }
+}
+fn verified_block_txids(raw: &[u8], hash: &[u8; 32]) -> Result<Vec<[u8; 32]>> {
+    let (header, txids) = parse_block(raw)?;
+    ensure!(
+        header_hash(&header) == *hash,
+        "peer returned a different block"
+    );
+    ensure!(
+        zolar_claim::tx_merkle_root(&txids) == merkle_root(&header),
+        "block transactions differ from its Merkle root"
+    );
+    Ok(txids)
+}
+
 /// Where a payment was found.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Found {
@@ -270,6 +337,101 @@ mod tests {
             .iter()
             .map(|t| internal_txid(t.as_str().unwrap()).unwrap())
             .collect()
+    }
+
+    fn accept_test_peer(listener: &std::net::TcpListener) -> std::net::TcpStream {
+        use std::io::Write;
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+            .unwrap();
+        assert_eq!(
+            p2p::read_message(Network::Testnet, &mut stream).unwrap().0,
+            "version"
+        );
+        stream
+            .write_all(&p2p::encode_message(
+                Network::Testnet,
+                "version",
+                &p2p::PROTOCOL.to_le_bytes(),
+            ))
+            .unwrap();
+        stream
+            .write_all(&p2p::encode_message(Network::Testnet, "verack", &[]))
+            .unwrap();
+        assert_eq!(
+            p2p::read_message(Network::Testnet, &mut stream).unwrap().0,
+            "verack"
+        );
+        stream
+    }
+    #[test]
+    fn configured_scan_reuses_a_connection_but_rejects_a_previous_block_for_the_next_hash() {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let host = listener.local_addr().unwrap().to_string();
+        let server = std::thread::spawn(move || {
+            let mut stream = accept_test_peer(&listener);
+            let mut requested = Vec::new();
+            for _ in 0..3 {
+                let (command, payload) = p2p::read_message(Network::Testnet, &mut stream).unwrap();
+                assert_eq!(command, "getdata");
+                requested.push(payload[payload.len() - 32..].to_vec());
+                stream
+                    .write_all(&p2p::encode_message(Network::Testnet, "block", BLOCK))
+                    .unwrap();
+            }
+            requested
+        });
+        let (header, _) = parse_block(BLOCK).unwrap();
+        let hash = header_hash(&header);
+        let mut source = BlockSource::new(&[host], Network::Testnet).unwrap();
+        assert_eq!(source.fetch(&hash).unwrap(), expected_txids());
+        let other = [19; 32];
+        let scan = find_payment(&[hash, other], &[27; 32], |hash| source.fetch(hash));
+        assert_eq!(
+            scan.scanned, 1,
+            "a substituted block must not advance the scan"
+        );
+        assert!(scan.failure.is_some());
+        assert!(source.peer.is_none());
+        let requests = server.join().unwrap();
+        assert_eq!(requests, [hash.to_vec(), hash.to_vec(), other.to_vec()]);
+    }
+    #[test]
+    fn a_truncated_peer_reply_is_dropped_and_the_same_block_can_be_retried_on_a_new_connection() {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let host = listener.local_addr().unwrap().to_string();
+        let server = std::thread::spawn(move || {
+            for truncated in [true, false] {
+                let mut stream = accept_test_peer(&listener);
+                assert_eq!(
+                    p2p::read_message(Network::Testnet, &mut stream).unwrap().0,
+                    "getdata"
+                );
+                let reply = p2p::encode_message(Network::Testnet, "block", BLOCK);
+                stream
+                    .write_all(if truncated { &reply[..50] } else { &reply })
+                    .unwrap();
+            }
+        });
+        let hash = header_hash(&parse_block(BLOCK).unwrap().0);
+        let mut source = BlockSource::new(&[host], Network::Testnet).unwrap();
+        assert!(source.fetch(&hash).is_err());
+        assert!(source.peer.is_none());
+        assert_eq!(source.fetch(&hash).unwrap(), expected_txids());
+        server.join().unwrap();
+    }
+    #[test]
+    fn block_identity_and_transaction_merkle_root_are_independent_checks() {
+        let hash = header_hash(&parse_block(BLOCK).unwrap().0);
+        assert!(verified_block_txids(BLOCK, &hash).is_ok());
+        assert!(verified_block_txids(BLOCK, &[19; 32]).is_err());
+        let mut forged = BLOCK.to_vec();
+        forged[36] ^= 1;
+        let forged_hash = header_hash(&parse_block(&forged).unwrap().0);
+        assert!(verified_block_txids(&forged, &forged_hash).is_err());
     }
 
     #[test]

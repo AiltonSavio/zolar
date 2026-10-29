@@ -298,6 +298,22 @@ fn only_a_payment_newer_than_the_replaceable_chain_below_creation_is_accepted() 
 }
 
 #[test]
+fn standard_external_wallet_expiry_is_bounded_without_rewriting_the_payment() {
+    for ahead in [40, 120, 144] {
+        let mut w = World::new(FINALITY_DEPTH);
+        let deal = w.deal(txids(2), 0, 7, w.tip() + ahead);
+        w.create(&deal);
+        let data = w.h.svm.get_account(&deal.escrow).unwrap().data;
+        let escrow = Escrow::from_bytes(&data).unwrap();
+        assert_eq!(escrow.expiry_height, w.tip() + ahead);
+    }
+    let mut w = World::new(FINALITY_DEPTH);
+    let deal = w.deal(txids(2), 0, 7, w.tip() + 145);
+    let ix = w.create_ix(&deal);
+    assert_eq!(w.create_err(ix), BAD_EXPIRY);
+}
+
+#[test]
 fn create_checks_expiry_amount_bond_mode_commitment_and_the_vault() {
     let mut w = World::new(FINALITY_DEPTH);
     let tip = w.tip();
@@ -306,9 +322,9 @@ fn create_checks_expiry_amount_bond_mode_commitment_and_the_vault() {
     let ix = w.create_ix(&deal);
     assert_eq!(w.create_err(ix), BAD_EXPIRY, "expiry at the tip");
 
-    let deal = w.deal(txids(2), 0, 7, tip + 21);
+    let deal = w.deal(txids(2), 0, 7, tip + 145);
     let ix = w.create_ix(&deal);
-    assert_eq!(w.create_err(ix), BAD_EXPIRY, "more than 20 blocks ahead");
+    assert_eq!(w.create_err(ix), BAD_EXPIRY, "more than 144 blocks ahead");
 
     let deal = w.deal(txids(2), 0, 7, tip + 20);
     let ix = w.create_ix(&deal);

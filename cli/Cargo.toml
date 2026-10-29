@@ -23,6 +23,10 @@ path = "src/bin/zolar-merchant.rs"
 name = "zolar-wallet"
 path = "src/bin/zolar-wallet.rs"
 
+[[bin]]
+name = "zolar-connect"
+path = "src/bin/zolar-connect.rs"
+
 [dependencies]
 zolar-pczt = { path = "../crates/zolar-pczt" }
 zolar-claim = { path = "../crates/zolar-claim" }
@@ -32,6 +36,8 @@ header-relay-client = { path = "../clients/rust" }
 header-relay-interface = { path = "../crates/header-relay-interface" }
 anyhow = "1"
 base64 = "0.22"
+bincode = { version = "2", features = ["derive"] }
+bs58 = "0.5"
 clap = { version = "4", features = ["derive", "env"] }
 hex = "0.4"
 rand = "0.8"
@@ -46,11 +52,16 @@ solana-signer = "3"
 zcash_primitives = { version = "=0.31.0-pre.2", default-features = false }
 zcash_protocol = "=0.11.0-pre.1"
 ureq = { version = "3", features = ["json"] }
+url = "2"
+zcash_keys = { version = "=0.17.0-pre.2", default-features = false, features = ["orchard"] }
 
 # A workspace of its own: the Zcash dependency tree (librustzcash, pinned to the revision zcash-devtool
 # uses for NU7 and Ironwood) must not enter the Solana workspace lockfile, and the Solana crates have
 # their own. It joins both because a swap needs both.
 [workspace]
+
+[dev-dependencies]
+borsh = "1"
 
 [patch.crates-io]
 pczt = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }

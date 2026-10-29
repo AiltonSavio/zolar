@@ -13,6 +13,66 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tiny_http::{Header, Request, Response};
 
+pub(crate) fn private_dir(path: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)?;
+    Ok(())
+}
+
+/// Each persisted service directory has exactly one writer, including across processes.
+pub(crate) struct DataDirLock(std::fs::File);
+
+impl Drop for DataDirLock {
+    fn drop(&mut self) {
+        // Unlock explicitly: a concurrent fork can briefly inherit the open file description
+        // before exec closes it, so closing only our descriptor need not release the lock yet.
+        let _ = self.0.unlock();
+    }
+}
+
+pub(crate) fn lock_data_dir(path: &std::path::Path) -> Result<DataDirLock> {
+    use std::os::unix::fs::OpenOptionsExt;
+    private_dir(path)?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path.join(".lock"))?;
+    file.try_lock()
+        .context("service data directory is already in use")?;
+    Ok(DataDirLock(file))
+}
+
+/// Atomically replaces a private state file. Callers serialize this with their state lock and
+/// publish the new in-memory value only after this succeeds, before performing external effects.
+pub(crate) fn save_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    use std::{io::Write, os::unix::fs::OpenOptionsExt};
+    let tmp = path.with_extension(format!("tmp-{}", random_id(8)));
+    let result = (|| -> Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&tmp, path)?;
+        if let Some(parent) = path.parent() {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(tmp);
+    }
+    result
+}
+
 /// What the merchant sells. `amount` is in the mint's smallest unit.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Item {
@@ -101,6 +161,8 @@ pub struct EscrowCreated {
 pub enum Stage {
     AwaitingApproval,
     Rejected,
+    /// Payment identity is saved; the wallet is reconciling or retrying it without paying again.
+    Recovering,
     BuildingPayment,
     LockingItem,
     CheckingEscrow {
@@ -149,6 +211,10 @@ impl Stage {
 pub struct StartCheckout {
     pub merchant_url: String,
     pub order_id: String,
+    #[serde(default)]
+    pub zcash_address: Option<String>,
+    #[serde(default)]
+    pub zcash_account: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -126,6 +126,57 @@ fn a_mainnet_viewing_key_is_refused_as_a_testnet_key() {
     assert!(inspect(&built.pczt, &built.payee_ufvk, Network::Testnet).is_err());
 }
 
+#[test]
+fn transparent_funding_does_not_disclose_wallet_derivation_or_script_secrets() {
+    let built = build(MEMO);
+    let public_key = SecretKey::from_secret_bytes([9; 32])
+        .unwrap()
+        .public_key()
+        .serialize();
+    let secret = b"private transparent script preimage";
+    let original = pczt::roles::updater::Updater::new(pczt::Pczt::parse(&built.pczt).unwrap())
+        .update_transparent_with(|mut updater| {
+            updater.update_input_with(0, |mut input| {
+                input.set_bip32_derivation(
+                    public_key,
+                    zcash_transparent::pczt::Bip32Derivation::parse(
+                        [11; 32],
+                        vec![0x8000002c, 0x80000085, 0x80000000, 0, 0],
+                    )
+                    .unwrap(),
+                );
+                input.set_sha256_preimage(secret.to_vec());
+                input.set_proprietary(
+                    "private wallet metadata".into(),
+                    b"private wallet metadata".to_vec(),
+                );
+                Ok(())
+            })
+        })
+        .unwrap()
+        .finish()
+        .serialize()
+        .unwrap();
+    assert!(original.windows(secret.len()).any(|w| w == secret));
+    let copy = zolar_pczt::redact_for_payee(&original).unwrap();
+    assert!(!copy.windows(secret.len()).any(|w| w == secret));
+    assert_eq!(summary(&copy).unwrap(), summary(&original).unwrap());
+    assert_eq!(
+        inspect(&copy, &built.payee_ufvk, Network::Mainnet).unwrap(),
+        inspect(&original, &built.payee_ufvk, Network::Mainnet).unwrap()
+    );
+    let parsed = pczt::Pczt::parse(&copy).unwrap();
+    let input = serde_json::to_value(&parsed.transparent().inputs()[0]).unwrap();
+    for field in [
+        "bip32_derivation",
+        "sha256_preimages",
+        "proprietary",
+        "partial_signatures",
+    ] {
+        assert_eq!(input[field], serde_json::json!({}), "retained {field}");
+    }
+}
+
 /// A real mainnet transaction (block 3,522,900, 2026-10-19), as served by Blockchair: version 6 on
 /// the NU6.3 branch with an Ironwood bundle. Its ID is the one the explorers print.
 #[test]
