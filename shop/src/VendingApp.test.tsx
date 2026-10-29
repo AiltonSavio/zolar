@@ -81,6 +81,7 @@ function setup(
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  vi.restoreAllMocks();
 });
 async function reserve() {
   fireEvent.click(await screen.findByRole('button', { name: 'Connect Solana wallet' }));
@@ -127,6 +128,8 @@ describe('vending checkout', () => {
     },
   );
   it('requests release first and shows the Claim window countdown', async () => {
+    // A stopped clock keeps the countdown at 15:00 however slowly the test runs.
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now());
     const { chain } = setup({ expired: true });
     await reserve();
     expect(await screen.findByText('Reservation expired')).toBeTruthy();
