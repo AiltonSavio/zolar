@@ -1,9 +1,17 @@
 # Build on Zolar
 
 `@zolar/sdk` connects a shop page to `zolar-merchant` (the Payee's service)
-and `zolar-wallet` (the Payer's local helper). The Payer pays shielded Zcash;
+and `zolar-connect` (the Payer's keyless local connector to an existing Zkool wallet). The Payer pays shielded Zcash;
 a Private Claim releases the Payee's SPL tokens to the chosen Solana address.
 See the [demo shop](../shop/README.md) for a working page.
+
+The web demo requires explicit connection of an existing Zkool testnet account and a Solana
+receiving address. The connector calls the wallet's released prepare/sign/broadcast APIs; it does
+not import a seed or embed a new wallet. Its account-scoped signing JWT stays in the local backend.
+Software RPC signing is delegated: the connector's own authorization screen asks for consent to one
+fixed payment; it does not claim that Zkool displays a native popup. Follow the
+[current external-wallet setup](../shop/README.md). The `zolar-wallet` commands below are retained
+as legacy protocol-test setup, and cannot satisfy the web shop's external-wallet gate.
 
 ## Run the services
 
@@ -56,6 +64,9 @@ cli/target/release/zolar-merchant \
 The merchant creates private-only Escrows. Its worker marks Claims and
 refunds abandoned Escrows after the protocol's refund conditions are met.
 Orders and payment proposals are stored under `--data-dir`; keep it private.
+Run only one instance of each service per data directory; a process lock
+rejects another writer. Back up the entire directory together, including
+proposal salts and signed transaction intents.
 
 The Payer also needs the depth-8 proving artifacts and local prover from the
 root README's [Private Claim instructions](../README.md#the-swap). Point
@@ -124,8 +135,11 @@ pay.addEventListener('click', async () => {
   pay.disabled = true;
   approval.hidden = true;
   try {
+    const zcashWallet = await wallet.status();
+    if (!zcashWallet || zcashWallet.wallet !== 'Zkool' || !zcashWallet.address || !zcashWallet.account)
+      throw new Error('Connect your existing Zkool testnet wallet first');
     const result = await checkout({
-      merchant, wallet, itemId: 'ga', payout: payout.value.trim(),
+      merchant, wallet, zcashWallet, itemId: 'ga', payout: payout.value.trim(),
       approvalWindow,
       onApprovalUrl(url) {
         approval.href = url; // Fallback when the popup is blocked.
@@ -157,7 +171,8 @@ polls stages. `onOrder` receives the terms. Request errors throw; terminal
 
 Use `STEPS` for the six display labels and `stepIndex(view)` for the current
 index. Earlier indices are complete; `STEPS.length` means done, and `-1`
-means failed. Handle rejection and failure separately from the stepper.
+means failed or recovering. Handle rejection, failure, and recovery separately
+from the stepper; recovery does not establish which steps have completed.
 
 | Wallet stage | Display step |
 |---|---|
@@ -167,6 +182,7 @@ means failed. Handle rejection and failure separately from the stepper.
 | `waiting_for_finality` | Finality |
 | `proving` | Local proof |
 | `claimed` | Claim submitted |
+| `recovering` | Retrying the saved payment; keep polling |
 | `done` | Complete |
 | `rejected`, `failed` | Terminal outcome |
 
@@ -177,6 +193,46 @@ the payment could be in, not a lookup of the actual payment's block.
 The default polling interval is two seconds. An `AbortSignal` stops the
 page watching; the wallet keeps working. Keep the wallet running after
 payment so it can finish the Claim. Jobs are persisted for restart recovery.
+After a payment may have been broadcast, a temporary error enters
+`recovering`, which is not terminal. The helper retries the saved payment
+and reconciles finalized Claim or Refund evidence. It never creates a new
+payment to recover that job. A confirmed Claim is shown as `claimed` until
+finalized; missing accounts alone do not mean success.
+
+The merchant retains a proposal's original salt, Escrow address, and signed
+creation transaction across retries. It also reconciles abandoned Escrows
+for refunds. Keep service data when upgrading. Old records whose salt and
+Escrow address were already lost cannot be reconstructed automatically:
+they remain reserved for operator reconciliation rather than creating a
+replacement Escrow. Prepayment jobs interrupted before payment intent is
+saved end as `failed`; a new checkout requires fresh approval.
+
+## Restore an approved checkout
+
+Check for an existing checkout before enabling a new purchase. The connector restores read access
+only for the same allowed shop origin and configured external account. Active approved jobs take
+priority over receipts; unapproved jobs and approval secrets are not returned.
+
+```ts
+import { WalletClient, watchCheckout } from '@zolar/sdk';
+
+const wallet = new WalletClient('http://127.0.0.1:7878');
+const saved = await wallet.resume(); // null means no matching approved checkout
+if (saved) {
+  const final = await watchCheckout({
+    wallet, ...saved, maxPollErrors: Infinity,
+    onStage: (view) => renderSavedCheckout(view),
+  });
+  renderSavedCheckout(final);
+}
+```
+
+These operations use only GET requests. They never create an order, authorize payment or replace a
+transaction. Render the saved job's item, price and payout, even if the selected Solana wallet or
+catalog changes. The demo keeps polling across outages and can restore its receipt after reload.
+A dismissed terminal receipt is remembered by job ID in session storage; an active payment cannot
+be dismissed to enable another purchase. The SDK's finite polling limit remains available to other
+clients; a client that stops watching can later reacquire the same job through `resume()`.
 
 ## HTTP boundary and security
 
@@ -186,20 +242,21 @@ sends the payment proposal (base64 redacted PCZT) to the last endpoint and
 receives the commitment salt.
 
 The wallet listens only on `127.0.0.1`, checks the Host, and allows exact
-shop Origins. The page uses `GET /status`, `POST /checkout`, and
+shop Origins. The page uses `GET /status`, read-only `GET /resume`, `POST /checkout`, and
 `GET /jobs/{id}` (with the returned bearer token). Approval is shown at
 `GET /approve/{secret}` and submitted by `POST` on the wallet's own origin;
 the approval covers a digest of the terms and expires after ten minutes.
-The wallet checks the Escrow before paying. The shop page never receives
-the Zcash transaction ID or salt. The Payee gets the redacted PCZT, which
+The connector checks the Escrow before paying. Allowed shop origins can discover the configured Zcash account
+number and address while the connector is running; Connect selects that account for checkout. The page never receives the wallet capability,
+private PCZT, signed Zcash transaction, Zcash transaction ID or salt. The Payee gets the redacted PCZT, which
 removes the Payer's viewing key, spent-note values, change data, and witness.
 See the root README's [privacy table](../README.md#what-each-party-learns)
 for what the Payee and network services still learn.
 
 ## Limits
 
-- The local helper stands in for Zcash wallet support; this is not a
-  checkout supported by ordinary Zcash wallets today.
+- The web demo uses the existing Zkool testnet wallet through its authenticated local API.
+  Vizor and browser-extension Zcash signing are not implemented. See [setup and limits](../shop/README.md).
 - A Private Claim needs about 2 GiB of memory and about one minute of local
   proving. Its payment block can contain at most 256 transactions.
 - This checkout is a Zcash testnet / Solana devnet demo, with test tokens.
@@ -214,7 +271,7 @@ pnpm --dir clients/vending-js build
 pnpm --dir sdk install --frozen-lockfile
 pnpm --dir sdk typecheck
 pnpm --dir sdk test
-pnpm --dir sdk build
+pnpm --dir sdk test:package   # build, then import the public package in native Node ESM
 ```
 
 ## Vending checkout (testnet / devnet)

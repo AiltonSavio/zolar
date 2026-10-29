@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { checkout, finalityProgress, stepIndex, STEPS } from './checkout';
-import { MerchantClient, WalletClient } from './clients';
-import type { JobView, OrderTerms, Stage } from './types';
+import { checkout, watchCheckout, finalityProgress, stepIndex, STEPS } from './checkout.js';
+import { MerchantClient, WalletClient } from './clients.js';
+import type { JobView, OrderTerms, Stage } from './types.js';
 
 const terms: OrderTerms = {
   order_id: 'o1',
@@ -47,6 +47,16 @@ function fakes(stages: (Stage | Error)[]) {
 const noSleep = async () => {};
 
 describe('checkout', () => {
+  it('binds checkout to the explicitly selected external Zcash account without sending credentials', async () => {
+    const f = fakes([{ stage: 'rejected' }]);
+    await checkout({ merchant: f.merchant, wallet: f.wallet, itemId: 'ga', payout: 'P', sleep: noSleep,
+      zcashWallet: { wallet: 'Zkool', network: 'testnet', relay: 'Relay', address: 'utest1selected', account: 7 } });
+    const start = f.calls.find((c) => c.url === 'http://wallet/checkout')!;
+    expect(JSON.parse(String(start.init?.body))).toEqual({ merchant_url: 'http://shop', order_id: 'o1',
+      zcash_address: 'utest1selected', zcash_account: 7 });
+    expect(f.calls.find((c) => c.url === 'http://shop/orders')!.init?.body).not.toContain('utest1selected');
+  });
+
   it('creates the order, hands the wallet the merchant and order, and follows stages to done', async () => {
     const done: Stage = { stage: 'done', escrow: 'E', claim: 'C', txid_found_on_solana: false };
     const f = fakes([
@@ -112,6 +122,18 @@ describe('checkout', () => {
   });
 });
 
+describe('readonly recovery', () => {
+  it('keeps the same paid job through a long outage without creating or approving a replacement', async () => {
+    const f=fakes([{stage:'paying',escrow:'E'},...Array.from({length:30},()=>new Error('connector offline')),
+      {stage:'done',escrow:'E',claim:'C',txid_found_on_solana:false}]);
+    const seen:JobView[]=[];
+    const final=await watchCheckout({wallet:f.wallet,job:'j1',token:'tok',maxPollErrors:Infinity,sleep:noSleep,onStage:v=>seen.push(v)});
+    expect(final.stage).toBe('done');expect(seen.map(v=>v.stage)).toEqual(['paying','recovering','done']);
+    expect(seen[1]).toMatchObject({job:'j1',payout:'Payout',price_zats:100000,item:'General admission'});
+    expect(f.calls.every(c=>c.url==='http://wallet/jobs/j1'&&!c.init?.method)).toBe(true);
+  });
+});
+
 describe('progress', () => {
   it('maps every stage to a step', () => {
     expect(stepIndex({ stage: 'awaiting_approval' })).toBe(0);
@@ -131,5 +153,16 @@ describe('progress', () => {
     expect(finalityProgress(w(107))).toEqual({ done: 6, of: 10, tip: 107 });
     expect(finalityProgress(w(130))).toEqual({ done: 10, of: 10, tip: 130 });
     expect(finalityProgress({ stage: 'paying', escrow: 'E' })).toBeNull();
+  });
+
+  it('keeps watching a recovering checkout without pretending a step is complete', async () => {
+    const recovering = { stage: 'recovering' } as Stage;
+    expect(stepIndex(recovering)).toBe(-1);
+    const f = fakes([recovering, { stage: 'done', escrow: 'E', claim: 'C', txid_found_on_solana: false }]);
+    const seen: string[] = [];
+    const result = await checkout({ merchant: f.merchant, wallet: f.wallet, itemId: 'ga', payout: 'P',
+      sleep: noSleep, onStage: (v) => seen.push(v.stage) });
+    expect(result.final.stage).toBe('done');
+    expect(seen).toEqual(['recovering', 'done']);
   });
 });

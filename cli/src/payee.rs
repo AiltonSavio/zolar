@@ -10,7 +10,7 @@ use escrow_client::{
 use solana_address::Address;
 use solana_signer::Signer;
 use zolar_pczt::inspect;
-use zolar_relayer::rpc::HttpRpc;
+use zolar_relayer::rpc::{HttpRpc, PreparedTransaction};
 
 use crate::{
     Network, block_seconds, internal_txid, pczt_network, random_salt,
@@ -21,7 +21,7 @@ use crate::{
 };
 
 /// Expiry is at most this many blocks above the relay tip (the Escrow enforces the same bound).
-const MAX_EXPIRY_AHEAD: u32 = 20;
+const MAX_EXPIRY_AHEAD: u32 = 144;
 
 pub struct CreateEscrow {
     /// The Zcash network of the payment (decides how the viewing key is read).
@@ -57,7 +57,46 @@ pub struct Created {
     pub expiry_height: u32,
 }
 
+pub(crate) struct PreparedEscrow {
+    pub escrow: Address,
+    pub transaction: PreparedTransaction,
+    pub txid: String,
+    pub expiry_height: u32,
+}
+
 pub fn create_escrow(a: &CreateEscrow) -> Result<Created> {
+    let salt = random_salt();
+    let prepared = prepare_escrow(a, salt)?;
+    // A failed/uncertain send must retain this salt. It identifies the same Escrow on retry.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&a.salt_out)
+        .with_context(|| format!("creating {} (it must not exist)", a.salt_out.display()))?;
+    std::io::Write::write_all(&mut file, hex::encode(salt).as_bytes())?;
+    file.sync_all()?;
+    let rpc = HttpRpc::new(&a.rpc_url);
+    let signature = rpc
+        .submit_prepared(&prepared.transaction)
+        .map_err(crate::solana::tx_error)?;
+    println!("Escrow created      : {}", prepared.escrow);
+    println!("signature           : {signature}");
+    println!(
+        "salt written to {} (give it to the Payer privately)",
+        a.salt_out.display()
+    );
+    Ok(Created {
+        escrow: prepared.escrow,
+        signature,
+        txid: prepared.txid,
+        expiry_height: prepared.expiry_height,
+    })
+}
+
+/// Validates and signs a creation without sending it. The merchant must durably save the proposal
+/// and this transaction before submission, including its locally computed signature.
+pub(crate) fn prepare_escrow(a: &CreateEscrow, salt: [u8; 32]) -> Result<PreparedEscrow> {
     ensure!(a.min_zats > 0, "--min-zats must be positive");
     let pczt = std::fs::read(&a.pczt).with_context(|| format!("reading {}", a.pczt.display()))?;
     let ufvk = std::fs::read_to_string(&a.ufvk_file)
@@ -113,7 +152,6 @@ pub fn create_escrow(a: &CreateEscrow) -> Result<Created> {
     // own height window.
 
     let txid = internal_txid(&report.txid)?;
-    let salt = random_salt();
     let commitment = zolar_claim::payment_commitment(&txid, &salt)?;
 
     let payee = load_keypair(&a.keypair)?;
@@ -126,15 +164,6 @@ pub fn create_escrow(a: &CreateEscrow) -> Result<Created> {
         token.amount,
         a.amount
     );
-
-    // The salt goes to disk before any transaction so a crash cannot lose the only copy.
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&a.salt_out)
-        .with_context(|| format!("creating {} (it must not exist)", a.salt_out.display()))?;
-    std::io::Write::write_all(&mut file, hex::encode(salt).as_bytes())?;
 
     let escrow = Escrow::find_pda(&payee.pubkey(), commitment).0;
     let vault = associated_token_account(&escrow, &a.mint);
@@ -152,18 +181,12 @@ pub fn create_escrow(a: &CreateEscrow) -> Result<Created> {
         .expiry_height(report.expiry_height)
         .claim_mode(if a.private_only { 1 } else { 0 })
         .instruction();
-    let signature = send(&mut rpc, &[create_vault, create], &payee)?;
-    println!("Escrow created      : {escrow}");
-    println!("signature           : {signature}");
-    println!("commitment          : {}", hex::encode(commitment));
-    println!("Bond required       : {}", a.bond);
-    println!(
-        "salt written to {} (give it to the Payer privately)",
-        a.salt_out.display()
-    );
-    Ok(Created {
+    let transaction = rpc
+        .prepare(&[create_vault, create], &payee)
+        .map_err(crate::solana::tx_error)?;
+    Ok(PreparedEscrow {
         escrow,
-        signature,
+        transaction,
         txid: report.txid,
         expiry_height: report.expiry_height,
     })

@@ -39,6 +39,9 @@ export interface OrderView {
   escrow: string | null;
 }
 
+/** Read access to an existing paid checkout; grants no approval or payment authority. */
+export interface CheckoutResume { job: string; token: string }
+
 export interface CheckoutStarted {
   job: string;
   /** Shows the wallet that a status request comes from the page that started the job. */
@@ -51,6 +54,7 @@ export interface CheckoutStarted {
 export type Stage =
   | { stage: 'awaiting_approval' }
   | { stage: 'rejected' }
+  | { stage: 'recovering' }
   | { stage: 'building_payment' }
   | { stage: 'locking_item' }
   | { stage: 'checking_escrow'; escrow: string }
@@ -91,6 +95,9 @@ export interface WalletStatus {
   wallet: string;
   network: 'testnet' | 'mainnet';
   relay: string;
+  /** Present only when an existing external wallet has answered the connector. */
+  address?: string;
+  account?: number;
 }
 
 export const TERMINAL_STAGES: readonly StageName[] = ['rejected', 'done', 'failed'];

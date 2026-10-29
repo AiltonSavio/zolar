@@ -57,12 +57,16 @@ pub fn send(
     instructions: &[Instruction],
     payer: &Keypair,
 ) -> Result<String> {
-    cluster.send(instructions, payer).map_err(|e| match e {
+    cluster.send(instructions, payer).map_err(tx_error)
+}
+
+pub(crate) fn tx_error(e: TxError) -> anyhow::Error {
+    match e {
         TxError::Program { index, code } => {
             anyhow::anyhow!("instruction {index} failed: {}", error_name_any(code))
         }
         TxError::Other(message) => anyhow::anyhow!("{message}"),
-    })
+    }
 }
 
 fn error_name_any(code: u32) -> String {

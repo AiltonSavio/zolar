@@ -141,3 +141,141 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--ink); outline-o
 .payment-open { display: flex; align-items: center; justify-content: center; min-height: 56px; padding: 10px 20px; background: var(--yellow); border: 2px solid var(--yellow); border-radius: 10px; font: 800 22px var(--display); text-decoration: none; }
 .payment-open:hover { border-color: var(--ink); }
 .payment-link { width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--ink); border-radius: 6px; }
+
+/* Wallet entry: one stable control, including after an account change. */
+.wallet-trigger { width: 100%; justify-content: flex-start; padding: 15px 16px; border: 2px solid var(--ink); background: var(--paper); min-height: 82px; text-align: left; gap: 14px; }
+.wallet-avatar { display: grid; place-items: center; flex: none; width: 42px; height: 42px; background: var(--yellow); border-radius: 12px; }
+.wallet-avatar img { width: 30px; height: 30px; border-radius: 8px; }
+.wallet-trigger-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.wallet-trigger-text strong { font: 700 22px var(--display); }
+.wallet-trigger-text .small { font-size: 12px; color: var(--muted); }
+.wallet-trigger > svg { flex: none; }
+.wallet-help { margin-top: 12px; max-width: 40ch; }
+.connected-dot { width: 9px; height: 9px; flex: none; border-radius: 50%; background: var(--ink); box-shadow: 0 0 0 5px #f3b72440; }
+.wallet-connected .wallet-avatar { background: #f3b72440; }
+
+/* Native dialog top layer keeps focus and interaction inside the active modal. */
+.modal { color: var(--ink); background: var(--paper); border: 2px solid var(--ink); border-radius: 18px; padding: 0; width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); box-shadow: 0 20px 80px #0003; }
+.modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 28px 28px 22px; border-bottom: 2px dotted var(--yellow); }
+.modal-head h2 { font-size: 32px; }
+.modal-head h2:focus { outline: none; }
+.modal-body { padding: 24px 28px 28px; }
+.icon-button { padding: 0; min-height: 44px; width: 44px; flex: none; border: 1.5px solid var(--ink); border-radius: 50%; background: var(--paper); }
+.modal-body p { margin-top: 0; }
+.wallet-options { display: flex; flex-direction: column; gap: 10px; margin: 20px 0; }
+.wallet-option { width: 100%; padding: 14px 16px; border: 1.5px solid #1113; background: var(--paper); gap: 14px; text-align: left; }
+.wallet-option > span { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.wallet-option strong { font: 700 20px var(--display); }
+.wallet-option-icon { width: 38px; height: 38px; border-radius: 10px; flex: none; }
+.address-option { width: 100%; padding: 16px 0; border: 0; border-top: 2px dotted var(--yellow); border-radius: 0; background: var(--paper); text-align: left; font: 500 14px var(--mono); }
+.address-option span { flex: 1; }
+.modal-footnote { padding-top: 20px; margin: 20px 0 0 !important; border-top: 1px solid #1112; font-size: 11px; color: var(--muted); line-height: 1.6; }
+.text-button { min-height: 44px; border: 0; background: transparent; padding: 6px 0; font: 500 13px var(--mono); text-decoration: underline; text-underline-offset: 4px; }
+.selected-wallet { padding: 14px 16px 8px; border: 1.5px solid var(--yellow); border-radius: 10px; margin-bottom: 20px; }
+.full-address { overflow-wrap: anywhere; word-break: break-word; font-size: 13px; }
+.selected-wallet .full-address { margin: 6px 0; }
+.address-form { display: flex; flex-direction: column; gap: 16px; }
+.address-form .input { padding-top: 8px; padding-bottom: 8px; }
+.modal-error { margin: 16px 0 0; }
+.payment-total { display: flex; align-items: center; gap: 18px; margin-bottom: 24px; }
+.payment-total .price { font-size: 36px; }
+.payment-total .small { margin: 6px 0 0; }
+.payment-shield { display: grid; place-items: center; width: 64px; height: 64px; flex: none; background: var(--yellow); border-radius: 50%; }
+.payment-shield svg { width: 30px; height: 30px; }
+.payment-terms { display: flex; flex-direction: column; gap: 16px; margin: 0 0 24px; padding: 20px 0; border-top: 1px solid #1112; border-bottom: 1px solid #1112; }
+.payment-terms dt { font: 400 12px var(--mono); color: var(--muted); margin-bottom: 4px; }
+.payment-terms dd { margin: 0; font: 600 18px var(--display); }
+.payment-terms dd.full-address { font: 400 13px/1.6 var(--mono); display: flex; align-items: flex-start; gap: 8px; }
+.payment-terms dd svg { flex: none; margin-top: 2px; }
+.wallet-handoff { display: flex; gap: 12px; margin-bottom: 22px; }
+.wallet-handoff strong { font: 600 15px var(--mono); }
+.wallet-handoff p { margin: 5px 0 0; line-height: 1.6; }
+.handoff-dot { width: 8px; height: 8px; background: var(--yellow); border-radius: 50%; margin-top: 8px; flex: none; box-shadow: 0 0 0 4px #f3b72430; }
+.dialog-primary { width: 100%; font-size: 19px !important; }
+.approval-fallback { display: block; text-align: center; margin-top: 14px; }
+.approval-origin { color: var(--ink); overflow-wrap: anywhere; }
+.review-payment { padding: 0 36px 30px; display: flex; gap: 20px; align-items: center; }
+.review-payment p { max-width: 42ch; }
+
+/* Motion gives feedback and makes checkout state changes easier to follow. */
+:root { --ease-out: cubic-bezier(.23, 1, .32, 1); }
+button { transition: transform 140ms var(--ease-out); }
+button:active:not(:disabled) { transform: scale(.98); transition-duration: 80ms; }
+.modal { pointer-events: none; opacity: 0; transform: translateY(6px) scale(.98); transition: opacity 140ms var(--ease-out), transform 180ms var(--ease-out), display 180ms allow-discrete, overlay 180ms allow-discrete; }
+.modal[open] { pointer-events: auto; opacity: 1; transform: none; transition-duration: 180ms, 220ms, 220ms, 220ms; }
+.modal::backdrop { background: #1116; opacity: 0; transition: opacity 140ms var(--ease-out), display 180ms allow-discrete, overlay 180ms allow-discrete; }
+.modal[open]::backdrop { opacity: 1; }
+.stub, .stub-bottom, .hero { opacity: 1; transform: none; transition: opacity 180ms var(--ease-out), transform 220ms var(--ease-out); }
+.step-dot { transition: transform 160ms var(--ease-out); }
+.step-now .step-dot { transform: scale(1.04); }
+.meter span { width: 100%; transform-origin: left; transition: transform 220ms var(--ease-out); }
+.privacy-badge { opacity: 1; transform: none; transition: opacity 180ms var(--ease-out), transform 240ms var(--ease-out); }
+@starting-style {
+  .modal[open] { opacity: 0; transform: translateY(6px) scale(.98); }
+  .modal[open]::backdrop { opacity: 0; }
+  .stub, .stub-bottom, .hero { opacity: 0; transform: translateY(8px); }
+  .privacy-badge { opacity: 0; transform: scale(.94) rotate(-4deg); }
+}
+@media (hover: hover) and (pointer: fine) {
+  button.primary:hover:not(:disabled), .wallet-trigger:hover:not(:disabled) { transform: translateY(-1px); }
+  .wallet-option:hover:not(:disabled) { transform: translateX(2px); border-color: var(--ink); }
+}
+@media (prefers-reduced-motion: reduce) {
+  button, .modal, .modal[open], .stub, .stub-bottom, .hero, .step-dot, .privacy-badge { transform: none !important; transition-property: opacity; transition-duration: 80ms; }
+  .modal::backdrop { transition-duration: 80ms; }
+  .meter span { transition: none; }
+  @starting-style { .modal[open], .stub, .stub-bottom, .hero, .privacy-badge { transform: none; } }
+}
+html[data-input="keyboard"] button, html[data-input="keyboard"] .modal, html[data-input="keyboard"] .modal::backdrop,
+html[data-input="keyboard"] .stub-bottom, html[data-input="keyboard"] .hero, html[data-input="keyboard"] .privacy-badge { transition: none; }
+@media (max-width: 600px) {
+  .modal-head { padding: 22px 20px 18px; }
+  .modal-body { padding: 20px; }
+  .modal-head h2 { font-size: 28px; }
+  .review-payment { padding: 0 20px 24px; align-items: flex-start; flex-direction: column; gap: 12px; }
+}
+
+html[data-input="keyboard"] button { transform: none !important; }
+
+/* Keep the payment review and its approval action together in the viewport. */
+.payment-modal { width: min(520px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); }
+.payment-modal .modal-head { padding: 20px 24px 16px; }
+.payment-modal .modal-body { padding: 18px 24px 20px; }
+.payment-modal .payment-total { gap: 14px; margin-bottom: 16px; }
+.payment-modal .payment-shield { width: 52px; height: 52px; }
+.payment-modal .payment-terms { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 16px; margin-bottom: 16px; padding: 14px 0; }
+.payment-modal .payment-terms > div { min-width: 0; }
+.payment-modal .payment-wallet { grid-column: 1 / -1; }
+.payment-modal .wallet-handoff { margin-bottom: 16px; }
+.payment-modal .wallet-handoff p { line-height: 1.4; }
+.payment-modal .modal-footnote { margin-top: 14px !important; padding-top: 12px; line-height: 1.45; }
+@media (max-height: 740px), (max-width: 400px) {
+  .payment-modal .modal-head { padding: 14px 16px 12px; }
+  .payment-modal .modal-head h2 { font-size: 28px; }
+  .payment-modal .modal-body { padding: 12px 16px 16px; }
+  .payment-modal .payment-total { margin-bottom: 10px; gap: 12px; }
+  .payment-modal .payment-total .price { font-size: 30px; }
+  .payment-modal .payment-shield { width: 44px; height: 44px; }
+  .payment-modal .payment-shield svg { width: 24px; height: 24px; }
+  .payment-modal .payment-terms { padding: 10px 0; margin-bottom: 12px; gap: 10px 12px; }
+  .payment-modal .payment-terms dd { font-size: 16px; line-height: 1.25; }
+  .payment-modal .payment-terms dd.full-address { font-size: 12px; line-height: 1.4; }
+  .payment-modal .wallet-handoff { gap: 10px; margin-bottom: 12px; }
+  .payment-modal .wallet-handoff strong { display: block; font-size: 13px; line-height: 1.35; }
+  .payment-modal .wallet-handoff p { font-size: 12px; margin-top: 4px; }
+  .payment-modal .dialog-primary { min-height: 48px; padding: 10px 12px; font-size: 17px !important; }
+  .payment-modal .approval-fallback { margin-top: 8px; font-size: 12px; }
+  .payment-modal .modal-footnote { margin-top: 10px !important; padding-top: 10px; }
+}
+
+@media (max-width: 360px) {
+  .payment-modal .modal-head { gap: 8px; padding: 12px; }
+  .payment-modal .modal-head h2 { font-size: 24px; }
+  .payment-modal .modal-head .eyebrow { font-size: 10px; }
+  .payment-modal .modal-body { padding: 10px 12px 12px; }
+  .payment-modal .payment-total { margin-bottom: 8px; }
+  .payment-modal .payment-terms { gap: 8px; padding: 8px 0; margin-bottom: 10px; }
+  .payment-modal .wallet-handoff { margin-bottom: 10px; }
+  .payment-modal .dialog-primary { font-size: 16px !important; gap: 8px; }
+  .payment-modal .modal-footnote { margin-top: 8px !important; padding-top: 8px; }
+}

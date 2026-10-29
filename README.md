@@ -71,7 +71,7 @@ You play both sides, using faucet funds only. You need Rust 1.91.1, Solana CLI 2
 git clone https://github.com/AiltonSavio/zolar && cd zolar
 cargo build --release --manifest-path cli/Cargo.toml    # about 10 minutes the first time
 
-# zcash-devtool, patched to set a PCZT's expiry height
+# zcash-devtool for the legacy protocol CLI tests, with explicit short expiry support
 git clone https://github.com/zcash/zcash-devtool ../zcash-devtool
 git -C ../zcash-devtool checkout 0b3436b
 git -C ../zcash-devtool apply "$PWD/tools/zcash-devtool-0b3436b.patch"
@@ -131,7 +131,7 @@ Each run takes about 8 minutes: create the payment, lock the Escrow, pay, wait f
 
 ## Build a checkout
 
-- **Escrow checkout:** the [SDK](sdk/README.md) connects a shop page to the Payee's `zolar-merchant` and the Payer's local `zolar-wallet`. See the [demo shop](shop/README.md).
+- **Escrow checkout:** the [SDK](sdk/README.md) connects a shop page to the Payee's `zolar-merchant` and the Payer's existing [Zkool](https://github.com/hhanh00/zkool2) testnet wallet. Zkool signs the payment; `zolar-connect`, a local connector with no Zcash keys, checks the Escrow, broadcasts the signed payment and makes the Private Claim. Two shop checkouts paid this way settled: [3QanzC…](https://explorer.solana.com/tx/3QanzC4oqbJKbmddUtUooNQyv2eopppBvDqmAQdiwrQy8N2tWioVKXzNCPRCQBtKyERAxdy88HKDT6fSihS8mkGa?cluster=devnet) and [4Ap2GN…](https://explorer.solana.com/tx/4Ap2GNtcmVmyvDmNHN7NKrLSMmYF25NsE7uPPcUhFtma8B8H8yA99ct63wNLtK2DvUbsACJ6fqMSweYfMBZ4DBcV?cluster=devnet). Wallet Escrows allow an expiry up to 144 blocks ahead; see [ADR 0006](docs/adr/0006-external-wallets-keep-their-prepared-payment-effects.md) and the [demo shop](shop/README.md).
 - **Vending checkout** *(experimental)*: the Payee sets up stock once and a keyless prover makes the Payment Proof. A Claim with a real proof is not yet verified. See [`programs/vending`](programs/vending/README.md).
 
 ## What each party learns
@@ -139,12 +139,13 @@ Each run takes about 8 minutes: create the payment, lock the Escrow, pay, wait f
 | Who | Learns | Does not learn |
 |---|---|---|
 | Anyone reading Solana | Escrow terms, and when it is claimed or refunded | With a Private Claim: the transaction ID, its block or the salt |
+| Shop page, after wallet connection | The Zkool account and Zcash address, the Solana receiving address, item, price and checkout stages | Wallet credentials, the signed Zcash transaction, its ID or the salt |
 | Payee | The transaction ID, and the amount and memo of its own output | The Payer's viewing key, other notes or change |
 | Zcash peers | Which recent blocks were fetched | Any transaction ID |
 | Payer's light wallet server | The whole payment, and the Payer's IP | Anything on Solana |
 | Solana RPC node | Transactions sent through it, with the sender's IP | The Zcash transaction behind a Private Claim |
 
-A Private Claim hides *which* transaction paid, not *that* a swap happened: on a quiet chain, the Escrow's 20 to 30 block window leaves few candidates.
+A Private Claim hides *which* transaction paid, not *that* a swap happened: on a quiet chain, the Escrow's height window (20 to 30 blocks for a CLI swap, up to 144 for a wallet checkout) leaves few candidates.
 
 ## Security model
 
@@ -179,7 +180,7 @@ Keeping a relay at the tip costs about 0.07 SOL a day on testnet and 0.02 SOL a 
 |---|---|
 | `programs/` | Header Relay, Escrow and Vending programs (Pinocchio) |
 | `crates/` | Header verification, relayer, claim and PCZT helpers, vending prover, LiteSVM tests |
-| `cli/` | `zolar-payer`, `zolar-payee`, `zolar-merchant`, `zolar-wallet` |
+| `cli/` | `zolar-connect`, `zolar-payer`, `zolar-payee`, `zolar-merchant`, and the legacy `zolar-wallet` helper |
 | [`circuits/`](circuits/README.md) | Private Claim circuit and ceremony tooling |
 | `clients/` | Codama definitions and generated clients |
 | [`sdk/`](sdk/README.md), [`shop/`](shop/README.md), [`dashboard/`](dashboard/README.md) | Checkout SDK, demo shop, read-only dashboard |
@@ -191,6 +192,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build-sbf --manifest-path programs/escrow/Cargo.toml   # likewise header-relay and vending
 cargo test --workspace                                        # about 5 minutes
+cargo test --manifest-path cli/Cargo.toml                     # CLI and Zkool connector
 pnpm --dir clients/codama install && pnpm --dir clients/codama generate   # regenerate clients
 ```
 

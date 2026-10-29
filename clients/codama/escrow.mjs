@@ -105,7 +105,7 @@ const instructions = [
     name: 'createEscrow',
     docs: [
       'Locks `amount` tokens from the payee in the vault for the Payer wallet `payout`. The vault is a fresh, empty token account of the mint whose owner is the Escrow PDA.',
-      'The expiry must lie in (relay tip, relay tip + 20].',
+      'The expiry must lie in (relay tip, relay tip + 144].',
     ],
     discriminators: [fieldDiscriminatorNode('discriminator')],
     accounts: [
@@ -232,7 +232,7 @@ const instructions = [
 
 const errors = [
   ['wrongAccount', 'An account is not the one the Escrow expects'],
-  ['badExpiry', 'Expiry is not in (relay tip, relay tip + 20]'],
+  ['badExpiry', 'Expiry is not in (relay tip, relay tip + 144]'],
   ['zeroAmount', 'Amount is zero'],
   ['commitmentOutOfField', 'Commitment is not below the BN254 modulus'],
   ['badTokenAccount', 'A token account has the wrong mint, owner, state, delegate or close authority'],

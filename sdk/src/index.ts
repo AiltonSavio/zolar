@@ -1,6 +1,8 @@
-export { MerchantClient, WalletClient, DEFAULT_WALLET_URL } from './clients';
+export { MerchantClient, WalletClient, DEFAULT_WALLET_URL } from './clients.js';
 export {
   checkout,
+  watchCheckout,
+  type WatchCheckoutOptions,
   openApprovalWindow,
   stepIndex,
   finalityProgress,
@@ -8,9 +10,9 @@ export {
   type CheckoutOptions,
   type CheckoutResult,
   type StepKey,
-} from './checkout';
-export { ZolarError } from './http';
-export * from './types';
-export * from './vending';
-export { ironwoodReceiver } from './vendingAddress';
-export * from './vendingInstructions';
+} from './checkout.js';
+export { ZolarError } from './http.js';
+export * from './types.js';
+export * from './vending.js';
+export { ironwoodReceiver } from './vendingAddress.js';
+export * from './vendingInstructions.js';

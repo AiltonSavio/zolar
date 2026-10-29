@@ -11,5 +11,5 @@ export default defineConfig({
   build: { rollupOptions: { output: { manualChunks: { solana: ['@zolar/sdk'] } } } },
   resolve: { alias: { '@zolar/sdk': here('../sdk/src/index.ts') } },
   server: { fs: { allow: [here('..')] } },
-  test: { environment: 'jsdom', include: ['src/**/*.test.{ts,tsx}'] },
+  test: { environment: 'jsdom', setupFiles: ['src/testSetup.ts'], include: ['src/**/*.test.{ts,tsx}'] },
 });

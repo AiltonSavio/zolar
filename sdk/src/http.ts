@@ -23,12 +23,12 @@ export async function request<T>(
   } catch (e) {
     throw new ZolarError(`${url}: ${(e as Error).message}`, null);
   }
-  const body = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
+  const body = (await res.json().catch(() => undefined)) as (T & { error?: string }) | null | undefined;
   if (!res.ok) {
     throw new ZolarError(body?.error ?? `${url}: HTTP ${res.status}`, res.status);
   }
-  if (body === null) throw new ZolarError(`${url}: the answer is not JSON`, res.status);
-  return body;
+  if (body === undefined) throw new ZolarError(`${url}: the answer is not JSON`, res.status);
+  return body as T;
 }
 
 export function base(url: string): string {

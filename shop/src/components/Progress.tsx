@@ -4,11 +4,20 @@ import { CheckIcon } from './Icons';
 
 /** The checkout stages as a stepper, with the live detail of the current one. */
 export function Progress({ view, cluster }: { view: JobView; cluster: ShopConfig['cluster'] }) {
+  if (view.stage === 'recovering') {
+    return (
+      <section className="stub-bottom progress" role="status">
+        <p className="eyebrow">Checkout in progress</p>
+        <h2 className="display">Reconnecting to your checkout</h2>
+        <p>Your Zkool connection is restoring the saved checkout and its current status. Keep it running.</p>
+      </section>
+    );
+  }
   const current = stepIndex(view);
   const finality = finalityProgress(view);
   const escrow = 'escrow' in view ? view.escrow : null;
   const detail = (key: string): React.ReactNode => {
-    if (key === 'approve' && current === 0) return 'Approve in the Zolar Wallet window.';
+    if (key === 'approve' && current === 0) return 'Approve in your Zkool connection window.';
     if (key === 'lock' && escrow)
       return (
         <a href={explorer(cluster, 'address', escrow)} target="_blank" rel="noreferrer">
@@ -22,7 +31,7 @@ export function Progress({ view, cluster }: { view: JobView; cluster: ShopConfig
         <>
           {finality.done} of {finality.of} blocks on top · about {left} min left
           <span className="meter" aria-hidden="true">
-            <span style={{ width: `${(100 * finality.done) / finality.of}%` }} />
+            <span style={{ transform: `scaleX(${finality.done / finality.of})` }} />
           </span>
         </>
       );
@@ -35,8 +44,8 @@ export function Progress({ view, cluster }: { view: JobView; cluster: ShopConfig
       <div className="bottom-head">
         <div>
           <p className="eyebrow">Checkout in progress</p>
-          <h2 className="display">Processing your ticket</h2>
-          <p className="mono muted">Your shielded Zcash payment is being verified on Solana.</p>
+          <h2 className="display">{view.stage === 'awaiting_approval' ? 'Ready when you are' : 'Processing your ticket'}</h2>
+          <p className="mono muted">{view.stage === 'awaiting_approval' ? 'Review the payment and approve in your Zkool connection to continue.' : 'Your shielded Zcash payment is being verified on Solana.'}</p>
         </div>
         <div className="total">
           <p className="eyebrow">Order total</p>

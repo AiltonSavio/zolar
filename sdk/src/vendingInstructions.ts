@@ -16,8 +16,8 @@ import {
   getReleaseReservationInstruction,
   getReleaseReservationInstructionDataEncoder,
 } from '@zolar/vending-client';
-import { ironwoodReceiver } from './vendingAddress';
-import type { VendingProof, VendingRelay, VendingReservation } from './vending';
+import { ironwoodReceiver } from './vendingAddress.js';
+import type { VendingProof, VendingRelay, VendingReservation } from './vending.js';
 
 export { PublicKey };
 const RELAY_OWNER = '6F4o7Fphgz5MS4BZrqbE4NyaLUKiAprDNdYTxif4sg9D';

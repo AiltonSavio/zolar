@@ -12,8 +12,12 @@ pub mod payee;
 pub mod payer;
 pub mod prover;
 pub mod rpc;
+pub(crate) mod settlement;
 pub mod solana;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod wallet;
+pub mod zkool;
 
 use anyhow::{Context, Result, bail};
 

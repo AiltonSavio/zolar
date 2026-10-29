@@ -13,8 +13,8 @@ pub enum EscrowError {
     /// 1 - An account is not the one the Escrow expects
     #[error("An account is not the one the Escrow expects")]
     WrongAccount = 0x1,
-    /// 2 - Expiry is not in (relay tip, relay tip + 20]
-    #[error("Expiry is not in (relay tip, relay tip + 20]")]
+    /// 2 - Expiry is not in (relay tip, relay tip + 144]
+    #[error("Expiry is not in (relay tip, relay tip + 144]")]
     BadExpiry = 0x2,
     /// 3 - Amount is zero
     #[error("Amount is zero")]

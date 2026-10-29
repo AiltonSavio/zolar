@@ -1,6 +1,6 @@
-import type { MerchantClient, WalletClient } from './clients';
-import { ZolarError } from './http';
-import { isTerminal, type JobView, type OrderTerms, type Stage } from './types';
+import type { MerchantClient, WalletClient } from './clients.js';
+import { ZolarError } from './http.js';
+import { isTerminal, type JobView, type OrderTerms, type Stage, type WalletStatus } from './types.js';
 
 export interface CheckoutOptions {
   merchant: MerchantClient;
@@ -8,6 +8,8 @@ export interface CheckoutOptions {
   itemId: string;
   /** The customer's Solana wallet: the item goes here. */
   payout: string;
+  /** Explicitly selected external Zcash wallet; the connector checks this account again. */
+  zcashWallet?: WalletStatus;
   /**
    * A window opened synchronously in the click handler (browsers block popups opened later); the
    * wallet's approval page is loaded into it. See {@link openApprovalWindow}.
@@ -47,15 +49,11 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
  * page never sees the Zcash transaction ID or the salt.
  */
 export async function checkout(o: CheckoutOptions): Promise<CheckoutResult> {
-  const sleep = o.sleep ?? defaultSleep;
-  const pollMs = o.pollMs ?? 2_000;
-  const maxErrors = o.maxPollErrors ?? 15;
-
   const order = await o.merchant.createOrder(o.itemId, o.payout);
   o.onOrder?.(order);
   let started;
   try {
-    started = await o.wallet.startCheckout(o.merchant.url, order.order_id);
+    started = await o.wallet.startCheckout(o.merchant.url, order.order_id, o.zcashWallet);
   } catch (e) {
     o.approvalWindow?.close();
     throw e;
@@ -66,33 +64,66 @@ export async function checkout(o: CheckoutOptions): Promise<CheckoutResult> {
     o.onApprovalUrl?.(started.approve_url);
   }
 
+  return { order, job: started.job, final: await watchCheckout({ ...o, job: started.job, token: started.token, initialView: { job: started.job, item: order.item.name, price_zats: order.item.price_zats, payout: order.payout, stage: 'awaiting_approval' } }) };
+}
+
+export interface WatchCheckoutOptions {
+  wallet: WalletClient;
+  /** Last known public state, retained while the connector is unreachable. */
+  initialView?: JobView;
+  job: string;
+  token: string;
+  onStage?: (view: JobView) => void;
+  pollMs?: number;
+  signal?: AbortSignal;
+  maxPollErrors?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** Read an existing checkout through settlement. Never creates an order or authorizes payment. */
+export async function watchCheckout(o: WatchCheckoutOptions): Promise<JobView> {
+  const sleep = o.sleep ?? defaultSleep;
+  const pollMs = o.pollMs ?? 2_000;
+  const maxErrors = o.maxPollErrors ?? 15;
+  let token = o.token;
+  let lastView: JobView | undefined = o.initialView;
   let lastKey = '';
   let errors = 0;
   for (;;) {
     if (o.signal?.aborted) throw new ZolarError('checkout stopped watching (the wallet keeps going)', null);
     let view: JobView;
     try {
-      view = await o.wallet.job(started.job, started.token);
+      view = await o.wallet.job(o.job, token);
       errors = 0;
     } catch (e) {
       errors += 1;
       if (errors > maxErrors) throw e;
+      if (lastView) {
+        const recovering: JobView = { job: lastView.job, item: lastView.item,
+          price_zats: lastView.price_zats, payout: lastView.payout, stage: 'recovering' };
+        const key = JSON.stringify(recovering);
+        if (key !== lastKey) { lastKey = key; o.onStage?.(recovering); }
+      }
+      if (e instanceof ZolarError && [401, 403, 404].includes(e.status ?? 0)) {
+        try { const saved = await o.wallet.resume(); if (saved?.job === o.job) token = saved.token; } catch { /* The existing job remains pending during an outage. */ }
+      }
       await sleep(pollMs);
       continue;
     }
+    lastView = view;
     const key = JSON.stringify(view);
     if (key !== lastKey) {
       lastKey = key;
       o.onStage?.(view);
     }
-    if (isTerminal(view)) return { order, job: started.job, final: view };
+    if (isTerminal(view)) return view;
     await sleep(pollMs);
   }
 }
 
 /** The steps a checkout page shows, in order. */
 export const STEPS = [
-  { key: 'approve', label: 'Approve in Zolar Wallet' },
+  { key: 'approve', label: 'Authorize your Zcash wallet' },
   { key: 'lock', label: 'Ticket locked on Solana' },
   { key: 'pay', label: 'Payment sent on Zcash' },
   { key: 'final', label: 'Zcash block final on Solana' },
@@ -123,6 +154,7 @@ export function stepIndex(stage: Stage): number {
     case 'done':
       return STEPS.length;
     case 'failed':
+    case 'recovering':
       return -1;
   }
 }

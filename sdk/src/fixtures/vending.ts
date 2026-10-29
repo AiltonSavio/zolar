@@ -2,9 +2,9 @@
 import { Transaction, type TransactionInstruction } from '@solana/web3.js';
 import { base58 } from '@scure/base';
 import { Buffer } from 'buffer';
-import type { VendingBinding, VendingConnection } from '../vendingInstructions';
-import { PublicKey } from '../vendingInstructions';
-import { hex } from '../vending';
+import type { VendingBinding, VendingConnection } from '../vendingInstructions.js';
+import { PublicKey } from '../vendingInstructions.js';
+import { hex } from '../vending.js';
 
 export const fixtureMachine = 'Stake11111111111111111111111111111111111111';
 export const fixtureProgram = 'BPFLoaderUpgradeab1e11111111111111111111111';

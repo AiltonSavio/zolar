@@ -66,88 +66,106 @@ Shop sales are public through the dedicated Shop Viewing Key. Vending does
 not provide Escrow Private Claim transaction-ID privacy or a ZEC refund.
 Never put a Payer's wallet keys, seed, or viewing key into browser settings.
 
-## Legacy Escrow checkout
+## Escrow checkout with an external Zcash wallet
 
-The legacy Escrow shop uses the [Zolar SDK](../sdk/README.md) to exchange shielded
-Zcash testnet ZEC for a ticket token on Solana devnet. The shop needs no
-keys; the Payee runs `zolar-merchant`, and the Payer runs `zolar-wallet`
-on the same computer as their browser.
+The customer connects a Solana wallet to receive a ticket and an **existing Zkool testnet wallet**
+to pay shielded ZEC. Zkool owns the Zcash keys and signs the actual transaction. `zolar-connect`
+is a local communications/proof service; it has no seed phrase, Zcash wallet database or spending
+key. The shop refuses the old development wallet helper as a payment connection.
 
-### Run the legacy services
+Supported wallet API: official [Zkool 6.35.0](https://github.com/hhanh00/zkool2/releases/tag/zkool-v6.35.0),
+`zkool_graphql`, API version 1.0. This is a local wallet-service connection, not a browser extension
+or Vizor integration. Software API signing has no wallet-native confirmation popup: the local
+connector explicitly asks permission for the agreed payment before invoking the wallet signer.
 
-Run commands from the repository root. You need Node 22, pnpm 10, the
-release CLI binaries, funded test wallets, and the Private Claim proving
-artifacts. Follow the SDK's [service setup](../sdk/README.md#run-the-services)
-for the catalog, keys, patched devtool, and circuit prerequisites. Keep
-wallets and service data outside the repository.
+### Prerequisites
 
-1. Start the merchant in its own terminal, using your prepared file paths:
+- A funded existing Zkool **testnet** account with spendable shielded ZEC.
+- Its authenticated GraphQL service on a literal loopback address, such as
+  `http://127.0.0.1:8000/graphql`, started with `--coin 1` and a current NU7 testnet
+  lightwalletd such as `https://testnet.zec.rocks:443`.
+- An ES256 JWT issued by that wallet service's owner with `{sub: ACCOUNT_ID, write: true, exp: ...}`.
+  The connector refuses admin tokens (`sub: 0`). Keep this delegated spending capability private;
+  never put it in a `VITE_` variable, URL, browser storage, screenshots or source control.
+- The existing funded merchant, ticket inventory, Solana devnet fee key, Private Claim proving
+  artifacts and local prover from the root README. The fee key only pays Solana fees.
+- A devnet Escrow deployment matching this build's 144-block expiry policy. The older deployment
+  rejects the wallet proposal before any payment. [ADR 0006](../docs/adr/0006-external-wallets-keep-their-prepared-payment-effects.md)
+  records the longer inventory reservation and required safety checks.
 
-   ```sh
-   cli/target/release/zolar-merchant \
-     --bind 127.0.0.1:7979 --name 'Shielded Night' \
-     --network testnet --rpc-url https://api.devnet.solana.com \
-     --keypair "$HOME/zolar-wallets/payee-sol.json" \
-     --ufvk-file "$HOME/zolar-wallets/payee.ufvk" \
-     --address-file "$HOME/zolar-wallets/payee.address" \
-     --catalog "$HOME/zolar-data/catalog.json" \
-     --data-dir "$HOME/zolar-data/merchant" \
-     --allow-origin http://localhost:5175
-   ```
+The wallet service's own setup uses its existing database and encryption configuration. Supply its
+password to Zkool, never the shop or connector. For example (replace paths with your configuration):
 
-2. Start the wallet helper in another terminal:
+```sh
+zkool_graphql --coin 1 --db-path "$ZKOOL_DATABASE" \
+  --db-password-file "$ZKOOL_PASSWORD_FILE" \
+  --jwt-public-key-file "$ZKOOL_JWT_PUBLIC_KEY" \
+  --lwd-url https://testnet.zec.rocks:443 --port 8000
+```
 
-   ```sh
-   cli/target/release/zolar-wallet \
-     --port 7878 --allow-origin http://localhost:5175 \
-     --network testnet --rpc-url https://api.devnet.solana.com \
-     --fee-payer "$HOME/zolar-wallets/payer-sol.json" \
-     --devtool "$ZOLAR_DEVTOOL" \
-     --wallet-dir "$HOME/zolar-wallets/payer" \
-     --identity "$HOME/zolar-wallets/payer-key.txt" \
-     --prove-script "$PWD/circuits/scripts/prove.sh" \
-     --zolar-data "$HOME/zolar-data" \
-     --data-dir "$HOME/zolar-data/wallet" \
-     --txid-check "$PWD/scripts/check-txid-absent.sh"
-   ```
+Do not run two wallet service instances against the same database. Do not use a mainnet wallet or
+an unauthenticated API for the demo. Never import your Vizor seed into Zolar.
 
-3. Install the page dependencies and configure its public URLs:
+### Run the checkout
 
-   ```sh
-   pnpm --dir clients/vending-js install --frozen-lockfile
-   pnpm --dir clients/vending-js build
-   pnpm --dir sdk install --frozen-lockfile
-   pnpm --dir shop install --frozen-lockfile
-   cp shop/.env.example shop/.env.local
-   pnpm --dir shop dev --host localhost --port 5175 --strictPort
-   ```
+Build `zolar-connect` and `zolar-merchant` from `cli/Cargo.toml`, using the repository's documented memory cap. Install `circuits/` dependencies (`pnpm --dir circuits install --frozen-lockfile`)
+and build the local development prover (`cargo build --release -p dev-groth16`, with the same memory cap)
+when using the supplied development proving key. The proving scripts need both before payment. Start the existing merchant as documented in the [SDK README](../sdk/README.md), with
+its origin allowlist matching the shop. Then run the connector:
 
-   Open `http://localhost:5175`. The shop resolves `@zolar/sdk` directly to
-   the sibling SDK source, so no separate SDK build is needed for development.
-   The exact origin must be allowed by both services. If these ports are
-   already in use, reuse the existing demo or choose free ports and update
-   the URLs and allowlists together.
+```sh
+# ZOLAR_ZKOOL_TOKEN is supplied privately through the environment.
+cli/target/release/zolar-connect \
+  --allow-origin http://localhost:5175 \
+  --zkool-url http://127.0.0.1:8000/graphql --zkool-account "$ZKOOL_ACCOUNT" \
+  --fee-payer "$SOLANA_DEVNET_FEE_KEYPAIR" \
+  --prove-script "$PWD/circuits/scripts/prove.sh" \
+  --zolar-data "$ZOLAR_DATA" --data-dir "$ZOLAR_CONNECT_DATA" \
+  --txid-check "$PWD/scripts/check-txid-absent.sh"
 
-The variables in [`.env.example`](.env.example) are public browser settings:
+pnpm --dir shop install --frozen-lockfile
+pnpm --dir shop dev --host localhost --port 5175 --strictPort
+```
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `VITE_MERCHANT_URL` | `http://127.0.0.1:7979` | Payee service |
-| `VITE_WALLET_URL` | `http://127.0.0.1:7878` | Payer's local helper |
-| `VITE_ITEM_ID` | `ga` | Catalog item to display |
-| `VITE_CLUSTER` | `devnet` | Solana explorer links |
+Optional `--zcash-peer host:port` arguments replace DNS discovery with a responsive testnet peer pool.
+Headers and blocks are still checked against the trusted Relay; supplying a peer does not bypass verification.
+Explicit peers retain a connection during the block scan to avoid repeated-handshake limits. A selected
+peer can observe the scan and its last requested block, which may identify the payment block through
+timing. Use several independently operated peers for availability. Default DNS discovery continues
+to choose random peers per block.
 
-Keep `VITE_CLUSTER=devnet`; it only controls explorer links, not the services'
-RPC or network. Never put keys, viewing keys, identities, or salts in Vite
-environment variables. Restart Vite after changing its environment.
+Public browser variables in `.env.local`: `VITE_MERCHANT_URL`, `VITE_WALLET_URL` (the connector URL,
+default `http://127.0.0.1:7878`), `VITE_ITEM_ID`, and `VITE_CLUSTER=devnet`. No credentials belong here.
 
-Connect a Solana wallet or paste the address that will receive the ticket.
-The shop requests only the address, with no Solana signature. Click **Pay
-with Zcash**, then review and approve the terms in the wallet's own window.
-If the popup is blocked, use the approval link on the page. Keep the helper
-running while it pays, waits for Finality Depth, proves locally, and Claims.
-The final privacy result is unknown if the optional transaction ID search
-could not run; it is not then evidence that the ID was absent.
+1. **Connect wallet:** select your Solana wallet, or paste its receiving address. This requests no
+   Solana signature or payment.
+2. **Connect Zcash wallet:** explicitly select the identified Zkool testnet account. The configured origin can already discover its account identity; Connect selects it for checkout.
+   Selection does not authorize a payment. A mainnet wallet, missing identity or embedded helper is refused.
+3. **Pay with Zcash:** review the price, ticket and receiving address. **Authorize Zkool payment**
+   opens the local connection's authorization page, which identifies the account and requesting shop.
+4. Approve or reject. Only approval lets the connector ask Zkool to prepare the payment, send the
+   merchant a redacted copy, independently check the funded Escrow, then request a real signature.
+5. The returned signed transaction ID and expiry are verified locally before its exact bytes are
+   saved and broadcast. The connector waits for finality, proves locally, and claims the ticket.
+
+Keep the connector and Zkool running. The page only sees connection identity and checkout stages;
+it never receives the private PCZT, signed transaction, commitment salt or wallet JWT. A declined or
+expired authorization sends nothing. After broadcast uncertainty, restart with the same connector
+data directory: recovery reuses the exact signed payment, never creates a replacement. The page restores the same
+approved job after an outage or reload and shows its saved item, price and receiving address.
+
+### Current limits
+
+- One unresolved checkout per connected wallet. Sync before preparing another payment. Zkool's
+  GraphQL broadcast API does not reserve spent notes as its native send flow does; concurrent
+  spending from another client can conflict.
+- Ordinary software-wallet v6 shielded payments only. FROST's long expiry, transparent-funded
+  payments, issuance and unknown package formats are refused. Other account types need verification.
+- The Header Relay must remain within 24 blocks of the wallet's live tip. Signing and sending
+  require six remaining blocks and at least 30 minutes before the Escrow's refund backstop.
+- Release availability, unit tests and a successful connection do not establish a paid checkout.
+  Acceptance requires a real external-wallet signature, settled Private Claim and explicit txid-
+  absence check. Record those signatures before calling the demo ready.
 
 ## Event disclaimer and limits
 
@@ -156,8 +174,8 @@ London, shown as November 16, 2026 at 21:00. It is not affiliated with
 Breakpoint or the Solana Foundation. The devnet token is a demo ticket,
 not admission to a real event.
 
-This demo uses Zcash testnet and Solana devnet. The wallet helper is a
-stand-in for wallet support. A Private Claim needs about 2 GiB of memory
+This demo uses Zcash testnet and Solana devnet, with the existing Zkool wallet
+performing the Zcash signing. A Private Claim needs about 2 GiB of memory
 and about one minute of local proving, with a single-party development
 Groth16 key. See the [SDK limits](../sdk/README.md#limits).
 

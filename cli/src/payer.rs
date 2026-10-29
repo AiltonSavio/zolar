@@ -23,7 +23,10 @@ use zolar_pczt::summary;
 use zolar_relayer::{chain::Cluster, p2p, rpc::HttpRpc};
 
 use crate::{
-    blocks::{Found, fetch_block_txids, fetch_headers, find_payment, header_hash, merkle_root},
+    blocks::{
+        BlockSource, Found, fetch_block_txids, fetch_headers, find_payment, header_hash,
+        merkle_root,
+    },
     devtool::Devtool,
     internal_txid,
     prover::Prover,
@@ -51,7 +54,7 @@ pub fn payee_copy_path(pczt: &Path) -> PathBuf {
 }
 
 /// Builds the unsigned PCZT: the Payee's address, a value, the challenge memo, and an expiry
-/// `expiry_blocks` above the relay tip so the Escrow's 20 block limit holds. Writes the full PCZT to
+/// `expiry_blocks` above the relay tip; the legacy CLI keeps its short 20-block policy. Writes the full PCZT to
 /// `out` (it holds this wallet's viewing key, note values and change: keep it) and the redacted copy
 /// for the Payee next to it ([`payee_copy_path`]).
 pub fn create_pczt(
@@ -65,7 +68,7 @@ pub fn create_pczt(
 ) -> Result<()> {
     ensure!(
         (1..=20).contains(&expiry_blocks),
-        "--expiry-blocks must be 1 to 20: the Escrow refuses an expiry further ahead"
+        "--expiry-blocks must be 1 to 20 for the short-expiry protocol CLI"
     );
     let mut rpc = HttpRpc::new(&chains.rpc_url);
     let relay = read_relay(&mut rpc, &chains.relay)?;
@@ -363,6 +366,19 @@ pub fn broadcast(
     checked: &Checked,
     combined: &Path,
 ) -> Result<()> {
+    check_before_broadcast(chains, checked)?;
+    println!("broadcasting {}", checked.txid);
+    let sent = devtool.send(combined)?;
+    ensure!(
+        sent == checked.txid,
+        "zcash-devtool reports sending {sent}, not the committed {}",
+        checked.txid
+    );
+    Ok(())
+}
+
+/// Recheck mutable on-chain state after an external signer has returned.
+pub fn check_before_broadcast(chains: &Chains, checked: &Checked) -> Result<u32> {
     let mut rpc = HttpRpc::new(&chains.rpc_url);
     let escrow = read_escrow(&read_account(&mut rpc, &checked.escrow_address)?)?;
     ensure!(
@@ -375,14 +391,7 @@ pub fn broadcast(
         "the relay tip {tip} reached the expiry {} while proving; not broadcasting",
         checked.expiry_height
     );
-    println!("broadcasting {}", checked.txid);
-    let sent = devtool.send(combined)?;
-    ensure!(
-        sent == checked.txid,
-        "zcash-devtool reports sending {sent}, not the committed {}",
-        checked.txid
-    );
-    Ok(())
+    Ok(tip)
 }
 
 /// The Final Block Tree rebuilt from Zcash P2P headers, proven equal to the relay's.
@@ -490,6 +499,9 @@ fn locate_payment(
     let started = Instant::now();
     let mut next_height: Option<u32> = None;
     let mut cached: Option<(u32, Rebuilt)> = None;
+    let mut configured_source = (chains.peers != crate::seeders(chains.network))
+        .then(|| BlockSource::new(&chains.peers, chains.network))
+        .transpose()?;
     loop {
         let relay = read_relay(rpc, &chains.relay)?;
         let view = relay.view()?;
@@ -508,7 +520,11 @@ fn locate_payment(
                 .map(|h| header_hash(&rebuilt.headers[leaf_of(h)]))
                 .collect();
             let scan = find_payment(&hashes, txid, |hash| {
-                fetch_block_txids(*hash, &chains.peers, chains.network)
+                if let Some(source) = &mut configured_source {
+                    source.fetch(hash)
+                } else {
+                    fetch_block_txids(*hash, &chains.peers, chains.network)
+                }
             });
             if let Some(Found {
                 candidate,
@@ -673,19 +689,18 @@ pub fn private_claim(a: &PrivateClaimArgs) -> Result<String> {
     retry_aged_root(a.max_attempts, || {
         let relay = read_relay(&mut rpc, &c.chains.relay)?;
         let view = relay.view()?;
-        // The newest root the tree can be rebuilt for; it stays among the last 128 for about two hours.
-        let size = view.leaf_count() as usize;
+        // A verified recent root is sufficient. Keep its original tree size; a newer tip
+        // alone does not require downloading the entire header history again.
         let rebuilt;
-        let tree = if size == found.size {
-            &found.tree
+        let setup = if let Some(setup) = located_proof_setup(&found, &view) {
+            setup
         } else {
             rebuilt = rebuild_tree(c.chains, &relay)?;
-            &rebuilt.tree
-        };
-        let setup = ProofSetup {
-            tree,
-            size,
-            finality_depth: view.finality_depth(),
+            ProofSetup {
+                tree: &rebuilt.tree,
+                size: view.leaf_count() as usize,
+                finality_depth: view.finality_depth(),
+            }
         };
         prove_and_send(a, &mut rpc, &payer, &escrow, &payout_token, &found, &setup)
     })
@@ -695,6 +710,18 @@ struct ProofSetup<'a> {
     tree: &'a FinalBlockTree,
     size: usize,
     finality_depth: u16,
+}
+
+fn located_proof_setup<'a>(
+    found: &'a Located,
+    view: &header_relay_interface::RelayView<'_>,
+) -> Option<ProofSetup<'a>> {
+    let size = u32::try_from(found.size).ok()?;
+    (view.root_at(size) == Some(found.root)).then_some(ProofSetup {
+        tree: &found.tree,
+        size: found.size,
+        finality_depth: view.finality_depth(),
+    })
 }
 
 fn prove_and_send(
@@ -787,6 +814,65 @@ mod tests {
         d[0] = 1;
         d[1] = 1;
         d
+    }
+
+    #[test]
+    fn a_newer_relay_tip_keeps_the_located_witness_root_and_its_original_tree_size() {
+        use header_relay_interface::*;
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../circuits/fixtures/swap2-block.json")).unwrap();
+        let txids: Vec<[u8; 32]> = fixture["txids_display"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| internal_txid(id.as_str().unwrap()).unwrap())
+            .collect();
+        let height = 4_000_000;
+        let leaf = block_leaf(height, &zolar_claim::tx_merkle_root(&txids)).unwrap();
+        let tree = FinalBlockTree::new(vec![leaf]);
+        let root = tree.root(1);
+        let found = Located {
+            height,
+            leaf: 0,
+            size: 1,
+            tree,
+            root,
+            txids,
+            tx_index: 0,
+        };
+        let newer =
+            FinalBlockTree::new(vec![leaf, block_leaf(height + 1, &[23; 32]).unwrap()]).root(2);
+        let mut data = crate::test_support::relay(height + 12);
+        data[R_LEAF_COUNT..R_LEAF_COUNT + 4].copy_from_slice(&2u32.to_le_bytes());
+        data[R_ROOTS + 32..R_ROOTS + 64].copy_from_slice(&root);
+        data[R_ROOTS + 64..R_ROOTS + 96].copy_from_slice(&newer);
+        let key = [4; 32];
+        let view = RelayView::parse(&HEADER_RELAY_PROGRAM, &key, &key, &data).unwrap();
+        let setup = located_proof_setup(&found, &view).unwrap();
+        let witness = circuit_input(&Witness {
+            txids: &found.txids,
+            index: 0,
+            salt: [7; 32],
+            height,
+            tx_depth: 8,
+            tree: ClaimTree {
+                tree: setup.tree,
+                size: setup.size,
+                leaf: found.leaf,
+            },
+            lower: height,
+            expiry: height + 20,
+        })
+        .unwrap();
+        assert_eq!(witness.public.root, root);
+        assert_ne!(witness.public.root, newer);
+        assert_eq!(setup.size, 1);
+        data[R_LEAF_COUNT..R_LEAF_COUNT + 4].copy_from_slice(&129u32.to_le_bytes());
+        let aged = RelayView::parse(&HEADER_RELAY_PROGRAM, &key, &key, &data).unwrap();
+        assert!(
+            located_proof_setup(&found, &aged).is_none(),
+            "an evicted root requires rebuilding"
+        );
     }
 
     #[test]

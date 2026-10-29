@@ -5,6 +5,7 @@
 //! and does not change when the PCZT is proven, signed or extracted.
 
 use orchard::keys::{IncomingViewingKey, Scope};
+mod zkool_wire;
 use pczt::{Pczt, roles::redactor::Redactor};
 use zcash_keys::keys::UnifiedFullViewingKey;
 use zcash_primitives::transaction::{
@@ -15,6 +16,7 @@ use zcash_protocol::{
     consensus::{MAIN_NETWORK, TEST_NETWORK},
     memo::Memo,
 };
+pub use zkool_wire::inspection_pczt as zkool_inspection_pczt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Network {
@@ -70,6 +72,12 @@ pub enum Error {
 pub fn summary(pczt: &[u8]) -> Result<Summary, Error> {
     let (_, summary) = parse(pczt)?;
     Ok(summary)
+}
+
+/// External-wallet demo funding must not silently use transparent inputs.
+pub fn shielded_v6(bytes: &[u8]) -> Result<bool, Error> {
+    let pczt = Pczt::parse(bytes).map_err(|e| Error::Pczt(format!("{e:?}")))?;
+    Ok(pczt.transparent().inputs().is_empty() && summary(bytes)?.tx_version == 6)
 }
 
 fn parse(pczt: &[u8]) -> Result<(TransactionData<pczt::EffectsOnly>, Summary), Error> {
@@ -152,6 +160,7 @@ pub fn redact_for_payee(pczt: &[u8]) -> Result<Vec<u8>, Error> {
     pczt.resolve_fields()
         .map_err(|e| Error::Pczt(format!("resolving fields: {e:?}")))?;
     let redact = |mut bundle: pczt::roles::redactor::orchard::OrchardRedactor<'_>| {
+        bundle.clear_bsk();
         bundle.redact_actions(|mut action| {
             action.clear_spend_recipient();
             action.clear_spend_value();
@@ -175,6 +184,50 @@ pub fn redact_for_payee(pczt: &[u8]) -> Result<Vec<u8>, Error> {
     };
     let redacted = Redactor::new(pczt)
         .redact_global_with(|mut global| global.clear_proprietary())
+        .redact_transparent_with(|mut bundle| {
+            bundle.redact_inputs(|mut input| {
+                input.clear_redeem_script();
+                input.clear_partial_signatures();
+                input.clear_bip32_derivation();
+                input.clear_ripemd160_preimages();
+                input.clear_sha256_preimages();
+                input.clear_hash160_preimages();
+                input.clear_hash256_preimages();
+                input.clear_proprietary();
+            });
+            bundle.redact_outputs(|mut output| {
+                output.clear_redeem_script();
+                output.clear_bip32_derivation();
+                output.clear_user_address();
+                output.clear_proprietary();
+            });
+        })
+        .redact_sapling_with(|mut bundle| {
+            bundle.clear_bsk();
+            bundle.redact_spends(|mut spend| {
+                spend.clear_recipient();
+                spend.clear_value();
+                spend.clear_rcm();
+                spend.clear_rseed();
+                spend.clear_rcv();
+                spend.clear_proof_generation_key();
+                spend.clear_witness();
+                spend.clear_alpha();
+                spend.clear_zip32_derivation();
+                spend.clear_dummy_ask();
+                spend.clear_proprietary();
+            });
+            bundle.redact_outputs(|mut output| {
+                output.clear_recipient();
+                output.clear_value();
+                output.clear_rseed();
+                output.clear_rcv();
+                output.clear_ock();
+                output.clear_zip32_derivation();
+                output.clear_user_address();
+                output.clear_proprietary();
+            });
+        })
         .redact_orchard_with(redact)
         .redact_ironwood_with(redact)
         .finish();

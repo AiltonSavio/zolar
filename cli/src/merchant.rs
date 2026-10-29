@@ -14,11 +14,16 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use base64::Engine;
+use escrow_client::{accounts::Escrow, programs::ESCROW_ID};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_signer::Signer;
 use tiny_http::{Method, Request, Server};
-use zolar_relayer::{chain::Cluster, rpc::HttpRpc};
+use zolar_relayer::{
+    chain::Cluster,
+    rpc::{HttpRpc, PreparedTransaction},
+};
 
 use crate::{
     Network,
@@ -26,10 +31,12 @@ use crate::{
         self, CreateOrder, EscrowCreated, Item, OrderStatus, OrderTerms, OrderView, ProposePayment,
         Reply,
     },
-    payee::{CreateEscrow, RefundArgs, create_escrow, refund},
+    payee::{CreateEscrow, RefundArgs, prepare_escrow, refund},
+    settlement::{self, Event},
     solana::{associated_token_account, load_keypair, parse_address, parse_token_account},
 };
 
+#[derive(Clone)]
 pub struct Config {
     pub name: String,
     pub network: Network,
@@ -50,6 +57,15 @@ pub struct Config {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+struct Proposal {
+    digest: String,
+    salt: String,
+    escrow: String,
+    expiry_height: u32,
+    transaction: Option<PreparedTransaction>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Order {
     terms: OrderTerms,
     status: OrderStatus,
@@ -58,11 +74,17 @@ struct Order {
     /// A payment is being checked and the Escrow created; a second proposal must wait.
     #[serde(default)]
     proposing: bool,
+    #[serde(default)]
+    proposal: Option<Proposal>,
+    #[serde(default)]
+    recovery_version: u8,
+    #[serde(default)]
+    legacy_unresolved: bool,
 }
 
 impl Order {
     fn holds_inventory(&self) -> bool {
-        matches!(self.status, OrderStatus::Open | OrderStatus::Escrowed)
+        self.legacy_unresolved || matches!(self.status, OrderStatus::Open | OrderStatus::Escrowed)
     }
 
     fn view(&self) -> OrderView {
@@ -76,7 +98,9 @@ impl Order {
 
 pub struct Merchant {
     config: Config,
+    _data_lock: checkout::DataDirLock,
     orders: Mutex<HashMap<String, Order>>,
+    operations: Mutex<()>,
 }
 
 fn now() -> u64 {
@@ -94,21 +118,30 @@ fn network_name(network: Network) -> &'static str {
 
 impl Merchant {
     pub fn new(config: Config) -> Result<Arc<Self>> {
-        std::fs::create_dir_all(config.data_dir.join("orders"))?;
+        let data_lock = checkout::lock_data_dir(&config.data_dir)?;
+        checkout::private_dir(&config.data_dir.join("orders"))?;
         let mut orders = HashMap::new();
         for entry in std::fs::read_dir(config.data_dir.join("orders"))?.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "json") {
                 let mut order: Order = serde_json::from_slice(&std::fs::read(&path)?)
                     .with_context(|| format!("reading {}", path.display()))?;
-                // A proposal cut short by a restart never finished; the customer may propose again.
+                // Old versions could have sent without saving the address. Preserve all legacy
+                // identity files and never interpret the missing address as proof of no creation.
                 order.proposing = false;
+                if order.recovery_version == 0 && order.proposal.is_none() {
+                    let base = config.data_dir.join("orders").join(&order.terms.order_id);
+                    order.legacy_unresolved = base.with_extension("pczt").exists()
+                        && !base.with_extension("salt").exists();
+                }
                 orders.insert(order.terms.order_id.clone(), order);
             }
         }
         Ok(Arc::new(Self {
             config,
+            _data_lock: data_lock,
             orders: Mutex::new(orders),
+            operations: Mutex::new(()),
         }))
     }
 
@@ -120,20 +153,16 @@ impl Merchant {
         let path = self
             .order_dir()
             .join(format!("{}.json", order.terms.order_id));
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(order)?)?;
-        std::fs::rename(tmp, path)?;
-        Ok(())
+        checkout::save_private(&path, &serde_json::to_vec_pretty(order)?)
     }
 
     fn update(&self, id: &str, f: impl FnOnce(&mut Order)) -> Result<Order> {
         let mut orders = self.orders.lock().expect("orders lock");
-        let order = orders.get_mut(id).context("no such order")?;
-        f(order);
-        let copy = order.clone();
-        drop(orders);
-        self.save(&copy)?;
-        Ok(copy)
+        let mut next = orders.get(id).context("no such order")?.clone();
+        f(&mut next);
+        self.save(&next)?;
+        orders.insert(id.to_string(), next.clone());
+        Ok(next)
     }
 
     pub fn items(&self) -> Vec<serde_json::Value> {
@@ -195,10 +224,12 @@ impl Merchant {
             escrow: None,
             created_at: now(),
             proposing: false,
+            proposal: None,
+            recovery_version: 1,
+            legacy_unresolved: false,
         };
-        orders.insert(order_id, order.clone());
-        drop(orders);
         self.save(&order)?;
+        orders.insert(order_id, order);
         Ok(terms)
     }
 
@@ -208,78 +239,219 @@ impl Merchant {
 
     /// Checks the customer's unsigned payment against the order with the viewing key and locks the
     /// item in a private-only Escrow paying the order's payout wallet.
-    pub fn propose(&self, id: &str, proposal: ProposePayment) -> Result<EscrowCreated> {
+    pub fn propose(&self, id: &str, request: ProposePayment) -> Result<EscrowCreated> {
         let pczt = base64::engine::general_purpose::STANDARD
-            .decode(proposal.pczt.trim())
+            .decode(request.pczt.trim())
             .context("pczt is not base64")?;
         ensure!(pczt.len() < 1_000_000, "pczt too large");
-        let order = {
-            let mut orders = self.orders.lock().expect("orders lock");
-            let order = orders.get_mut(id).context("no such order")?;
+        let _operation = self.operations.lock().expect("operations lock");
+        let mut order = self.get(id).context("no such order")?;
+        ensure!(
+            matches!(order.status, OrderStatus::Open | OrderStatus::Escrowed),
+            "the order is {:?}, not open",
+            order.status
+        );
+        ensure!(
+            !order.legacy_unresolved,
+            "legacy proposal identity is incomplete; reconcile it before accepting another payment"
+        );
+        let digest = hex::encode(Sha256::digest(&pczt));
+        let base = self.order_dir().join(id);
+        if order.proposal.is_none() && base.with_extension("salt").exists() {
+            order = self.recover_legacy(&order)?;
+        }
+        if let Some(proposal) = &order.proposal {
             ensure!(
-                order.status == OrderStatus::Open,
-                "the order is {:?}, not open",
-                order.status
+                proposal.digest == digest,
+                "this order already has another payment proposal"
             );
+        } else {
             ensure!(
-                now() < order.created_at + self.config.order_ttl.as_secs(),
+                now()
+                    < order
+                        .created_at
+                        .saturating_add(self.config.order_ttl.as_secs()),
                 "the order lapsed; start a new checkout"
             );
-            ensure!(
-                !order.proposing,
-                "a payment for this order is being checked"
-            );
-            order.proposing = true;
-            order.clone()
-        };
-        let result = self.lock_item(&order, &pczt);
-        let escrow = result.as_ref().ok().map(|c| c.escrow.clone());
-        self.update(id, |o| {
-            o.proposing = false;
-            if let Some(escrow) = escrow {
-                o.status = OrderStatus::Escrowed;
-                o.escrow = Some(escrow);
+            self.update(id, |o| o.proposing = true)?;
+            let result = self.prepare_proposal(&order, &pczt, digest);
+            if let Err(error) = result {
+                self.update(id, |o| o.proposing = false)?;
+                return Err(error);
             }
-        })?;
-        result
+            order = self.get(id).context("no such order")?;
+        }
+        // Matching retries work past the order's intake TTL: its immutable proposal already exists.
+        self.reconcile(&order)
     }
 
-    fn lock_item(&self, order: &Order, pczt: &[u8]) -> Result<EscrowCreated> {
-        let id = &order.terms.order_id;
-        let pczt_path = self.order_dir().join(format!("{id}.pczt"));
-        std::fs::write(&pczt_path, pczt)?;
-        let salt_path = self.order_dir().join(format!("{id}.salt"));
-        // A salt file left by a failed attempt would block create_escrow; its Escrow never existed
-        // unless the transaction landed, in which case the order is no longer open on retry.
-        let _ = std::fs::remove_file(&salt_path);
-        let created = create_escrow(&CreateEscrow {
+    fn create_args(&self, order: &Order) -> Result<CreateEscrow> {
+        let base = self.order_dir().join(&order.terms.order_id);
+        Ok(CreateEscrow {
             network: self.config.network,
             rpc_url: self.config.rpc_url.clone(),
             keypair: self.config.keypair.clone(),
             relay: self.config.relay,
-            pczt: pczt_path,
+            pczt: base.with_extension("pczt"),
             ufvk_file: self.config.ufvk_file.clone(),
             expect_memo: order.terms.memo.clone(),
             min_zats: order.terms.item.price_zats,
             payout: parse_address(&order.terms.payout)?,
             mint: parse_address(&order.terms.item.mint)?,
             amount: order.terms.item.amount,
-            salt_out: salt_path.clone(),
+            salt_out: base.with_extension("salt"),
             bond: 0,
             private_only: true,
-        })?;
-        let salt = std::fs::read_to_string(&salt_path)?.trim().to_string();
-        Ok(EscrowCreated {
-            escrow: created.escrow.to_string(),
-            salt,
-            expiry_height: created.expiry_height,
-            signature: created.signature,
         })
     }
 
-    /// One pass of the worker: lapse stale open orders, mark claimed Escrows, take back the items of
-    /// Escrows whose payment can no longer arrive.
+    fn prepare_proposal(&self, order: &Order, pczt: &[u8], digest: String) -> Result<()> {
+        let args = self.create_args(order)?;
+        checkout::save_private(&args.pczt, pczt)?;
+        let salt = crate::random_salt();
+        let prepared = prepare_escrow(&args, salt)?;
+        let proposal = Proposal {
+            digest,
+            salt: hex::encode(salt),
+            escrow: prepared.escrow.to_string(),
+            expiry_height: prepared.expiry_height,
+            transaction: Some(prepared.transaction),
+        };
+        // Save the whole identity and signed wire before submission. A lost response cannot create
+        // another commitment, and a pending proposal remains visible to the refund worker.
+        self.update(&order.terms.order_id, |o| {
+            o.escrow = Some(proposal.escrow.clone());
+            o.proposal = Some(proposal);
+            o.proposing = false;
+        })?;
+        Ok(())
+    }
+
+    fn recover_legacy(&self, order: &Order) -> Result<Order> {
+        let args = self.create_args(order)?;
+        let pczt = std::fs::read(&args.pczt)
+            .context("legacy PCZT missing; cannot replace its identity")?;
+        let salt = crate::parse_salt(std::fs::read_to_string(&args.salt_out)?.trim())?;
+        let summary = zolar_pczt::summary(&pczt)?;
+        let commitment =
+            zolar_claim::payment_commitment(&crate::internal_txid(&summary.txid)?, &salt)?;
+        let payee = load_keypair(&self.config.keypair)?.pubkey();
+        let escrow = Escrow::find_pda(&payee, commitment).0;
+        self.update(&order.terms.order_id, |o| {
+            o.escrow = Some(escrow.to_string());
+            o.proposal = Some(Proposal {
+                digest: hex::encode(Sha256::digest(&pczt)),
+                salt: hex::encode(salt),
+                escrow: escrow.to_string(),
+                expiry_height: summary.expiry_height,
+                transaction: None,
+            });
+            o.recovery_version = 1;
+            o.status = OrderStatus::Open;
+        })
+    }
+
+    fn answer(&self, proposal: &Proposal, signature: String) -> EscrowCreated {
+        EscrowCreated {
+            escrow: proposal.escrow.clone(),
+            salt: proposal.salt.clone(),
+            expiry_height: proposal.expiry_height,
+            signature,
+        }
+    }
+
+    fn reconcile(&self, order: &Order) -> Result<EscrowCreated> {
+        let id = &order.terms.order_id;
+        let mut proposal = order.proposal.clone().context("no saved proposal")?;
+        let escrow = parse_address(&proposal.escrow)?;
+        let mut rpc = HttpRpc::new(&self.config.rpc_url);
+        if let Some((owner, data)) =
+            zolar_relayer::chain::Cluster::account_with_owner(&mut rpc, &escrow)
+                .map_err(anyhow::Error::msg)?
+        {
+            ensure!(owner == ESCROW_ID, "Escrow address has another owner");
+            let account = crate::solana::read_escrow(&data)?;
+            let salt = crate::parse_salt(&proposal.salt)?;
+            let summary = zolar_pczt::summary(&std::fs::read(self.create_args(order)?.pczt)?)?;
+            ensure!(
+                account.commitment
+                    == zolar_claim::payment_commitment(
+                        &crate::internal_txid(&summary.txid)?,
+                        &salt
+                    )?
+                    && account.payout == parse_address(&order.terms.payout)?
+                    && account.mint == parse_address(&order.terms.item.mint)?
+                    && account.amount == order.terms.item.amount
+                    && account.expiry_height == proposal.expiry_height
+                    && account.relay == self.config.relay
+                    && account.claim_mode == 1
+                    && account.bond_required == 0,
+                "on-chain Escrow differs from the saved order"
+            );
+            self.update(id, |o| o.status = OrderStatus::Escrowed)?;
+            let signature = match proposal.transaction.as_ref() {
+                Some(tx) => tx.signature.clone(),
+                None => settlement::history(&rpc, &escrow)?
+                    .created
+                    .context("legacy creation awaits finalized history")?,
+            };
+            return Ok(self.answer(&proposal, signature));
+        }
+        let history = settlement::history(&rpc, &escrow)?;
+        if let Some((event, _)) = history.settled {
+            self.update(id, |o| {
+                o.status = if event == Event::Claimed {
+                    OrderStatus::Claimed
+                } else {
+                    OrderStatus::Refunded
+                }
+            })?;
+            bail!("this order has already settled");
+        }
+        ensure!(
+            history.created.is_none(),
+            "Escrow closed; waiting for positive settlement evidence"
+        );
+        let tx = proposal
+            .transaction
+            .as_ref()
+            .context("legacy creation remains uncertain; no new creation will be signed")?;
+        if settlement::can_replace(&rpc, tx)? {
+            let args = self.create_args(order)?;
+            let pczt = std::fs::read(&args.pczt)?;
+            ensure!(
+                hex::encode(Sha256::digest(&pczt)) == proposal.digest,
+                "saved proposal changed"
+            );
+            // Never create after the payment's expiry, even if the old Solana transaction expired.
+            let relay = crate::solana::read_relay(&mut rpc, &self.config.relay)?;
+            if relay.view()?.tip_height() >= proposal.expiry_height {
+                self.update(id, |o| o.status = OrderStatus::Expired)?;
+                bail!("the payment expired before its Escrow was created");
+            }
+            let prepared = prepare_escrow(&args, crate::parse_salt(&proposal.salt)?)?;
+            ensure!(
+                prepared.escrow == escrow,
+                "replacement changed the Escrow identity"
+            );
+            proposal.transaction = Some(prepared.transaction);
+            self.update(id, |o| o.proposal = Some(proposal.clone()))?;
+        }
+        let signature = rpc
+            .submit_prepared(
+                proposal
+                    .transaction
+                    .as_ref()
+                    .context("no saved transaction")?,
+            )
+            .map_err(crate::solana::tx_error)?;
+        self.update(id, |o| o.status = OrderStatus::Escrowed)?;
+        Ok(self.answer(&proposal, signature))
+    }
+
+    /// Pending proposals survive the intake TTL and are reconciled before any refund decision.
     pub fn sweep(&self) {
+        let _operation = self.operations.lock().expect("operations lock");
         let orders: Vec<Order> = self
             .orders
             .lock()
@@ -287,35 +459,96 @@ impl Merchant {
             .values()
             .cloned()
             .collect();
-        let mut rpc = HttpRpc::new(&self.config.rpc_url);
-        for order in orders {
+        for mut order in orders {
             let id = order.terms.order_id.clone();
-            match order.status {
-                OrderStatus::Open
-                    if !order.proposing
-                        && now() >= order.created_at + self.config.order_ttl.as_secs() =>
-                {
-                    let _ = self.update(&id, |o| o.status = OrderStatus::Expired);
+            if order.legacy_unresolved || (order.proposal.is_none() && order.escrow.is_some()) {
+                if let Err(e) = self.reconcile_known_legacy(&order) {
+                    println!("order {id}: legacy reconciliation unresolved: {e:#}");
                 }
-                OrderStatus::Escrowed => {
-                    let Some(escrow) = order.escrow.as_deref().and_then(|e| parse_address(e).ok())
-                    else {
+                continue;
+            }
+            if order.proposal.is_none()
+                && self.order_dir().join(&id).with_extension("salt").exists()
+            {
+                match self.recover_legacy(&order) {
+                    Ok(recovered) => order = recovered,
+                    Err(e) => {
+                        println!("order {id}: legacy recovery unresolved: {e:#}");
                         continue;
-                    };
-                    match rpc.account(&escrow) {
-                        // Only this merchant can refund, and a refund is recorded when it is sent:
-                        // an Escrow that closed otherwise was claimed.
-                        Ok(None) => {
-                            let _ = self.update(&id, |o| o.status = OrderStatus::Claimed);
-                            println!("order {id}: claimed");
-                        }
-                        Ok(Some(_)) => self.try_refund(&id, escrow),
-                        Err(e) => println!("order {id}: cannot read the Escrow: {e}"),
                     }
                 }
-                _ => {}
+            }
+            if order
+                .proposal
+                .as_ref()
+                .is_some_and(|p| p.transaction.is_none())
+                && matches!(order.status, OrderStatus::Open | OrderStatus::Escrowed)
+            {
+                if let Err(e) = self.reconcile_known_legacy(&order) {
+                    println!(
+                        "order {}: legacy reconciliation: {e:#}",
+                        order.terms.order_id
+                    );
+                }
+            } else if order.proposal.is_some()
+                && matches!(order.status, OrderStatus::Open | OrderStatus::Escrowed)
+            {
+                match self.reconcile(&order) {
+                    Ok(_) => {
+                        if let Some(escrow) =
+                            order.escrow.as_deref().and_then(|s| parse_address(s).ok())
+                        {
+                            self.try_refund(&order.terms.order_id, escrow);
+                        }
+                    }
+                    Err(e) => println!("order {}: reconciliation: {e:#}", order.terms.order_id),
+                }
+            } else if order.status == OrderStatus::Open
+                && now()
+                    >= order
+                        .created_at
+                        .saturating_add(self.config.order_ttl.as_secs())
+            {
+                let _ = self.update(&order.terms.order_id, |o| o.status = OrderStatus::Expired);
             }
         }
+    }
+
+    // Even when old proposal files are gone, a recorded address is enough to reconcile a
+    // settlement or run the program's authorized refund. It never permits creating another Escrow.
+    fn reconcile_known_legacy(&self, order: &Order) -> Result<()> {
+        let escrow = parse_address(
+            order
+                .escrow
+                .as_deref()
+                .context("legacy Escrow address missing")?,
+        )?;
+        let mut rpc = HttpRpc::new(&self.config.rpc_url);
+        if let Some((owner, data)) =
+            zolar_relayer::chain::Cluster::account_with_owner(&mut rpc, &escrow)
+                .map_err(anyhow::Error::msg)?
+        {
+            ensure!(owner == ESCROW_ID, "legacy Escrow has another owner");
+            let account = crate::solana::read_escrow(&data)?;
+            ensure!(
+                account.payout == parse_address(&order.terms.payout)?
+                    && account.mint == parse_address(&order.terms.item.mint)?
+                    && account.amount == order.terms.item.amount
+                    && account.relay == self.config.relay,
+                "legacy Escrow differs from its saved terms"
+            );
+            self.try_refund(&order.terms.order_id, escrow);
+        } else if let Some((event, _)) = settlement::history(&rpc, &escrow)?.settled {
+            self.update(&order.terms.order_id, |o| {
+                o.status = if event == Event::Claimed {
+                    OrderStatus::Claimed
+                } else {
+                    OrderStatus::Refunded
+                };
+                o.legacy_unresolved = false;
+            })?;
+        }
+        Ok(())
     }
 
     fn try_refund(&self, id: &str, escrow: Address) {
@@ -327,8 +560,7 @@ impl Merchant {
         });
         match result {
             Ok(done) if done.refund_signature.is_some() => {
-                let _ = self.update(id, |o| o.status = OrderStatus::Refunded);
-                println!("order {id}: item taken back");
+                println!("order {id}: refund submitted; waiting for finalized settlement");
             }
             Ok(_) => {}
             // Not refundable yet: the payment may still arrive, or the claim window is open.
@@ -583,5 +815,331 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("not open"), "{err}");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn retrying_a_legacy_proposal_never_deletes_its_salt() {
+        let dir = tempdir();
+        let m = merchant(&dir);
+        let order = m
+            .create_order(CreateOrder {
+                item_id: "ga".into(),
+                payout: wallet(1),
+            })
+            .unwrap();
+        let pczt = include_bytes!("../../crates/zolar-pczt/tests/fixtures/payment-unsigned.pczt");
+        let path = dir.join("orders").join(format!("{}.salt", order.order_id));
+        let salt = "00".repeat(32);
+        std::fs::write(&path, &salt).unwrap();
+        std::fs::write(path.with_extension("pczt"), pczt).unwrap();
+        let result = m.propose(
+            &order.order_id,
+            ProposePayment {
+                pczt: base64::engine::general_purpose::STANDARD.encode(pczt),
+            },
+        );
+        assert!(result.is_err(), "no real keys or network in this fixture");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            salt,
+            "a prior send may have landed"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_lost_creation_response_and_restart_keep_one_escrow_and_reconcile_a_refund() {
+        use crate::test_support as fixture;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = tempdir();
+        let key = solana_keypair::Keypair::new();
+        let payee = key.pubkey();
+        std::fs::write(
+            dir.join("payee.json"),
+            serde_json::to_vec(&key.to_bytes().to_vec()).unwrap(),
+        )
+        .unwrap();
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../crates/zolar-pczt/tests/fixtures/payee.ufvk"
+            ),
+            dir.join("payee.ufvk"),
+        )
+        .unwrap();
+        let pczt = include_bytes!("../../crates/zolar-pczt/tests/fixtures/payment-unsigned.pczt");
+        let summary = zolar_pczt::summary(pczt).unwrap();
+        let relay = Address::new_from_array([4; 32]);
+        let mint = Address::new_from_array([3; 32]);
+        let payout = Address::new_from_array([1; 32]);
+        let saved_path = Arc::new(Mutex::new(PathBuf::new()));
+        let record = saved_path.clone();
+        let chain = Arc::new(Mutex::new((
+            None::<(Address, Vec<u8>)>,
+            None::<String>,
+            false,
+        )));
+        let world = chain.clone();
+        let sends = Arc::new(AtomicUsize::new(0));
+        let sent = sends.clone();
+        let rpc = fixture::Rpc::new(move |request| {
+            let mut state = world.lock().unwrap();
+            let address = request["params"][0].as_str().unwrap_or("");
+            match request["method"].as_str().unwrap() {
+                "getLatestBlockhash" => Ok(
+                    serde_json::json!({"context":{"slot":10},"value":{"blockhash":bs58::encode([7;32]).into_string(),"lastValidBlockHeight":1000}}),
+                ),
+                "getBlockHeight" => Ok(serde_json::json!(100)),
+                "getAccountInfo" if address == relay.to_string() => Ok(fixture::account(
+                    Address::new_from_array(header_relay_interface::HEADER_RELAY_PROGRAM),
+                    &fixture::relay(summary.expiry_height - 18),
+                )),
+                "getAccountInfo" => {
+                    if let Some((escrow, data)) = &state.0
+                        && address == escrow.to_string()
+                    {
+                        return Ok(if state.2 {
+                            serde_json::json!({"value":null})
+                        } else {
+                            fixture::account(ESCROW_ID, data)
+                        });
+                    }
+                    // Before creation the derived Escrow is absent; all other reads are inventory.
+                    if !record.lock().unwrap().as_os_str().is_empty() {
+                        let saved: serde_json::Value = serde_json::from_slice(
+                            &std::fs::read(&*record.lock().unwrap()).unwrap(),
+                        )
+                        .unwrap();
+                        if saved["proposal"]["escrow"].as_str() == Some(address) {
+                            return Ok(serde_json::json!({"value":null}));
+                        }
+                    }
+                    Ok(fixture::account(
+                        crate::solana::TOKEN_PROGRAM,
+                        &fixture::token(payee, mint, 100),
+                    ))
+                }
+                "getSignaturesForAddress" => {
+                    if state.2 {
+                        Ok(serde_json::json!([
+                            {"signature":"refund","err":null},{"signature":state.1.as_ref().unwrap(),"err":null}
+                        ]))
+                    } else if state.0.is_some() {
+                        Err(
+                            serde_json::json!({"code":-32004,"message":"history unavailable while Escrow is funded"}),
+                        )
+                    } else {
+                        Ok(serde_json::json!([]))
+                    }
+                }
+                "getTransaction" => {
+                    let escrow = state.0.as_ref().unwrap().0;
+                    Ok(fixture::transaction(
+                        address,
+                        escrow,
+                        if address == "refund" { 3 } else { 0 },
+                    ))
+                }
+                "sendTransaction" => {
+                    sent.fetch_add(1, Ordering::SeqCst);
+                    // This is read before simulating a landed transaction: identity and wire must
+                    // already be durable when the first side effect starts.
+                    let saved: serde_json::Value =
+                        serde_json::from_slice(&std::fs::read(&*record.lock().unwrap()).unwrap())
+                            .unwrap();
+                    let proposal = &saved["proposal"];
+                    assert_eq!(proposal["transaction"]["wire"], request["params"][0]);
+                    let salt = crate::parse_salt(proposal["salt"].as_str().unwrap()).unwrap();
+                    let (escrow, data) = fixture::escrow(
+                        payee,
+                        payout,
+                        mint,
+                        relay,
+                        &summary.txid,
+                        salt,
+                        summary.expiry_height,
+                    );
+                    assert_eq!(proposal["escrow"], escrow.to_string());
+                    state.0 = Some((escrow, data));
+                    state.1 = Some(
+                        proposal["transaction"]["signature"]
+                            .as_str()
+                            .unwrap()
+                            .to_string(),
+                    );
+                    Err(
+                        serde_json::json!({"code":-32000,"message":"response lost after accepting transaction"}),
+                    )
+                }
+                other => panic!("unexpected RPC {other}"),
+            }
+        });
+        let config = Config {
+            name: "test".into(),
+            network: Network::Testnet,
+            rpc_url: rpc.url.clone(),
+            relay,
+            keypair: dir.join("payee.json"),
+            ufvk_file: dir.join("payee.ufvk"),
+            zcash_address: "utest1merchant".into(),
+            items: vec![Item {
+                id: "ga".into(),
+                name: "ticket".into(),
+                mint: mint.to_string(),
+                amount: 1,
+                price_zats: 2_500_000,
+            }],
+            data_dir: dir.clone(),
+            allowed_origins: vec![],
+            max_open_orders: 10,
+            max_orders_per_payout: 1,
+            order_ttl: Duration::from_secs(600),
+        };
+        let m = Merchant::new(config.clone()).unwrap();
+        let order = m
+            .create_order(CreateOrder {
+                item_id: "ga".into(),
+                payout: payout.to_string(),
+            })
+            .unwrap();
+        m.update(&order.order_id, |o| o.terms.memo = "zolar t02 spike".into())
+            .unwrap();
+        *saved_path.lock().unwrap() = dir.join("orders").join(format!("{}.json", order.order_id));
+        let proposal = || ProposePayment {
+            pczt: base64::engine::general_purpose::STANDARD.encode(pczt),
+        };
+        assert!(m.propose(&order.order_id, proposal()).is_err());
+        let saved = m.get(&order.order_id).unwrap().proposal.unwrap();
+        assert_eq!(sends.load(Ordering::SeqCst), 1);
+        drop(m);
+        let m = Merchant::new(config).unwrap();
+        m.update(&order.order_id, |o| o.created_at = 0).unwrap();
+        let recovered = m.propose(&order.order_id, proposal()).unwrap();
+        assert_eq!(recovered.escrow, saved.escrow);
+        assert_eq!(recovered.salt, saved.salt);
+        assert_eq!(
+            sends.load(Ordering::SeqCst),
+            1,
+            "an identical retry must not create another Escrow"
+        );
+        assert!(
+            m.propose(
+                &order.order_id,
+                ProposePayment {
+                    pczt: base64::engine::general_purpose::STANDARD.encode(b"different")
+                }
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("another payment")
+        );
+        chain.lock().unwrap().2 = true;
+        m.sweep();
+        assert_eq!(
+            m.get(&order.order_id).unwrap().status,
+            OrderStatus::Refunded,
+            "closed alone must not be called Claimed"
+        );
+        assert_eq!(
+            sends.load(Ordering::SeqCst),
+            1,
+            "a closed creation cannot be recreated"
+        );
+        drop(m);
+        drop(rpc);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_expired_legacy_orphan_is_reserved_and_refund_checked_without_history() {
+        use crate::test_support as fixture;
+        let dir = tempdir();
+        let original = merchant(&dir);
+        let mut configuration = original.config.clone();
+        drop(original);
+        let key = solana_keypair::Keypair::new();
+        let payee = key.pubkey();
+        let key_path = dir.join("payee.json");
+        std::fs::write(
+            &key_path,
+            serde_json::to_vec(&key.to_bytes().to_vec()).unwrap(),
+        )
+        .unwrap();
+        let pczt = include_bytes!("../../crates/zolar-pczt/tests/fixtures/payment-unsigned.pczt");
+        let summary = zolar_pczt::summary(pczt).unwrap();
+        let relay = configuration.relay;
+        let (address, data) = fixture::escrow(
+            payee,
+            Address::new_from_array([1; 32]),
+            Address::new_from_array([3; 32]),
+            relay,
+            &summary.txid,
+            [0; 32],
+            summary.expiry_height,
+        );
+        let mut account = Escrow::from_bytes(&data).unwrap();
+        account.created_at = now() as i64;
+        let data = borsh::to_vec(&account).unwrap();
+        let rpc = fixture::Rpc::new(move |request| {
+            if request["method"] == "getAccountInfo" {
+                if request["params"][0] == relay.to_string() {
+                    return Ok(fixture::account(
+                        Address::new_from_array(header_relay_interface::HEADER_RELAY_PROGRAM),
+                        &fixture::relay(summary.expiry_height - 18),
+                    ));
+                }
+                assert_eq!(request["params"][0], address.to_string());
+                return Ok(fixture::account(ESCROW_ID, &data));
+            }
+            Err(serde_json::json!({"code":-32004,"message":"history pruned"}))
+        });
+        configuration.rpc_url = rpc.url.clone();
+        configuration.keypair = key_path;
+        let m = Merchant::new(configuration.clone()).unwrap();
+        let order = m
+            .create_order(CreateOrder {
+                item_id: "ga".into(),
+                payout: wallet(1),
+            })
+            .unwrap();
+        m.update(&order.order_id, |o| {
+            o.recovery_version = 0;
+            o.status = OrderStatus::Expired;
+            o.created_at = 0;
+        })
+        .unwrap();
+        let base = dir.join("orders").join(&order.order_id);
+        std::fs::write(base.with_extension("pczt"), pczt).unwrap();
+        std::fs::write(base.with_extension("salt"), "00".repeat(32)).unwrap();
+        drop(m);
+        let m = Merchant::new(configuration).unwrap();
+        m.sweep();
+        let recovered = m.get(&order.order_id).unwrap();
+        assert_eq!(recovered.status, OrderStatus::Open);
+        assert_eq!(recovered.escrow, Some(address.to_string()));
+        assert!(recovered.proposal.is_some());
+        assert!(
+            m.create_order(CreateOrder {
+                item_id: "ga".into(),
+                payout: wallet(1)
+            })
+            .is_err(),
+            "the uncertain inventory stays reserved"
+        );
+        let requests = rpc.requests.lock().unwrap();
+        assert!(
+            requests
+                .iter()
+                .any(|r| r["method"] == "getAccountInfo" && r["params"][0] == relay.to_string()),
+            "the authorized refund path was reached"
+        );
+        assert!(
+            !requests.iter().any(|r| r["method"] != "getAccountInfo"),
+            "history cannot block refund checks on readable state"
+        );
+        drop(requests);
+        drop(m);
+        drop(rpc);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

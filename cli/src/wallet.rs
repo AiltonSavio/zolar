@@ -17,10 +17,11 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use base64::Engine;
+use escrow_client::{accounts::Escrow, programs::ESCROW_ID};
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
 use tiny_http::{Method, Request, Server};
-use zolar_relayer::rpc::HttpRpc;
+use zolar_relayer::{chain::Cluster, rpc::HttpRpc};
 
 use crate::{
     Network,
@@ -31,29 +32,48 @@ use crate::{
     devtool::Devtool,
     payer::{self, Chains, Check, Claim, PrivateClaimArgs},
     prover::Prover,
+    settlement::{self, Event},
     solana::{parse_address, read_relay},
+    zkool::Zkool,
 };
 
 /// Seconds the customer has to approve a checkout (the merchant's order lapses about then too).
 const APPROVAL_SECS: u64 = 600;
+
+pub enum PaymentWallet {
+    Devtool(Devtool),
+    Zkool(Zkool),
+}
 
 pub struct Config {
     pub port: u16,
     /// Shop pages that may ask this wallet to pay (exact origins).
     pub allowed_origins: Vec<String>,
     pub network: Network,
+    /// Optional P2P hosts; headers and blocks remain verified against the trusted Relay.
+    pub peers: Vec<String>,
     pub rpc_url: String,
     /// The Header Relay this wallet trusts; an order naming another is refused.
     pub relay: Address,
     /// Pays the Solana fees of the claim. The item goes to the payout wallet of the order.
     pub fee_payer: PathBuf,
-    pub devtool: Devtool,
+    pub payment_wallet: PaymentWallet,
     pub prover: Prover,
     pub data_dir: PathBuf,
     /// The most an order may cost, in zatoshis.
     pub max_price_zats: u64,
     /// `scripts/check-txid-absent.sh`, run after the claim; none skips the check.
     pub txid_check: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+enum PaymentState {
+    #[default]
+    Unsent,
+    Signing,
+    BroadcastUncertain,
+    BroadcastAcknowledged,
+    Settled,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -77,6 +97,24 @@ struct Job {
     /// Relay tip and Finality Depth when the payment went out.
     #[serde(default)]
     sent: Option<(u32, u16)>,
+    #[serde(default)]
+    payment: PaymentState,
+    #[serde(default)]
+    claim_signature: Option<String>,
+    #[serde(default)]
+    retry_at: u64,
+    #[serde(default)]
+    claim_submitted_at: u64,
+    #[serde(default)]
+    zcash_address: Option<String>,
+}
+
+impl Job {
+    fn needs_recovery(&self) -> bool {
+        (self.broadcasting || self.payment != PaymentState::Unsent)
+            && self.payment != PaymentState::Settled
+            && !matches!(self.stage, Stage::Done { .. } | Stage::Rejected)
+    }
 }
 
 /// What the page may read about a job.
@@ -92,6 +130,7 @@ struct JobView<'a> {
 
 pub struct Wallet {
     config: Config,
+    _data_lock: checkout::DataDirLock,
     jobs: Mutex<HashMap<String, Job>>,
     queue: Mutex<mpsc::Sender<String>>,
     relay_cache: Mutex<Option<(Instant, u32, u32)>>,
@@ -203,7 +242,14 @@ fn propose(merchant_url: &str, order_id: &str, pczt: &[u8]) -> Result<EscrowCrea
 impl Wallet {
     /// Loads saved jobs, and returns the wallet and the receiver of the job queue for [`serve`].
     pub fn new(config: Config) -> Result<(Arc<Self>, mpsc::Receiver<String>)> {
-        std::fs::create_dir_all(config.data_dir.join("jobs"))?;
+        if matches!(config.payment_wallet, PaymentWallet::Zkool(_)) {
+            ensure!(
+                config.network == Network::Testnet,
+                "external wallet demo requires testnet"
+            );
+        }
+        let data_lock = checkout::lock_data_dir(&config.data_dir)?;
+        checkout::private_dir(&config.data_dir.join("jobs"))?;
         let (tx, rx) = mpsc::channel();
         let mut jobs = HashMap::new();
         for entry in std::fs::read_dir(config.data_dir.join("jobs"))?.flatten() {
@@ -216,6 +262,7 @@ impl Wallet {
         }
         let wallet = Arc::new(Self {
             config,
+            _data_lock: data_lock,
             jobs: Mutex::new(jobs),
             queue: Mutex::new(tx),
             relay_cache: Mutex::new(None),
@@ -227,26 +274,32 @@ impl Wallet {
     /// A job interrupted after its payment went out must still claim, or the merchant takes the item
     /// back while the customer's ZEC is gone. Earlier interruptions sent nothing.
     fn resume(&self) {
-        let ids: Vec<(String, bool, bool)> = self
+        let jobs: Vec<Job> = self
             .jobs
             .lock()
             .expect("jobs lock")
             .values()
-            .map(|j| (j.id.clone(), j.stage.is_terminal(), j.broadcasting))
+            .cloned()
             .collect();
-        for (id, terminal, broadcasting) in ids {
-            if terminal {
-                continue;
-            }
-            if broadcasting {
-                println!("job {id}: resuming the claim of a payment already sent");
-                let _ = self.queue.lock().expect("queue lock").send(id);
-            } else if self
-                .get(&id)
-                .is_some_and(|j| j.stage != Stage::AwaitingApproval)
-            {
+        for job in jobs {
+            if job.needs_recovery() {
+                // Legacy broadcasting=true includes failed jobs and means uncertain, not delivered.
+                if self
+                    .update(&job.id, |j| {
+                        if j.payment == PaymentState::Unsent {
+                            j.payment = PaymentState::BroadcastUncertain;
+                        }
+                        j.stage = Stage::Recovering;
+                        j.retry_at = 0;
+                    })
+                    .is_err()
+                {
+                    continue;
+                }
+                let _ = self.queue.lock().expect("queue lock").send(job.id);
+            } else if !job.stage.is_terminal() && job.stage != Stage::AwaitingApproval {
                 let _ = self.set_stage(
-                    &id,
+                    &job.id,
                     Stage::Failed {
                         reason: "the wallet stopped before paying; nothing was sent".into(),
                     },
@@ -268,22 +321,19 @@ impl Wallet {
     }
 
     fn update(&self, id: &str, f: impl FnOnce(&mut Job)) -> Result<Job> {
+        self.try_update(id, |j| {
+            f(j);
+            Ok(())
+        })
+    }
+
+    fn try_update(&self, id: &str, f: impl FnOnce(&mut Job) -> Result<()>) -> Result<Job> {
         let mut jobs = self.jobs.lock().expect("jobs lock");
-        let job = jobs.get_mut(id).context("no such job")?;
-        f(job);
-        let copy = job.clone();
-        drop(jobs);
-        let path = self.job_path(id);
-        let tmp = path.with_extension("json.tmp");
-        // The job file holds the salt and the transaction ID: private to this user.
-        std::fs::write(&tmp, serde_json::to_vec_pretty(&copy)?)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
-        }
-        std::fs::rename(tmp, path)?;
-        Ok(copy)
+        let mut next = jobs.get(id).context("no such job")?.clone();
+        f(&mut next)?;
+        checkout::save_private(&self.job_path(id), &serde_json::to_vec_pretty(&next)?)?;
+        jobs.insert(id.to_string(), next.clone());
+        Ok(next)
     }
 
     fn set_stage(&self, id: &str, stage: Stage) -> Result<Job> {
@@ -302,9 +352,42 @@ impl Wallet {
     }
 
     fn start(&self, origin: &str, request: StartCheckout) -> Result<CheckoutStarted> {
+        let connection = match &self.config.payment_wallet {
+            PaymentWallet::Zkool(wallet) => {
+                let c = wallet.identity()?;
+                ensure!(
+                    request.zcash_address.as_deref() == Some(c.address.as_str())
+                        && request.zcash_account == Some(c.account),
+                    "the connected Zkool account changed; reconnect before paying"
+                );
+                Some(c)
+            }
+            PaymentWallet::Devtool(_) => None,
+        };
         let merchant_url = merchant_base(&request.merchant_url)?;
         let terms = get_terms(&merchant_url, &request.order_id)?;
         check_order(&terms, &self.config)?;
+        let existing: Vec<Job> = self
+            .jobs
+            .lock()
+            .expect("jobs lock")
+            .values()
+            .cloned()
+            .collect();
+        for job in existing {
+            self.expire_if_stale(&job)?;
+        }
+        let mut jobs = self.jobs.lock().expect("jobs lock");
+        if connection.is_some() {
+            ensure!(
+                !jobs.values().any(|j| j.needs_recovery()
+                    || !matches!(
+                        j.stage,
+                        Stage::Done { .. } | Stage::Rejected | Stage::Failed { .. }
+                    )),
+                "finish or reject the existing Zkool checkout before starting another"
+            );
+        }
         let id = checkout::random_id(8);
         let job = Job {
             id: id.clone(),
@@ -322,12 +405,14 @@ impl Wallet {
             expiry: None,
             broadcasting: false,
             sent: None,
+            payment: PaymentState::Unsent,
+            claim_signature: None,
+            retry_at: 0,
+            claim_submitted_at: 0,
+            zcash_address: connection.map(|c| c.address),
         };
-        self.jobs
-            .lock()
-            .expect("jobs lock")
-            .insert(id.clone(), job.clone());
-        self.update(&id, |_| {})?;
+        checkout::save_private(&self.job_path(&id), &serde_json::to_vec_pretty(&job)?)?;
+        jobs.insert(id.clone(), job.clone());
         Ok(CheckoutStarted {
             job: id,
             token: job.token,
@@ -346,26 +431,35 @@ impl Wallet {
 
     fn decide(&self, secret: &str, approve: bool, digest: &str) -> Result<()> {
         let job = self.job_by_secret(secret).context("no such approval")?;
-        ensure!(
-            job.stage == Stage::AwaitingApproval,
-            "this checkout was already decided"
-        );
         if self.expire_if_stale(&job)? {
             bail!("this approval expired; start the checkout again");
         }
-        ensure!(
-            digest == job.digest,
-            "the terms changed since this page was shown"
-        );
+        self.try_update(&job.id, |j| {
+            ensure!(
+                j.stage == Stage::AwaitingApproval,
+                "this checkout was already decided"
+            );
+            ensure!(
+                now() < j.created_at.saturating_add(APPROVAL_SECS),
+                "this approval expired"
+            );
+            ensure!(
+                digest == j.digest && j.digest == j.terms.digest(),
+                "the terms changed since this page was shown"
+            );
+            j.stage = if approve {
+                Stage::BuildingPayment
+            } else {
+                Stage::Rejected
+            };
+            Ok(())
+        })?;
         if approve {
-            self.set_stage(&job.id, Stage::BuildingPayment)?;
             self.queue
                 .lock()
                 .expect("queue lock")
                 .send(job.id)
                 .context("the wallet's worker stopped")?;
-        } else {
-            self.set_stage(&job.id, Stage::Rejected)?;
         }
         Ok(())
     }
@@ -374,7 +468,11 @@ impl Wallet {
         Chains {
             rpc_url: self.config.rpc_url.clone(),
             relay: self.config.relay,
-            peers: crate::seeders(self.config.network),
+            peers: if self.config.peers.is_empty() {
+                crate::seeders(self.config.network)
+            } else {
+                self.config.peers.clone()
+            },
             network: self.config.network,
         }
     }
@@ -382,14 +480,178 @@ impl Wallet {
     /// Runs one approved job to its end. Called from the single worker thread, so one checkout at a
     /// time uses the Zcash wallet and the prover.
     pub fn run(&self, id: &str) {
+        let Some(job) = self.get(id) else {
+            return;
+        };
+        if job.payment == PaymentState::Settled
+            || matches!(job.stage, Stage::Done { .. } | Stage::Rejected)
+        {
+            return;
+        }
         if let Err(e) = self.run_steps(id) {
-            println!("job {id}: failed: {e:#}");
-            let _ = self.set_stage(
-                id,
-                Stage::Failed {
-                    reason: format!("{e:#}"),
-                },
+            println!("job {id}: recovery/checkout error: {e:#}");
+            let _ = self.update(id, |j| {
+                if j.needs_recovery() {
+                    j.stage = Stage::Recovering;
+                    j.retry_at = now().saturating_add(10);
+                } else {
+                    j.stage = Stage::Failed {
+                        reason: "Checkout stopped before payment; nothing was paid.".into(),
+                    };
+                }
+            });
+        }
+    }
+
+    fn retry_due(&self) {
+        let ids: Vec<String> = self
+            .jobs
+            .lock()
+            .expect("jobs lock")
+            .values()
+            .filter(|j| j.needs_recovery() && j.stage == Stage::Recovering && j.retry_at <= now())
+            .map(|j| j.id.clone())
+            .collect();
+        for id in ids {
+            self.run(&id);
+        }
+    }
+
+    fn finish_settlement(&self, job: &Job, event: Event, signature: String) -> Result<()> {
+        let escrow = job.escrow.as_deref().context("no Escrow recorded")?;
+        let stage = match event {
+            Event::Claimed => Stage::Done {
+                escrow: escrow.to_string(),
+                claim: signature,
+                txid_found_on_solana: self
+                    .txid_found(job.txid.as_deref().context("no payment recorded")?, escrow),
+            },
+            Event::Refunded => Stage::Failed {
+                reason: "The merchant refunded the Escrow; no ticket was delivered.".into(),
+            },
+            Event::Created => bail!("creation is not settlement"),
+        };
+        self.update(&job.id, |j| {
+            j.stage = stage;
+            j.payment = PaymentState::Settled;
+        })?;
+        Ok(())
+    }
+
+    /// Resumes the original prepared package if signing was interrupted; after signed bytes are
+    /// saved, only those bytes may be sent. An uncertain send may already have mined.
+    fn recover_payment(&self, job: &Job, chains: &Chains) -> Result<bool> {
+        let mut rpc = HttpRpc::new(&self.config.rpc_url);
+        let address = parse_address(job.escrow.as_deref().context("no Escrow recorded")?)?;
+        if let Some((owner, data)) = rpc
+            .account_with_owner(&address)
+            .map_err(anyhow::Error::msg)?
+        {
+            ensure!(owner == ESCROW_ID, "saved Escrow has another owner");
+            let escrow = crate::solana::read_escrow(&data)?;
+            let txid = crate::internal_txid(job.txid.as_deref().context("no payment recorded")?)?;
+            let salt = crate::parse_salt(job.salt.as_deref().context("no salt recorded")?)?;
+            ensure!(
+                Escrow::find_pda(&escrow.payee, escrow.commitment).0 == address
+                    && escrow.commitment == zolar_claim::payment_commitment(&txid, &salt)?
+                    && escrow.relay == chains.relay
+                    && escrow.payout == parse_address(&job.terms.payout)?
+                    && escrow.mint == parse_address(&job.terms.item.mint)?
+                    && escrow.amount >= job.terms.item.amount
+                    && escrow.bond_required == 0
+                    && Some(escrow.expiry_height) == job.expiry,
+                "saved Escrow differs from the approved payment"
             );
+        } else {
+            // Readable funded state admits a Claim even when history is unavailable. Absence only
+            // establishes settlement with a successful finalized instruction, never by itself.
+            if let Some((event, signature)) = settlement::history(&rpc, &address)?.settled {
+                self.finish_settlement(job, event, signature)?;
+                return Ok(true);
+            }
+            bail!("Escrow absent; finalized settlement remains unresolved");
+        }
+        if job.payment != PaymentState::BroadcastAcknowledged {
+            let signed = self
+                .work_dir(&job.id)
+                .join(match self.config.payment_wallet {
+                    PaymentWallet::Devtool(_) => "combined.pczt",
+                    PaymentWallet::Zkool(_) => "created.pczt",
+                });
+            let replay = (|| -> Result<()> {
+                let summary = zolar_pczt::summary(&std::fs::read(&signed)?)?;
+                ensure!(
+                    Some(summary.txid.as_str()) == job.txid.as_deref()
+                        && Some(summary.expiry_height) == job.expiry,
+                    "saved signed payment identity differs"
+                );
+                let checked = payer::check_escrow(&Check {
+                    chains,
+                    escrow_address: address,
+                    payer_wallet: parse_address(&job.terms.payout)?,
+                    pczt: &signed,
+                    salt: crate::parse_salt(job.salt.as_deref().context("no salt recorded")?)?,
+                    accept_freeze_authority: false,
+                    terms: payer::Terms {
+                        mint: parse_address(&job.terms.item.mint)?,
+                        min_amount: job.terms.item.amount,
+                        max_bond: 0,
+                        accept_private_only: true,
+                    },
+                    finalized_wait: Duration::from_secs(5),
+                })?;
+                ensure!(job.digest == job.terms.digest(), "approved terms changed");
+                if let PaymentWallet::Zkool(wallet) = &self.config.payment_wallet {
+                    let work = self.work_dir(&job.id);
+                    if !work.join("signed.tx").exists() {
+                        ensure!(
+                            job.payment == PaymentState::Signing,
+                            "the saved broadcast payment is missing; refusing to sign a replacement"
+                        );
+                        let tip = payer::check_before_broadcast(chains, &checked)?;
+                        wallet.sign(&checked, &work, tip)?;
+                    }
+                    self.update(&job.id, |j| {
+                        j.broadcasting = true;
+                        j.payment = PaymentState::BroadcastUncertain;
+                    })?;
+                }
+                self.broadcast(chains, &checked, &self.work_dir(&job.id))?;
+                self.update(&job.id, |j| j.payment = PaymentState::BroadcastAcknowledged)?;
+                Ok(())
+            })();
+            if let Err(e) = replay {
+                if self
+                    .get(&job.id)
+                    .is_some_and(|current| current.payment == PaymentState::Signing)
+                {
+                    // signTx cannot broadcast. Retry the original signing operation instead of
+                    // blocking the worker waiting for a payment that has never been submitted.
+                    return Err(e);
+                }
+                println!(
+                    "job {}: exact payment replay not acknowledged: {e:#}; checking for its Claim",
+                    job.id
+                );
+            }
+        }
+        Ok(false)
+    }
+
+    fn broadcast(
+        &self,
+        chains: &Chains,
+        checked: &payer::Checked,
+        work: &std::path::Path,
+    ) -> Result<()> {
+        match &self.config.payment_wallet {
+            PaymentWallet::Devtool(devtool) => {
+                payer::broadcast(chains, devtool, checked, &work.join("combined.pczt"))
+            }
+            PaymentWallet::Zkool(wallet) => {
+                let tip = payer::check_before_broadcast(chains, checked)?;
+                wallet.broadcast(checked, work, tip)
+            }
         }
     }
 
@@ -397,15 +659,41 @@ impl Wallet {
         let job = self.get(id).context("no such job")?;
         let chains = self.chains();
         let work = self.work_dir(id);
-        std::fs::create_dir_all(&work)?;
-        let pczt = work.join("created.pczt");
-        if !job.broadcasting {
-            self.pay(&job, &chains, &pczt)?;
+        checkout::private_dir(&work)?;
+        if job.needs_recovery() {
+            if self.recover_payment(&job, &chains)? {
+                return Ok(());
+            }
+        } else {
+            self.pay(&job, &chains, &work.join("created.pczt"))?;
         }
         let job = self.get(id).context("no such job")?;
         let escrow = job.escrow.clone().context("no Escrow recorded")?;
         let txid = job.txid.clone().context("no transaction recorded")?;
         let salt = crate::parse_salt(job.salt.as_deref().context("no salt recorded")?)?;
+        if let Some(signature) = &job.claim_signature {
+            let rpc = HttpRpc::new(&chains.rpc_url);
+            match settlement::transaction(&rpc, signature) {
+                Ok(Some(tx))
+                    if settlement::event(&tx, &parse_address(&escrow)?) == Some(Event::Claimed) =>
+                {
+                    return self.finish_settlement(&job, Event::Claimed, signature.clone());
+                }
+                Err(e) => println!("job {id}: saved Claim lookup unavailable: {e:#}"),
+                _ => {}
+            }
+            ensure!(
+                now() >= job.claim_submitted_at.saturating_add(60),
+                "Claim awaits finality"
+            );
+            // A confirmed submission can roll off a fork. Once the wait has elapsed, a live
+            // Escrow permits another Claim for the same payment; the program prevents double pay.
+            ensure!(
+                crate::rpc::finalized_account(&chains.rpc_url, &parse_address(&escrow)?)?.is_some(),
+                "Escrow absent; Claim outcome remains unresolved"
+            );
+            self.update(id, |j| j.claim_signature = None)?;
+        }
         let (sent_tip, finality_depth) = job.sent.unwrap_or((0, 10));
         self.set_stage(
             id,
@@ -440,23 +728,17 @@ impl Wallet {
             max_attempts: 3,
             on_proving: Some(&on_proving),
         })?;
-        self.set_stage(
-            id,
-            Stage::Claimed {
+        self.update(id, |j| {
+            j.stage = Stage::Claimed {
                 escrow: escrow.clone(),
                 claim: claim.clone(),
-            },
-        )?;
-        let found = self.txid_found(&txid, &escrow);
-        self.set_stage(
-            id,
-            Stage::Done {
-                escrow,
-                claim,
-                txid_found_on_solana: found,
-            },
-        )?;
-        Ok(())
+            };
+            j.claim_signature = Some(claim);
+            j.claim_submitted_at = now();
+        })?;
+        // Submission confirmation is not yet a permanent settlement. The worker reconciles the
+        // finalized instruction before marking success, including after a crash here.
+        bail!("Claim submitted; waiting for finalized settlement")
     }
 
     /// Builds the payment for the approved terms, has the merchant lock the item, checks the Escrow
@@ -464,15 +746,34 @@ impl Wallet {
     fn pay(&self, job: &Job, chains: &Chains, pczt: &std::path::Path) -> Result<()> {
         let id = &job.id;
         let terms = &job.terms;
-        payer::create_pczt(
-            chains,
-            &self.config.devtool,
-            &terms.zcash_address,
-            terms.item.price_zats,
-            &terms.memo,
-            18,
-            pczt,
-        )?;
+        match &self.config.payment_wallet {
+            PaymentWallet::Devtool(devtool) => payer::create_pczt(
+                chains,
+                devtool,
+                &terms.zcash_address,
+                terms.item.price_zats,
+                &terms.memo,
+                18,
+                pczt,
+            )?,
+            PaymentWallet::Zkool(wallet) => {
+                let connection = wallet.connection()?;
+                ensure!(
+                    job.zcash_address.as_deref() == Some(connection.address.as_str()),
+                    "the approved Zkool account changed"
+                );
+                let mut rpc = HttpRpc::new(&chains.rpc_url);
+                let relay = read_relay(&mut rpc, &chains.relay)?;
+                let tip = relay.view()?.tip_height();
+                wallet.prepare(
+                    &terms.zcash_address,
+                    terms.item.price_zats,
+                    &terms.memo,
+                    tip,
+                    &self.work_dir(id),
+                )?;
+            }
+        }
         let txid = zolar_pczt::summary(&std::fs::read(pczt)?)?.txid;
         self.update(id, |j| {
             j.stage = Stage::LockingItem;
@@ -508,14 +809,27 @@ impl Wallet {
             job.digest == job.terms.digest(),
             "the approved terms were altered"
         );
-        let signed = payer::sign(&self.config.devtool, &checked, pczt, &self.work_dir(id))?;
+        match &self.config.payment_wallet {
+            PaymentWallet::Devtool(devtool) => {
+                payer::sign(devtool, &checked, pczt, &self.work_dir(id))?;
+            }
+            PaymentWallet::Zkool(wallet) => {
+                let tip = payer::check_before_broadcast(chains, &checked)?;
+                // Signing has no broadcast side effect in the external wallet. Persist intent
+                // first so a lost response or crash resumes the original prepared package.
+                self.update(id, |j| j.payment = PaymentState::Signing)?;
+                wallet.sign(&checked, &self.work_dir(id), tip)?;
+            }
+        }
         self.update(id, |j| {
             j.stage = Stage::Paying {
                 escrow: created.escrow.clone(),
             };
             j.broadcasting = true;
+            j.payment = PaymentState::BroadcastUncertain;
         })?;
-        payer::broadcast(chains, &self.config.devtool, &checked, &signed)?;
+        self.broadcast(chains, &checked, &self.work_dir(id))?;
+        self.update(id, |j| j.payment = PaymentState::BroadcastAcknowledged)?;
         let mut rpc = HttpRpc::new(&self.config.rpc_url);
         if let Ok(relay) = read_relay(&mut rpc, &self.config.relay)
             && let Ok(view) = relay.view()
@@ -566,13 +880,16 @@ impl Wallet {
         if job.stage != Stage::AwaitingApproval || now() < job.created_at + APPROVAL_SECS {
             return Ok(false);
         }
-        self.set_stage(
-            &job.id,
-            Stage::Failed {
-                reason: "the approval expired; nothing was paid".into(),
-            },
-        )?;
-        Ok(true)
+        let updated = self.update(&job.id, |j| {
+            if j.stage == Stage::AwaitingApproval
+                && now() >= j.created_at.saturating_add(APPROVAL_SECS)
+            {
+                j.stage = Stage::Failed {
+                    reason: "the approval expired; nothing was paid".into(),
+                };
+            }
+        })?;
+        Ok(matches!(updated.stage, Stage::Failed { .. }))
     }
 
     fn view(&self, id: &str, token: Option<&str>) -> Result<serde_json::Value> {
@@ -584,6 +901,14 @@ impl Wallet {
         self.expire_if_stale(&job)?;
         let job = self.get(id).context("no such job")?;
         let mut stage = job.stage.clone();
+        if let Stage::Failed { reason } = &mut stage {
+            *reason = if job.payment == PaymentState::Settled {
+                "The merchant refunded the Escrow; no ticket was delivered."
+            } else {
+                "Checkout stopped before payment; nothing was paid."
+            }
+            .to_string();
+        }
         if let Stage::WaitingForFinality {
             tip, final_height, ..
         } = &mut stage
@@ -599,6 +924,39 @@ impl Wallet {
             payout: &job.terms.payout,
             stage: &stage,
         })?)
+    }
+
+    /// Restore read access only for the same allowed shop and configured external account.
+    /// An unresolved payment takes priority over receipts. Approval capability is never returned.
+    fn resume_for_account(&self, origin: &str, address: &str) -> Option<serde_json::Value> {
+        self.jobs
+            .lock()
+            .expect("jobs lock")
+            .values()
+            .filter(|j| {
+                j.origin == origin
+                    && j.zcash_address.as_deref() == Some(address)
+                    && (j.payment != PaymentState::Unsent
+                        || matches!(
+                            j.stage,
+                            Stage::BuildingPayment
+                                | Stage::LockingItem
+                                | Stage::CheckingEscrow { .. }
+                        ))
+                    && j.stage != Stage::Rejected
+            })
+            .max_by_key(|j| {
+                (
+                    j.needs_recovery()
+                        || !matches!(
+                            j.stage,
+                            Stage::Done { .. } | Stage::Failed { .. } | Stage::Rejected
+                        ),
+                    j.created_at,
+                    j.id.clone(),
+                )
+            })
+            .map(|j| serde_json::json!({"job":j.id,"token":j.token}))
     }
 
     fn approval_page(&self, secret: &str) -> Result<String> {
@@ -628,6 +986,17 @@ impl Wallet {
             base64::engine::general_purpose::STANDARD.encode(include_bytes!("wallet-mark.png"))
         );
         let fields = [
+            (
+                "wallet_name",
+                match self.config.payment_wallet {
+                    PaymentWallet::Zkool(_) => "Zkool connection".to_string(),
+                    PaymentWallet::Devtool(_) => "Local test wallet".to_string(),
+                },
+            ),
+            (
+                "wallet_account",
+                e(job.zcash_address.as_deref().unwrap_or("CLI test account")),
+            ),
             ("mark", mark),
             ("address_short", e(&short(&t.zcash_address))),
             ("mint_short", e(&short(&t.item.mint))),
@@ -677,7 +1046,7 @@ impl Wallet {
 
         let result: Result<Reply> = match (&method, parts.as_slice()) {
             // Shop pages: start a checkout, read its stage.
-            (Method::Options, ["checkout"] | ["jobs", _] | ["status"]) if shop.is_some() => {
+            (Method::Options, ["checkout"] | ["jobs", _] | ["status"] | ["resume"]) if shop.is_some() => {
                 Ok(checkout::json(204, &serde_json::json!({})))
             }
             (Method::Post, ["checkout"]) => match shop.as_deref() {
@@ -687,14 +1056,21 @@ impl Wallet {
                 None => Err(anyhow::anyhow!("this site may not use the wallet")),
             },
             // Lets a shop page tell whether the customer runs a wallet it may use.
-            (Method::Get, ["status"]) if shop.is_some() => Ok(checkout::json(
-                200,
-                &serde_json::json!({
+            (Method::Get, ["status"]) if shop.is_some() => match &self.config.payment_wallet {
+                PaymentWallet::Zkool(wallet) => wallet.identity().map(|c| checkout::json(200,
+                    &serde_json::json!({"wallet":c.name,"network":c.network,
+                        "relay":self.config.relay.to_string(),"address":c.address,"account":c.account}))),
+                PaymentWallet::Devtool(_) => Ok(checkout::json(200, &serde_json::json!({
                     "wallet": "zolar-wallet",
                     "network": network_name(self.config.network),
                     "relay": self.config.relay.to_string(),
-                }),
-            )),
+                }))),
+            },
+            (Method::Get, ["resume"]) if shop.is_some() => match &self.config.payment_wallet {
+                PaymentWallet::Zkool(wallet) => wallet.identity().map(|identity|
+                    checkout::json(200,&self.resume_for_account(shop.as_deref().expect("allowed origin"),&identity.address))),
+                PaymentWallet::Devtool(_) => Ok(checkout::json(200,&serde_json::Value::Null)),
+            },
             (Method::Get, ["jobs", id]) if shop.is_some() => self
                 .view(id, token.as_deref())
                 .map(|v| checkout::json(200, &v)),
@@ -734,11 +1110,20 @@ impl Wallet {
 pub fn serve(wallet: Arc<Wallet>, queue: mpsc::Receiver<String>) -> Result<()> {
     let bind = format!("127.0.0.1:{}", wallet.config.port);
     let server = Arc::new(Server::http(&bind).map_err(|e| anyhow::anyhow!("binding {bind}: {e}"))?);
-    println!("zolar-wallet listening on http://{bind}");
+    let service = match wallet.config.payment_wallet {
+        PaymentWallet::Zkool(_) => "zolar-connect",
+        PaymentWallet::Devtool(_) => "zolar-wallet",
+    };
+    println!("{service} listening on http://{bind}");
     let worker = wallet.clone();
     std::thread::spawn(move || {
-        while let Ok(id) = queue.recv() {
-            worker.run(&id);
+        loop {
+            match queue.recv_timeout(Duration::from_secs(1)) {
+                Ok(id) => worker.run(&id),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            worker.retry_due();
         }
     });
     let handlers: Vec<_> = (0..4)
@@ -770,14 +1155,15 @@ mod tests {
             port: 7878,
             allowed_origins: vec!["http://localhost:5175".into()],
             network: Network::Testnet,
+            peers: vec![],
             rpc_url: "http://127.0.0.1:1".into(),
             relay: Address::new_from_array([4; 32]),
             fee_payer: dir.join("fee.json"),
-            devtool: Devtool {
+            payment_wallet: PaymentWallet::Devtool(Devtool {
                 binary: dir.join("devtool"),
                 wallet_dir: dir.join("w"),
                 identity: dir.join("id"),
-            },
+            }),
             prover: Prover {
                 script: dir.join("prove.sh"),
                 data_dir: dir.join("data"),
@@ -820,6 +1206,15 @@ mod tests {
         stage: Stage,
         broadcasting: bool,
     ) -> (Arc<Wallet>, mpsc::Receiver<String>, Job) {
+        wallet_with_config(dir, stage, broadcasting, config(dir))
+    }
+
+    fn wallet_with_config(
+        dir: &std::path::Path,
+        stage: Stage,
+        broadcasting: bool,
+        configuration: Config,
+    ) -> (Arc<Wallet>, mpsc::Receiver<String>, Job) {
         let t = terms();
         let job = Job {
             id: "job1".into(),
@@ -837,6 +1232,11 @@ mod tests {
             expiry: None,
             broadcasting,
             sent: None,
+            payment: PaymentState::Unsent,
+            claim_signature: None,
+            retry_at: 0,
+            claim_submitted_at: 0,
+            zcash_address: None,
         };
         std::fs::create_dir_all(dir.join("jobs")).unwrap();
         std::fs::write(
@@ -844,8 +1244,75 @@ mod tests {
             serde_json::to_vec(&job).unwrap(),
         )
         .unwrap();
-        let (w, rx) = Wallet::new(config(dir)).unwrap();
+        let (w, rx) = Wallet::new(configuration).unwrap();
         (w, rx, job)
+    }
+
+    #[test]
+    fn resume_is_read_only_and_scoped_to_the_shop_and_external_account_with_active_payment_priority()
+     {
+        let dir = tempdir();
+        let (w, rx, _) = wallet_with_job(&dir, Stage::Recovering, true);
+        w.update("job1", |j| {
+            j.payment = PaymentState::BroadcastUncertain;
+            j.zcash_address = Some("utest1selected".into());
+            j.created_at = 1;
+        })
+        .unwrap();
+        let mut other = w.get("job1").unwrap();
+        other.id = "later-receipt".into();
+        other.token = "read-receipt".into();
+        other.created_at = 2;
+        other.payment = PaymentState::Settled;
+        other.stage = Stage::Done {
+            escrow: "E".into(),
+            claim: "C".into(),
+            txid_found_on_solana: Some(false),
+        };
+        w.jobs.lock().unwrap().insert(other.id.clone(), other);
+        let resumed = w
+            .resume_for_account("http://localhost:5175", "utest1selected")
+            .unwrap();
+        assert_eq!(resumed, serde_json::json!({"job":"job1","token":"tok"}));
+        assert_eq!(resumed.as_object().unwrap().len(), 2);
+        assert!(
+            w.resume_for_account("http://other-shop", "utest1selected")
+                .is_none()
+        );
+        assert!(
+            w.resume_for_account("http://localhost:5175", "utest1other-account")
+                .is_none()
+        );
+        assert!(
+            rx.try_recv().is_ok(),
+            "startup had queued the saved paid job"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "resuming never queues payment or approval"
+        );
+        w.update("job1", |j| {
+            j.payment = PaymentState::Unsent;
+            j.broadcasting = false;
+        })
+        .unwrap();
+        assert_eq!(
+            w.resume_for_account("http://localhost:5175", "utest1selected")
+                .unwrap()["job"],
+            "later-receipt"
+        );
+        w.update("job1", |j| {
+            j.stage = Stage::CheckingEscrow { escrow: "E".into() };
+        })
+        .unwrap();
+        assert_eq!(
+            w.resume_for_account("http://localhost:5175", "utest1selected")
+                .unwrap()["job"],
+            "job1",
+            "an already approved prepayment job must win over a newer receipt"
+        );
+        drop(w);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -922,11 +1389,306 @@ mod tests {
     }
 
     #[test]
+    fn configured_peers_replace_discovery_without_changing_the_trusted_network_or_relay() {
+        let dir = std::env::temp_dir().join(format!("zolar-peer-config-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut c = config(&dir);
+        let relay = c.relay;
+        c.peers = vec!["127.0.0.1:18233".into(), "example.test:18233".into()];
+        let (w, _) = Wallet::new(c).unwrap();
+        let chains = w.chains();
+        assert_eq!(chains.peers, ["127.0.0.1:18233", "example.test:18233"]);
+        assert_eq!(chains.network, Network::Testnet);
+        assert_eq!(chains.relay, relay);
+        drop(w);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn external_signing_intent_survives_restart_with_or_without_saved_signed_bytes() {
+        for saved in [false, true] {
+            let dir = tempdir();
+            let (wallet, _, _) = wallet_with_job(
+                &dir,
+                Stage::CheckingEscrow {
+                    escrow: "escrow".into(),
+                },
+                false,
+            );
+            let work = wallet.work_dir("job1");
+            checkout::private_dir(&work).unwrap();
+            std::fs::write(work.join("prepared.zkool"), b"original prepared package").unwrap();
+            if saved {
+                std::fs::write(work.join("signed.tx"), b"original signed transaction").unwrap();
+            }
+            wallet
+                .update("job1", |j| {
+                    j.payment = PaymentState::Signing;
+                    j.txid = Some("fixed payment identity".into());
+                })
+                .unwrap();
+            drop(wallet);
+            let (wallet, queue) = Wallet::new(config(&dir)).unwrap();
+            assert_eq!(queue.try_recv().unwrap(), "job1");
+            let resumed = wallet.get("job1").unwrap();
+            assert_eq!(resumed.stage, Stage::Recovering);
+            assert_eq!(resumed.payment, PaymentState::Signing);
+            assert_eq!(resumed.txid.as_deref(), Some("fixed payment identity"));
+            assert_eq!(
+                std::fs::read(work.join("prepared.zkool")).unwrap(),
+                b"original prepared package"
+            );
+            if saved {
+                assert_eq!(
+                    std::fs::read(work.join("signed.tx")).unwrap(),
+                    b"original signed transaction"
+                );
+            }
+            drop(wallet);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
     fn a_payment_already_sent_is_claimed_after_a_restart() {
         let dir = tempdir();
         let (_w, rx, _) = wallet_with_job(&dir, Stage::Paying { escrow: "E".into() }, true);
         assert_eq!(rx.try_recv().unwrap(), "job1", "resumed");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_claim_error_after_payment_is_retried_after_restart() {
+        let dir = tempdir();
+        let (w, rx, _) = wallet_with_job(&dir, Stage::Paying { escrow: "E".into() }, true);
+        assert_eq!(rx.try_recv().unwrap(), "job1");
+        w.update("job1", |j| {
+            j.escrow = Some(Address::new_from_array([5; 32]).to_string());
+            j.txid = Some("00".repeat(32));
+            j.salt = Some("00".repeat(32));
+            j.expiry = Some(10);
+        })
+        .unwrap();
+        w.run("job1");
+        drop(w);
+        let (_restarted, retry) = Wallet::new(config(&dir)).unwrap();
+        let resumed = retry.try_recv();
+        let _ = std::fs::remove_dir_all(dir);
+        assert_eq!(
+            resumed.unwrap(),
+            "job1",
+            "a paid job must remain recoverable"
+        );
+    }
+
+    #[test]
+    fn legacy_paid_failures_are_migrated_without_exposing_their_diagnostics() {
+        let dir = tempdir();
+        let (w, rx, _) = wallet_with_job(&dir, Stage::AwaitingApproval, false);
+        drop(w);
+        drop(rx);
+        let path = dir.join("jobs/job1.json");
+        let mut old: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        for field in [
+            "payment",
+            "claim_signature",
+            "retry_at",
+            "claim_submitted_at",
+        ] {
+            old.as_object_mut().unwrap().remove(field);
+        }
+        old["broadcasting"] = serde_json::json!(true);
+        old["stage"] =
+            serde_json::json!({"stage":"failed","reason":"private txid deadbeef salt c0ffee"});
+        std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+        let (w, rx) = Wallet::new(config(&dir)).unwrap();
+        assert_eq!(rx.try_recv().unwrap(), "job1");
+        let view = w.view("job1", Some("tok")).unwrap().to_string();
+        assert!(view.contains("recovering"));
+        assert!(!view.contains("deadbeef") && !view.contains("c0ffee"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn runtime_recovery_retries_the_saved_identity_without_building_another_payment() {
+        let dir = tempdir();
+        let (w, rx, _) = wallet_with_job(&dir, Stage::Paying { escrow: "E".into() }, true);
+        rx.try_recv().unwrap();
+        w.update("job1", |j| {
+            j.escrow = Some(Address::new_from_array([5; 32]).to_string());
+            j.txid = Some("00".repeat(32));
+            j.salt = Some("00".repeat(32));
+            j.expiry = Some(10);
+        })
+        .unwrap();
+        w.run("job1");
+        assert_eq!(w.get("job1").unwrap().stage, Stage::Recovering);
+        w.update("job1", |j| j.retry_at = 0).unwrap();
+        w.retry_due();
+        let job = w.get("job1").unwrap();
+        assert_eq!(job.stage, Stage::Recovering);
+        assert!(job.retry_at > now());
+        assert_eq!(job.txid, Some("00".repeat(32)));
+        assert!(!w.work_dir("job1").join("created.pczt").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn concurrent_approval_requests_queue_the_checkout_only_once() {
+        let dir = tempdir();
+        let (w, rx, job) = wallet_with_job(&dir, Stage::AwaitingApproval, false);
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let w = w.clone();
+                let digest = job.digest.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    w.decide("secret", true, &digest).is_ok()
+                })
+            })
+            .collect();
+        barrier.wait();
+        assert_eq!(
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .filter(|ok| *ok)
+                .count(),
+            1
+        );
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec!["job1"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_persistence_never_publishes_an_approval_and_only_one_service_writes_a_directory() {
+        let dir = tempdir();
+        let (w, rx, job) = wallet_with_job(&dir, Stage::AwaitingApproval, false);
+        assert!(Wallet::new(config(&dir)).is_err());
+        std::fs::remove_file(w.job_path("job1")).unwrap();
+        std::fs::create_dir(w.job_path("job1")).unwrap();
+        assert!(w.decide("secret", true, &job.digest).is_err());
+        assert_eq!(w.get("job1").unwrap().stage, Stage::AwaitingApproval);
+        assert!(rx.try_recv().is_err());
+        std::fs::remove_dir(w.job_path("job1")).unwrap();
+        drop(w);
+        assert!(
+            Wallet::new(config(&dir)).is_ok(),
+            "the lock is released when the service exits"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_dropped_claim_can_be_retried_for_a_live_escrow_when_history_is_unavailable() {
+        use crate::test_support as fixture;
+        let dir = tempdir();
+        let (escrow, data) = fixture::escrow(
+            Address::new_from_array([6; 32]),
+            Address::new_from_array([2; 32]),
+            Address::new_from_array([3; 32]),
+            Address::new_from_array([4; 32]),
+            &"00".repeat(32),
+            [0; 32],
+            100,
+        );
+        let rpc = fixture::Rpc::new(move |request| match request["method"].as_str().unwrap() {
+            "getAccountInfo" => Ok(fixture::account(ESCROW_ID, &data)),
+            _ => {
+                Err(serde_json::json!({"code":-32004,"message":"transaction history unavailable"}))
+            }
+        });
+        let mut configuration = config(&dir);
+        configuration.rpc_url = rpc.url.clone();
+        let (w, rx, _) = wallet_with_config(
+            &dir,
+            Stage::Paying {
+                escrow: escrow.to_string(),
+            },
+            true,
+            configuration,
+        );
+        rx.try_recv().unwrap();
+        w.update("job1", |j| {
+            j.escrow = Some(escrow.to_string());
+            j.txid = Some("00".repeat(32));
+            j.salt = Some("00".repeat(32));
+            j.expiry = Some(100);
+            j.payment = PaymentState::BroadcastAcknowledged;
+            j.claim_signature = Some("dropped-signature".into());
+            j.claim_submitted_at = 0;
+        })
+        .unwrap();
+        w.run("job1");
+        let job = w.get("job1").unwrap();
+        assert!(
+            job.claim_signature.is_none(),
+            "an unresolvable submission must not prevent another Claim"
+        );
+        assert_eq!(
+            job.stage,
+            Stage::Recovering,
+            "the unavailable fee key still needs recovery"
+        );
+        let requests = rpc.requests.lock().unwrap();
+        assert!(requests.iter().any(|r| r["method"] == "getTransaction"));
+        assert!(
+            !requests
+                .iter()
+                .any(|r| r["method"] == "getSignaturesForAddress"
+                    || r["method"] == "sendTransaction")
+        );
+        drop(requests);
+        drop(w);
+        drop(rpc);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_claim_that_landed_before_a_restart_is_reconciled_without_paying_again() {
+        use crate::test_support as fixture;
+        let dir = tempdir();
+        let escrow = Address::new_from_array([5; 32]);
+        let rpc = fixture::Rpc::new(move |request| match request["method"].as_str().unwrap() {
+            "getAccountInfo" => Ok(serde_json::json!({"value":null})),
+            "getSignaturesForAddress" => Ok(
+                serde_json::json!([{"signature":"claim","err":null},{"signature":"create","err":null}]),
+            ),
+            "getTransaction" => {
+                let signature = request["params"][0].as_str().unwrap();
+                Ok(fixture::transaction(
+                    signature,
+                    escrow,
+                    if signature == "claim" { 4 } else { 0 },
+                ))
+            }
+            other => panic!("settled recovery must not call {other}"),
+        });
+        let mut configuration = config(&dir);
+        configuration.rpc_url = rpc.url.clone();
+        let (w, rx, _) = wallet_with_config(
+            &dir,
+            Stage::Paying {
+                escrow: escrow.to_string(),
+            },
+            true,
+            configuration,
+        );
+        rx.try_recv().unwrap();
+        w.update("job1", |j| {
+            j.escrow = Some(escrow.to_string());
+            j.txid = Some("00".repeat(32));
+            j.salt = Some("00".repeat(32));
+        })
+        .unwrap();
+        w.run("job1");
+        assert!(matches!(w.get("job1").unwrap().stage,Stage::Done{claim,..} if claim == "claim"));
+        drop(w);
+        drop(rpc);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -969,7 +1731,11 @@ mod tests {
         assert!(!page.contains("<script>x"));
         assert!(page.contains("0.001"));
         assert!(!page.contains("{{"), "every placeholder is filled");
-        assert!(page.contains("data:image/png;base64,"));
+        assert!(!page.contains("Zolar Wallet"));
+        assert!(
+            !page.contains("data:image/png;base64,"),
+            "authorization is not a new branded wallet"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

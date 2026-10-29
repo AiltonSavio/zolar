@@ -18,9 +18,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "tsc -p tsconfig.build.json && vitest run",
     "lint": "eslint --max-warnings 0 .",
-    "fmt": "prettier --check --single-quote --print-width 120 src/vending*.ts src/fixtures/vending.ts eslint.config.js"
+    "fmt": "prettier --check --single-quote --print-width 120 src/vending*.ts src/fixtures/vending.ts eslint.config.js",
+    "test:package": "pnpm build && node --test test/package.mjs"
   },
   "devDependencies": {
     "@eslint/js": "9.39.1",

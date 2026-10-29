@@ -47,7 +47,9 @@ pub const BN254_MODULUS: [u8; 32] = [
 ];
 
 /// Most blocks ahead of the relay tip an expiry may lie.
-pub const MAX_EXPIRY_AHEAD: u32 = 20;
+// Ordinary external wallets use a 120-block NU7 expiry. Bound the payment option while allowing
+// up to 24 blocks of wallet-tip/Relay lag; the connector separately checks that freshness bound.
+pub const MAX_EXPIRY_AHEAD: u32 = 144;
 /// Deepest transaction Merkle tree a Reveal Claim accepts (2^24 transactions).
 pub const MAX_TX_PATH: usize = 24;
 /// Seconds after creation when a refund no longer depends on the relay.
